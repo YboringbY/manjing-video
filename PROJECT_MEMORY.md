@@ -755,3 +755,69 @@ AI 拆分完整镜头 prompt
 - 2026-06-16 接入真实 AI 剧本工作台：新增 `/api/scripts`，兼容 OpenAI `/v1/chat/completions`，支持 `draft/optimize/outline` 三类动作；前端“生成初稿 / 优化对话逻辑 / 生成大纲单集拆分”均改为真实后端 AI 调用，接口配置优先读取 `SCRIPT_AI_API_KEY/SCRIPT_AI_BASE_URL/SCRIPT_AI_MODEL`，未配置时复用 `SEEDANCE_*`。同时清理外接资产库页面和资产 API 中“丽帧”字样，统一为“外接资产/第三方平台”，并更新 `.env.example`。2026-06-16 又增加了高并发状态展示：顶部新增并发状态条，视频工作台新增并发队列卡，动态显示运行中任务、可用通道和多账户并行能力，方便展示多个账户同时生视频的状态；后续将展示基数调整为至少 10 个账户、20 路并发通道。2026-06-16 将“全能参考”升级为真实模式开关：开启后必须绑定至少 1 个公网 URL 或 `asset://` 真实参考素材；页面显示参考素材缩略条、真实提交数量、本地-only素材警告；生成请求会携带 `omni_reference: true`，并把图片/视频/音频参考素材随 `/api/video-tasks` 一起提交给第三方视频 API。视频生成记录里的画面内容超过 90 字默认折叠，支持展开/收起。
 - 2026-06-16 新增管理员第三方 API Profile 管理：人员管理里可保存/启用/删除多个 Seedance 兼容平台 Profile，生成视频、状态查询、后台任务同步、视频文件代理都会随当前 Profile 调用；默认 AIfastgate Profile 保留且不被覆盖。已预置一个 Ark v3 测试平台（Base URL 为 `http://43.159.135.17/api/v3`，完整 API Key 仅保存在本地页面配置中，不写入交接文档）。
 
+## 21. 2026-07-01 Git 与部署基线
+
+- GitHub 仓库：`https://github.com/YboringbY/manjing-video`
+- 本地项目目录：`/Users/keyang/Desktop/manjing_SaaS/manjing-video`
+- 服务器部署目录：`/opt/manjing-video`
+- 生产访问地址：`http://118.196.44.191/`
+- 当前服务器通过 GitHub `main` 分支部署，不再通过本地 `rsync` 作为常规发布方式。
+- 服务器当前已设置 Git upstream：`main -> origin/main`。
+- 当前生产部署脚本：`scripts/deploy.sh`。
+- 服务器执行部署命令：
+
+```bash
+cd /opt/manjing-video
+./scripts/deploy.sh
+```
+
+脚本会执行：
+
+```text
+git fetch origin main
+git reset --hard origin/main
+npm ci
+npm run build
+pm2 restart manjing-video
+pm2 save
+```
+
+### 本地开发流程
+
+本地开发服务端口使用 `5050`：
+
+```bash
+npm run dev -- -p 5050
+```
+
+当前本地开发服务已启动并验证 `http://localhost:5050/` 返回 `200 OK`。
+
+本地修改后标准提交流程：
+
+```bash
+git status
+git add .
+git commit -m "说明这次改动"
+git push
+```
+
+### 服务器运行状态
+
+- PM2 应用名：`manjing-video`
+- Next.js 生产进程监听：`127.0.0.1:3000`
+- nginx 监听公网 80 端口并反向代理到 `127.0.0.1:3000`
+- PM2 与 nginx 均已配置开机自启。
+- 服务器 `.data/api-profiles.json` 是线上数据，已备份过一次，并且 `.data/` 不进 Git。
+
+### Key 与权限边界
+
+- 本地 GitHub SSH key 私钥路径：`/Users/keyang/Desktop/manjing_SaaS/github_manjing_local`
+- 服务器 GitHub deploy key 私钥路径：`/root/.ssh/github_manjing_deploy`
+- 服务器 deploy key 已添加到 GitHub 仓库 Deploy keys，保持只读，不勾选 `Allow write access`。
+- 服务器登录私钥在项目外层：`/Users/keyang/Desktop/manjing_SaaS/manjing.pem`，不要提交到 Git。
+- 任何 `.env*.local`、API Key、`.data/`、私钥文件都不能提交到 GitHub。
+
+### 参考图片整理
+
+- 原项目根目录散放的 28 个开发参考图/截图已统一移动到 `docs/reference/`。
+- 项目根目录不再放参考图片。

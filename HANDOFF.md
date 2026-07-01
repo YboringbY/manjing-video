@@ -146,3 +146,64 @@ npm run build
 ```
 
 当前已通过。
+
+## GitHub 与生产部署
+
+GitHub 仓库：
+
+```text
+https://github.com/YboringbY/manjing-video
+```
+
+本地开发目录：
+
+```text
+/Users/keyang/Desktop/manjing_SaaS/manjing-video
+```
+
+本地开发启动：
+
+```bash
+npm run dev -- -p 5050
+```
+
+生产服务器：
+
+```text
+118.196.44.191
+```
+
+生产部署目录：
+
+```text
+/opt/manjing-video
+```
+
+生产访问地址：
+
+```text
+http://118.196.44.191/
+```
+
+生产部署命令：
+
+```bash
+cd /opt/manjing-video
+./scripts/deploy.sh
+```
+
+部署脚本会从 GitHub `main` 分支拉取代码、安装依赖、构建并重启 PM2 应用。
+
+运行方式：
+
+- PM2 应用名：`manjing-video`
+- Next.js 监听：`127.0.0.1:3000`
+- nginx 监听公网 80 端口并反代到 Next.js
+- `.data/api-profiles.json` 是线上数据文件，不进入 Git
+
+密钥注意：
+
+- 服务器 SSH 私钥：`/Users/keyang/Desktop/manjing_SaaS/manjing.pem`
+- 本地 GitHub key：`/Users/keyang/Desktop/manjing_SaaS/github_manjing_local`
+- 服务器 deploy key：`/root/.ssh/github_manjing_deploy`
+- 不要提交 `.env*.local`、`.data/`、API Key 或任何私钥文件。
