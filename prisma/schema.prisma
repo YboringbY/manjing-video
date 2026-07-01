@@ -9,11 +9,7 @@ datasource db {
 
 enum MemberRole {
   admin
-  producer
-  writer
-  artist
-  board
-  viewer
+  user
 }
 
 enum MemberStatus {

@@ -4,10 +4,10 @@ import { getCurrentMembership, getDefaultTenant, publicUserFromMembership, requi
 import { hashPassword } from "@/lib/password";
 import { prisma } from "@/lib/prisma";
 
-const roles: MemberRole[] = ["admin", "producer", "writer", "artist", "board", "viewer"];
+const roles: MemberRole[] = ["admin", "user"];
 
 function normalizeRole(value: unknown): MemberRole {
-  return roles.includes(value as MemberRole) ? value as MemberRole : "viewer";
+  return roles.includes(value as MemberRole) ? value as MemberRole : "user";
 }
 
 export async function GET() {

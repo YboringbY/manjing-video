@@ -4,7 +4,7 @@ import { publicUserFromMembership, requireAdmin } from "@/lib/auth";
 import { hashPassword } from "@/lib/password";
 import { prisma } from "@/lib/prisma";
 
-const roles: MemberRole[] = ["admin", "producer", "writer", "artist", "board", "viewer"];
+const roles: MemberRole[] = ["admin", "user"];
 const statuses: MemberStatus[] = ["active", "disabled"];
 
 function normalizeRole(value: unknown): MemberRole | undefined {

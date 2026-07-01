@@ -31,7 +31,7 @@ type AuthUser = {
   apiKeys?: { id: string; name: string; value: string; createdAt: number }[];
 };
 type AuthUsers = Record<string, AuthUser>;
-type MemberRole = "admin" | "producer" | "writer" | "artist" | "board" | "viewer";
+type MemberRole = "admin" | "user";
 type ProfileSection = "basic" | "security" | "api";
 type WorkspaceSection = "project-home" | "overview" | "script" | "shots" | "image-workbench" | "material-assets" | "tasks" | "generated-videos" | "assets" | "members" | "profile";
 type ApiProfile = { id: string; name: string; baseUrl: string; apiKey?: string; model: string; active: boolean; createdAt: number; hasApiKey?: boolean };
@@ -147,6 +147,14 @@ function usersToMap(users: AuthUser[]) {
   return Object.fromEntries(users.map(user => [user.account, user])) as AuthUsers;
 }
 
+function roleLabel(role: MemberRole) {
+  return role === "admin" ? "管理员" : "用户";
+}
+
+function roleScope(role: MemberRole) {
+  return role === "admin" ? "系统管理与全部功能" : "项目生产功能";
+}
+
 function normalizeApiProfiles(saved: ApiProfile[]) {
   const merged = [...defaultApiProfiles];
   saved.forEach(profile => {
@@ -246,7 +254,7 @@ export default function Home() {
   const [showAllVideoAssets, setShowAllVideoAssets] = useState(false);
   const [recoverTaskId, setRecoverTaskId] = useState("");
   const [showAllLizhenAssets, setShowAllLizhenAssets] = useState(false);
-  const [memberRoleDraft, setMemberRoleDraft] = useState<MemberRole>("writer");
+  const [memberRoleDraft, setMemberRoleDraft] = useState<MemberRole>("user");
   const [memberAccountDraft, setMemberAccountDraft] = useState("");
   const [memberNameDraft, setMemberNameDraft] = useState("");
   const [memberPasswordDraft, setMemberPasswordDraft] = useState("");
@@ -278,6 +286,7 @@ export default function Home() {
   const [loginAccount, setLoginAccount] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [authMessage, setAuthMessage] = useState("");
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -327,6 +336,11 @@ export default function Home() {
     if (!authReady || !currentUser) return;
     fetchUsers().catch(() => undefined);
   }, [authReady, currentUser]);
+
+  useEffect(() => {
+    const role = currentUser ? authUsers[currentUser]?.role || "user" : "user";
+    if (role !== "admin" && activeSection === "members") setActiveSection("project-home");
+  }, [authUsers, currentUser, activeSection]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -405,7 +419,7 @@ export default function Home() {
 
   async function upsertMember() {
     if (!currentUser) return alert("请先登录管理员账号。");
-    if ((authUsers[currentUser]?.role || "writer") !== "admin") return alert("只有管理员可以添加或修改成员。");
+    if ((authUsers[currentUser]?.role || "user") !== "admin") return alert("只有管理员可以添加或修改成员。");
     const account = memberAccountDraft.trim();
     if (!account) return alert("请输入成员账号。");
     const current = authUsers[account];
@@ -431,7 +445,7 @@ export default function Home() {
 
   async function deleteMember(account: string) {
     if (!currentUser) return;
-    if ((authUsers[currentUser]?.role || "writer") !== "admin") return alert("只有管理员可以停用成员。");
+    if ((authUsers[currentUser]?.role || "user") !== "admin") return alert("只有管理员可以停用成员。");
     if (account === currentUser) return alert("不能删除当前登录管理员。");
     const target = authUsers[account];
     if (!target) return alert("未找到成员。");
@@ -1203,7 +1217,7 @@ export default function Home() {
   const visibleLizhenAssets = showAllLizhenAssets ? filteredLizhenAssets : filteredLizhenAssets.slice(0, 5);
   const hiddenLizhenAssetCount = Math.max(filteredLizhenAssets.length - 5, 0);
   const currentUserRecord = currentUser ? authUsers[currentUser] : null;
-  const currentUserRole = currentUserRecord?.role || "writer";
+  const currentUserRole = currentUserRecord?.role || "user";
   const currentApiKeys = currentUserRecord?.apiKeys || [];
   const activeApiProfile = apiProfiles.find(item => item.id === activeApiProfileId) || apiProfiles.find(item => item.active) || apiProfiles[0];
   const currentDisplayName = currentUserRecord?.displayName || currentUser || "访客";
@@ -1338,27 +1352,36 @@ export default function Home() {
   }
 
   async function submitAuth() {
+    if (isLoggingIn) return;
     const account = loginAccount.trim();
     const password = loginPassword.trim();
     if (!account || !password) {
       setAuthMessage("请输入账号和密码。");
       return;
     }
-    const response = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ account, password })
-    });
-    const result = await response.json();
-    if (!response.ok || result.code !== 0 || !result.data) {
-      setAuthMessage(result.message || "登录失败。");
-      return;
+    setIsLoggingIn(true);
+    setAuthMessage("正在登录...");
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account, password })
+      });
+      const result = await response.json();
+      if (!response.ok || result.code !== 0 || !result.data) {
+        setAuthMessage(result.message || "登录失败。");
+        return;
+      }
+      setCurrentUser(result.data.account);
+      setShowLoginPage(false);
+      setLoginPassword("");
+      setAuthMessage("");
+      fetchUsers().catch(() => undefined);
+    } catch (error) {
+      setAuthMessage(error instanceof Error ? error.message : "登录请求失败，请确认本地服务和数据库已启动。");
+    } finally {
+      setIsLoggingIn(false);
     }
-    setCurrentUser(result.data.account);
-    setShowLoginPage(false);
-    setLoginPassword("");
-    setAuthMessage("");
-    await fetchUsers();
   }
 
   function switchLanguage() {
@@ -1401,7 +1424,7 @@ export default function Home() {
               <div className="login-label-row"><label>密码</label><button onClick={() => setAuthMessage("请联系管理员重置密码。")}>忘记密码?</button></div>
               <div className="login-input"><span>▢</span><input type="password" value={loginPassword} onChange={event => setLoginPassword(event.target.value)} placeholder="输入您的密码" onKeyDown={event => { if (event.key === "Enter") submitAuth(); }} /></div>
               {authMessage && <p className="login-message">{authMessage}</p>}
-              <button className="login-submit" onClick={submitAuth}>进入工作空间 <span>→</span></button>
+              <button type="button" className="login-submit" onClick={submitAuth} disabled={isLoggingIn}>{isLoggingIn ? "正在进入..." : "进入工作空间"} <span>→</span></button>
             </div>
             <div className="login-divider" />
             <p className="login-switch">账号由管理员在人员管理中创建。</p>
@@ -1440,7 +1463,7 @@ export default function Home() {
             ["tasks", "◎ 生成任务"],
             ["generated-videos", "◉ 已生成视频"],
             ["assets", "◫ 外接资产库"],
-            ["members", "▤ 人员管理"]
+            ...(currentUserRole === "admin" ? [["members", "▤ 人员管理"] as [WorkspaceSection, string]] : [])
           ] as [WorkspaceSection, string][]).map(([section, label]) => (
             <button key={section} className={activeSection === section ? "active" : ""} onClick={() => setActiveSection(section)}>{label}</button>
           ))}
@@ -1448,14 +1471,14 @@ export default function Home() {
       </aside>
 
       <main>
-        <div className="topbar"><div className="crumb">漫镜视频 / AI 短剧生产平台</div><div className="actions"><button className="btn-secondary" onClick={refreshAllTaskStatuses}>同步本页任务状态</button><button className="btn-primary" onClick={() => setActiveSection("members")}>人员管理</button><div className="user-menu-wrap"><button className="user-chip" onClick={() => setUserMenuOpen(open => !open)}>{currentDisplayName}<span>▾</span></button>{userMenuOpen && <div className="user-menu"><strong>{currentDisplayName}</strong><button onClick={() => { setActiveSection("profile"); setProfileSection("basic"); setMemberNameDraft(currentDisplayName); setUserMenuOpen(false); }}>个人中心</button><button onClick={() => { setActiveSection("assets"); setUserMenuOpen(false); }}>我的资产</button><button onClick={switchLanguage}>语言 · {languageLabel}</button><button onClick={logout} className="danger">退出登录</button></div>}</div></div></div>
+        <div className="topbar"><div className="crumb">漫镜视频 / AI 短剧生产平台</div><div className="actions"><button className="btn-secondary" onClick={refreshAllTaskStatuses}>同步本页任务状态</button>{currentUserRole === "admin" && <button className="btn-primary" onClick={() => setActiveSection("members")}>人员管理</button>}<div className="user-menu-wrap"><button className="user-chip" onClick={() => setUserMenuOpen(open => !open)}>{currentDisplayName}<span>{roleLabel(currentUserRole)}</span></button>{userMenuOpen && <div className="user-menu"><strong>{currentDisplayName}</strong><small>{currentUserRecord?.account || "-"}</small><small>{roleLabel(currentUserRole)}</small><button onClick={() => { setActiveSection("profile"); setProfileSection("basic"); setMemberNameDraft(currentDisplayName); setUserMenuOpen(false); }}>个人中心</button><button onClick={() => { setActiveSection("assets"); setUserMenuOpen(false); }}>我的资产</button><button onClick={switchLanguage}>语言 · {languageLabel}</button><button onClick={logout} className="danger">退出登录</button></div>}</div></div></div>
         {userActionMessage && <div className="action-toast">{userActionMessage}</div>}
-        <div className="notice">真实 API 说明<span>已接入 Seedance 2.0。文生视频可直接生成；图生/参考素材生成需要公网 URL 或登记后的 asset://id，本地文件仅支持页面预览。</span></div>
-        <section className="concurrency-banner">
+        {(["shots", "tasks", "generated-videos"] as WorkspaceSection[]).includes(activeSection) && <div className="notice">真实 API 说明<span>已接入 Seedance 2.0。文生视频可直接生成；图生/参考素材生成需要公网 URL 或登记后的 asset://id，本地文件仅支持页面预览。</span></div>}
+        {(["shots", "tasks", "generated-videos"] as WorkspaceSection[]).includes(activeSection) && <section className="concurrency-banner">
           <div className="concurrency-banner-main"><span className="live-dot" />高并发视频生成已开启<strong>{concurrentRunningTasks.length}/{maxConcurrentChannels} 路并行中</strong><em>支持 {concurrentAccountCount} 个账户同时提交生成任务</em></div>
           <div className="concurrency-meter"><b style={{ width: `${Math.max(concurrencyPercent, 8)}%` }} /></div>
           <div className="concurrency-meta"><span>可用通道 {availableConcurrentChannels}</span><span>已提交 {concurrentSubmittedTasks.length}</span><span>第三方 API 高并发队列</span></div>
-        </section>
+        </section>}
 
         <section id="project-home" className="project-home card" style={sectionStyle("project-home")}>
           <div className="project-home-head">
@@ -1493,19 +1516,19 @@ export default function Home() {
         </div>
 
         <section className="card" style={sectionStyle("members")}>
-          <div className="asset-workspace-head"><div><h2>人员管理</h2><p className="muted">管理员创建团队账号、设置初始密码并分配角色。</p></div><span className="source-pill internal">内部账号</span></div>
-          <div className="member-role-grid"><div className="member-role-card"><strong>管理员</strong><p>成员、项目、API Profile 和全流程管理。</p></div><div className="member-role-card"><strong>制片</strong><p>负责项目推进与交付检查。</p></div><div className="member-role-card"><strong>编剧</strong><p>负责剧本内容与单集拆分。</p></div><div className="member-role-card"><strong>美术 / 分镜</strong><p>负责素材、分镜和视频生成。</p></div></div>
+          <div className="asset-workspace-head"><div><h2>人员管理</h2><p className="muted">管理员维护内部账号，普通用户负责日常生产操作。</p></div><span className="source-pill internal">内部账号</span></div>
+          <div className="member-role-grid"><div className="member-role-card"><strong>管理员</strong><p>管理成员、API Profile、项目配置和全部生产功能。</p></div><div className="member-role-card"><strong>用户</strong><p>使用剧本、素材、分镜、视频生成和资产查看功能。</p></div></div>
           <div className="form" style={{ marginTop: 20 }}>
-            <div className="script-core-grid"><div><label>成员账号</label><input value={memberAccountDraft} onChange={event => setMemberAccountDraft(event.target.value)} placeholder="例如 zhangsan" /></div><div><label>显示名称</label><input value={memberNameDraft} onChange={event => setMemberNameDraft(event.target.value)} placeholder="输入显示名称" /></div><div><label>初始/重置密码</label><input type="password" value={memberPasswordDraft} onChange={event => setMemberPasswordDraft(event.target.value)} placeholder="新成员必填，至少 8 位" /></div><div><label>成员角色</label><select value={memberRoleDraft} onChange={event => setMemberRoleDraft(event.target.value as MemberRole)}><option value="admin">管理员</option><option value="producer">制片</option><option value="writer">编剧</option><option value="artist">美术师</option><option value="board">分镜师</option><option value="viewer">只读查看</option></select></div></div>
+            <div className="script-core-grid"><div><label>成员账号</label><input value={memberAccountDraft} onChange={event => setMemberAccountDraft(event.target.value)} placeholder="例如 zhangsan" /></div><div><label>显示名称</label><input value={memberNameDraft} onChange={event => setMemberNameDraft(event.target.value)} placeholder="输入显示名称" /></div><div><label>初始/重置密码</label><input type="password" value={memberPasswordDraft} onChange={event => setMemberPasswordDraft(event.target.value)} placeholder="新成员必填；编辑成员可留空" /></div><div><label>成员角色</label><select value={memberRoleDraft} onChange={event => setMemberRoleDraft(event.target.value as MemberRole)}><option value="admin">管理员</option><option value="user">用户</option></select></div></div>
             <div className="actions"><button className="btn-primary" onClick={upsertMember} disabled={currentUserRole !== "admin"}>保存成员账号</button></div>
           </div>
-          <div className="table-wrap" style={{ marginTop: 18 }}><table className="table"><thead><tr><th>账号</th><th>显示名</th><th>角色</th><th>状态</th><th>权限范围</th><th>操作</th></tr></thead><tbody>{Object.values(authUsers).map(user => <tr key={user.account}><td>{user.account}</td><td>{user.displayName || user.account}</td><td>{user.role === "admin" ? "管理员" : user.role === "producer" ? "制片" : user.role === "writer" ? "编剧" : user.role === "artist" ? "美术师" : user.role === "board" ? "分镜师" : "只读查看"}</td><td><span className={user.status === "active" ? "tag done" : "tag pending"}>{user.status === "active" ? "启用" : "停用"}</span></td><td>{user.role === "admin" ? "全流程管理" : user.role === "producer" ? "项目推进/交付检查" : user.role === "writer" ? "剧本内容" : user.role === "artist" ? "素材/生图" : user.role === "board" ? "分镜/视频生成" : "只读查看"}</td><td><button className="btn-ghost btn-small" disabled={currentUserRole !== "admin" || user.status !== "active"} onClick={() => { setMemberAccountDraft(user.account); setMemberNameDraft(user.displayName || user.account); setMemberRoleDraft(user.role); setMemberPasswordDraft(""); }}>编辑</button><button className="btn-danger btn-small" disabled={currentUserRole !== "admin" || user.status !== "active"} onClick={() => deleteMember(user.account)}>停用</button></td></tr>)}</tbody></table></div>
+          <div className="table-wrap" style={{ marginTop: 18 }}><table className="table"><thead><tr><th>账号</th><th>显示名</th><th>角色</th><th>状态</th><th>权限范围</th><th>操作</th></tr></thead><tbody>{Object.values(authUsers).map(user => <tr key={user.account}><td>{user.account}</td><td>{user.displayName || user.account}</td><td>{roleLabel(user.role)}</td><td><span className={user.status === "active" ? "tag done" : "tag pending"}>{user.status === "active" ? "启用" : "停用"}</span></td><td>{roleScope(user.role)}</td><td><button className="btn-ghost btn-small" disabled={currentUserRole !== "admin" || user.status !== "active"} onClick={() => { setMemberAccountDraft(user.account); setMemberNameDraft(user.displayName || user.account); setMemberRoleDraft(user.role); setMemberPasswordDraft(""); }}>编辑</button><button className="btn-danger btn-small" disabled={currentUserRole !== "admin" || user.status !== "active"} onClick={() => deleteMember(user.account)}>停用</button></td></tr>)}</tbody></table></div>
           <div className="api-profile-panel"><div className="asset-workspace-head"><div><h2>第三方 API Profile</h2><p className="muted">管理员可保存多个 Seedance 兼容平台，测试时只切换当前 Profile，不覆盖默认 AIfastgate 配置。</p></div><span className="source-pill external">当前：{addingApiProfile ? "新增第三方 API" : activeApiProfile?.name || "默认 AIfastgate"}</span></div>{userActionMessage && <div className="api-active-banner">{userActionMessage}<small>{addingApiProfile ? "新增第三方 API 中" : activeApiProfile?.baseUrl || "使用 .env.local 默认 AIfastgate 配置"}</small></div>}<div className="api-switch-row"><div><label>当前使用接口</label><select value={addingApiProfile ? "__add__" : activeApiProfileId} onChange={event => { if (event.target.value === "__add__") { setAddingApiProfile(true); setApiProfileName(""); setApiProfileBaseUrl(""); setApiProfileKey(""); setApiProfileModel(""); setUserActionMessage("请填写 Base URL 和 API Key，系统会自动补齐平台名称和模型名。"); } else { setAddingApiProfile(false); switchApiProfile(event.target.value); } }}><option value="__add__">+ 添加第三方 API</option>{apiProfiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></div><div><label>当前 Base URL</label><input readOnly value={addingApiProfile ? "" : activeApiProfile?.baseUrl || "使用 .env.local 默认 AIfastgate 配置"} /></div></div><div className="script-core-grid"><div><label>平台名称</label><input value={apiProfileName} onChange={event => setApiProfileName(event.target.value)} /></div><div><label>API Base URL</label><input value={apiProfileBaseUrl} onChange={event => updateApiProfileDraft("baseUrl", event.target.value)} placeholder="http://43.159.135.17/api/v3" /></div><div><label>API Key</label><input type="password" autoComplete="new-password" value={apiProfileKey} onChange={event => updateApiProfileDraft("apiKey", event.target.value)} placeholder="保存后自动隐藏，平台不再显示明文" /></div><div><label>模型名</label><input value={apiProfileModel} onChange={event => setApiProfileModel(event.target.value)} placeholder="doubao-seedance-2.0-fast" /></div></div><div className="actions"><button className="btn-primary" onClick={saveApiProfile}>保存 Profile</button></div><div className="table-wrap" style={{ marginTop: 14 }}><table className="table"><thead><tr><th>状态</th><th>平台</th><th>Base URL</th><th>模型</th><th>Key</th><th>操作</th></tr></thead><tbody>{apiProfiles.map(profile => <tr key={profile.id}><td>{profile.id === activeApiProfileId ? <span className="tag done">当前使用</span> : <span className="tag pending">备用</span>}</td><td>{profile.name}</td><td><code>{profile.baseUrl || "环境变量默认"}</code></td><td>{profile.model || "环境变量默认"}</td><td><span className={profile.hasApiKey ? "tag done" : "tag pending"}>{profile.hasApiKey ? "已隐藏" : "未配置"}</span></td><td><button className="btn-ghost btn-small" onClick={() => activateApiProfile(profile.id)}>{profile.id === activeApiProfileId ? "已启用" : "启用"}</button><button className="btn-danger btn-small" disabled={currentUserRole !== "admin" || profile.id === "fastgate-default"} onClick={() => deleteApiProfile(profile.id)}>删除</button></td></tr>)}</tbody></table></div></div>
         </section>
 
         <section className="profile-layout" style={sectionStyle("profile")}>
-          <aside className="profile-side"><div className="profile-user-card"><div className="profile-avatar">{avatarLabel}</div><strong>{currentDisplayName}</strong><span>欢迎回来！</span></div><button className={profileSection === "basic" ? "active" : ""} onClick={() => setProfileSection("basic")}>基础信息</button><button className={profileSection === "security" ? "active" : ""} onClick={() => setProfileSection("security")}>账户安全</button><button className={profileSection === "api" ? "active" : ""} onClick={() => setProfileSection("api")}>API 密钥</button></aside>
-          <div className="profile-content">{profileSection === "basic" && <section className="card profile-panel"><h2 style={{ marginTop: 0 }}>基础信息</h2><p className="muted">您的个人资料信息</p><div className="profile-info-list"><div><span>账号</span><strong>{currentUserRecord?.account || "-"}</strong></div><div><span>邮箱</span><strong>{currentUserRecord?.email || "-"}</strong></div><div><span>创建时间</span><strong>{currentUserRecord?.createdAt ? new Date(currentUserRecord.createdAt).toLocaleDateString() : "-"}</strong></div><div><span>角色</span><strong>{currentUserRole === "admin" ? "管理员" : currentUserRole === "producer" ? "制片" : currentUserRole === "writer" ? "编剧" : currentUserRole === "artist" ? "美术师" : currentUserRole === "board" ? "分镜师" : "只读查看"}</strong></div></div><div className="form" style={{ marginTop: 16 }}><div><label>显示名称</label><input value={memberNameDraft} onChange={event => setMemberNameDraft(event.target.value)} placeholder="输入新的显示名称" /></div><div className="actions"><button className="btn-primary" onClick={saveProfile}>修改个人信息</button></div></div></section>}{profileSection === "security" && <section className="card profile-panel"><h2 style={{ marginTop: 0 }}>账户安全</h2><p className="muted">管理您的安全设置</p><div className="security-list"><div><span>账户状态</span><strong className="ok">{currentUserRecord?.status === "active" ? "正常" : "停用"}</strong></div><div><span>重置密码</span><button className="btn-ghost" onClick={() => setPasswordModalOpen(true)}>修改密码</button></div></div></section>}{profileSection === "api" && <section className="card profile-panel"><div className="card-title-row"><div><h2 style={{ marginTop: 0 }}>API 密钥</h2><p className="muted">管理您的 API 访问密钥，用于通过 API 调用平台功能</p></div><button className="btn-primary" onClick={createApiKey}>+ 创建密钥</button></div>{currentApiKeys.length ? <div className="table-wrap"><table className="table"><thead><tr><th>名称</th><th>密钥</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{currentApiKeys.map(item => <tr key={item.id}><td>{item.name}</td><td><code>{item.value}</code></td><td>{new Date(item.createdAt).toLocaleDateString()}</td><td><button className="btn-danger btn-small" onClick={() => deleteApiKey(item.id)}>删除</button></td></tr>)}</tbody></table></div> : <div className="empty-result"><div className="empty-ico">⌘</div><strong>暂无 API 密钥</strong><p className="muted">个人 API Key 将在账号体系稳定后接入服务端存储。</p></div>}</section>}</div>
+          <aside className="profile-side"><div className="profile-user-card"><div className="profile-avatar">{avatarLabel}</div><strong>{currentDisplayName}</strong><span>{currentUserRecord?.account || "-"}</span><small>{roleLabel(currentUserRole)}</small></div><button className={profileSection === "basic" ? "active" : ""} onClick={() => setProfileSection("basic")}>基础信息</button><button className={profileSection === "security" ? "active" : ""} onClick={() => setProfileSection("security")}>账户安全</button><button className={profileSection === "api" ? "active" : ""} onClick={() => setProfileSection("api")}>API 密钥</button></aside>
+          <div className="profile-content">{profileSection === "basic" && <section className="card profile-panel"><h2 style={{ marginTop: 0 }}>基础信息</h2><p className="muted">您的个人资料信息</p><div className="profile-info-list"><div><span>账号</span><strong>{currentUserRecord?.account || "-"}</strong></div><div><span>邮箱</span><strong>{currentUserRecord?.email || "-"}</strong></div><div><span>创建时间</span><strong>{currentUserRecord?.createdAt ? new Date(currentUserRecord.createdAt).toLocaleDateString() : "-"}</strong></div><div><span>角色</span><strong>{roleLabel(currentUserRole)}</strong></div></div><div className="form" style={{ marginTop: 16 }}><div><label>显示名称</label><input value={memberNameDraft} onChange={event => setMemberNameDraft(event.target.value)} placeholder="输入新的显示名称" /></div><div className="actions"><button className="btn-primary" onClick={saveProfile}>修改个人信息</button></div></div></section>}{profileSection === "security" && <section className="card profile-panel"><h2 style={{ marginTop: 0 }}>账户安全</h2><p className="muted">管理您的安全设置</p><div className="security-list"><div><span>账户状态</span><strong className="ok">{currentUserRecord?.status === "active" ? "正常" : "停用"}</strong></div><div><span>重置密码</span><button className="btn-ghost" onClick={() => setPasswordModalOpen(true)}>修改密码</button></div></div></section>}{profileSection === "api" && <section className="card profile-panel"><div className="card-title-row"><div><h2 style={{ marginTop: 0 }}>API 密钥</h2><p className="muted">管理您的 API 访问密钥，用于通过 API 调用平台功能</p></div><button className="btn-primary" onClick={createApiKey}>+ 创建密钥</button></div>{currentApiKeys.length ? <div className="table-wrap"><table className="table"><thead><tr><th>名称</th><th>密钥</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{currentApiKeys.map(item => <tr key={item.id}><td>{item.name}</td><td><code>{item.value}</code></td><td>{new Date(item.createdAt).toLocaleDateString()}</td><td><button className="btn-danger btn-small" onClick={() => deleteApiKey(item.id)}>删除</button></td></tr>)}</tbody></table></div> : <div className="empty-result"><div className="empty-ico">⌘</div><strong>暂无 API 密钥</strong><p className="muted">个人 API Key 将在账号体系稳定后接入服务端存储。</p></div>}</section>}</div>
         </section>
 
         <section id="script" className="card script-workbench" style={sectionStyle("script")}>
