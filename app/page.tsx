@@ -18,10 +18,12 @@ type MaterialAsset = { id: number; name: string; url: string; kind: MaterialKind
 type AppState = { project: Project; shots: Shot[]; tasks: VideoTask[]; assets: VideoAsset[]; materials: MaterialAsset[]; assetGroupId?: string | number };
 type ProjectStates = Record<number, AppState>;
 type AuthUser = {
+  id: string;
   account: string;
-  password: string;
-  createdAt: number;
   role: MemberRole;
+  status: "active" | "disabled";
+  createdAt: string;
+  updatedAt: string;
   displayName?: string;
   email?: string;
   phone?: string;
@@ -29,9 +31,7 @@ type AuthUser = {
   apiKeys?: { id: string; name: string; value: string; createdAt: number }[];
 };
 type AuthUsers = Record<string, AuthUser>;
-type AuthView = "login" | "register";
-type AuthMode = "password" | "code";
-type MemberRole = "admin" | "writer" | "artist" | "board";
+type MemberRole = "admin" | "producer" | "writer" | "artist" | "board" | "viewer";
 type ProfileSection = "basic" | "security" | "api";
 type WorkspaceSection = "project-home" | "overview" | "script" | "shots" | "image-workbench" | "material-assets" | "tasks" | "generated-videos" | "assets" | "members" | "profile";
 type ApiProfile = { id: string; name: string; baseUrl: string; apiKey?: string; model: string; active: boolean; createdAt: number; hasApiKey?: boolean };
@@ -143,6 +143,10 @@ function getStoredUsers(): Record<string, AuthUser> {
   }
 }
 
+function usersToMap(users: AuthUser[]) {
+  return Object.fromEntries(users.map(user => [user.account, user])) as AuthUsers;
+}
+
 function normalizeApiProfiles(saved: ApiProfile[]) {
   const merged = [...defaultApiProfiles];
   saved.forEach(profile => {
@@ -245,6 +249,7 @@ export default function Home() {
   const [memberRoleDraft, setMemberRoleDraft] = useState<MemberRole>("writer");
   const [memberAccountDraft, setMemberAccountDraft] = useState("");
   const [memberNameDraft, setMemberNameDraft] = useState("");
+  const [memberPasswordDraft, setMemberPasswordDraft] = useState("");
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [profileSection, setProfileSection] = useState<ProfileSection>("basic");
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
@@ -268,20 +273,15 @@ export default function Home() {
 
   const [authUsers, setAuthUsers] = useState<Record<string, AuthUser>>({});
   const [authReady, setAuthReady] = useState(false);
-  const [showLoginPage, setShowLoginPage] = useState(false);
+  const [showLoginPage, setShowLoginPage] = useState(true);
   const [currentUser, setCurrentUser] = useState<string | null>(null);
-  const [authView, setAuthView] = useState<AuthView>("login");
-  const [authMode, setAuthMode] = useState<AuthMode>("password");
   const [loginAccount, setLoginAccount] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
-  const [loginCode, setLoginCode] = useState("");
   const [authMessage, setAuthMessage] = useState("");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
-      const users = getStoredUsers();
-      setAuthUsers(users);
       const savedLanguage = window.localStorage.getItem("manjing-language");
       if (savedLanguage) setLanguageLabel(savedLanguage);
       const profiles = readApiProfiles();
@@ -300,17 +300,39 @@ export default function Home() {
         setActiveApiProfileId(serverActiveId);
         window.localStorage.setItem(ACTIVE_API_PROFILE_STORAGE_KEY, serverActiveId);
       }).catch(() => undefined);
-      const savedAuth = window.localStorage.getItem(AUTH_STORAGE_KEY);
-      if (savedAuth) {
-        const parsed = JSON.parse(savedAuth) as { account?: string };
-        if (parsed.account) setCurrentUser(parsed.account);
-      }
+      fetch("/api/auth/me").then(async response => {
+        const result = await response.json();
+        if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "未登录");
+        setCurrentUser(result.data.account);
+        setShowLoginPage(false);
+        return fetchUsers();
+      }).catch(() => {
+        setCurrentUser(null);
+        setShowLoginPage(true);
+      }).finally(() => setAuthReady(true));
     } catch {
       window.localStorage.removeItem(AUTH_STORAGE_KEY);
-    } finally {
       setAuthReady(true);
     }
   }, []);
+
+  async function fetchUsers() {
+    const response = await fetch("/api/users");
+    const result = await response.json();
+    if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "加载成员失败");
+    setAuthUsers(usersToMap(result.data as AuthUser[]));
+  }
+
+  useEffect(() => {
+    if (!authReady || !currentUser) return;
+    fetchUsers().catch(() => undefined);
+  }, [authReady, currentUser]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (currentUser) window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({ account: currentUser }));
+    else window.localStorage.removeItem(AUTH_STORAGE_KEY);
+  }, [currentUser]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -381,45 +403,43 @@ export default function Home() {
     }
   }
 
-  function readAuthUsers() {
-    return authUsers;
-  }
-
-  function writeAuthUsers(nextUsers: Record<string, AuthUser>) {
-    if (typeof window !== "undefined") window.localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(nextUsers));
-    setAuthUsers(nextUsers);
-  }
-
-  function upsertMember() {
+  async function upsertMember() {
     if (!currentUser) return alert("请先登录管理员账号。");
-    const users = readAuthUsers();
-    if ((users[currentUser]?.role || "writer") !== "admin") return alert("只有管理员可以添加或修改成员。");
+    if ((authUsers[currentUser]?.role || "writer") !== "admin") return alert("只有管理员可以添加或修改成员。");
     const account = memberAccountDraft.trim();
     if (!account) return alert("请输入成员账号。");
-    const current = users[account];
-    users[account] = {
+    const current = authUsers[account];
+    const body = {
       account,
-      password: current?.password || "123456",
-      createdAt: current?.createdAt || Date.now(),
-      role: memberRoleDraft,
       displayName: memberNameDraft.trim() || account,
-      email: current?.email || "",
-      phone: current?.phone || "",
-      language: current?.language || "简体中文",
-      apiKeys: current?.apiKeys || []
+      role: memberRoleDraft,
+      password: memberPasswordDraft.trim()
     };
-    writeAuthUsers(users);
+    const response = await fetch(current ? `/api/users/${current.id}` : "/api/users", {
+      method: current ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const result = await response.json();
+    if (!response.ok || result.code !== 0) return alert(result.message || "保存成员失败。");
+    await fetchUsers();
     setMemberAccountDraft("");
     setMemberNameDraft("");
+    setMemberPasswordDraft("");
+    setUserActionMessage(current ? "成员信息已更新。" : "成员账号已创建。");
   }
 
-  function deleteMember(account: string) {
+  async function deleteMember(account: string) {
     if (!currentUser) return;
-    const users = readAuthUsers();
-    if ((users[currentUser]?.role || "writer") !== "admin") return alert("只有管理员可以删除成员。");
+    if ((authUsers[currentUser]?.role || "writer") !== "admin") return alert("只有管理员可以停用成员。");
     if (account === currentUser) return alert("不能删除当前登录管理员。");
-    delete users[account];
-    writeAuthUsers(users);
+    const target = authUsers[account];
+    if (!target) return alert("未找到成员。");
+    const response = await fetch(`/api/users/${target.id}`, { method: "DELETE" });
+    const result = await response.json();
+    if (!response.ok || result.code !== 0) return alert(result.message || "停用成员失败。");
+    await fetchUsers();
+    setUserActionMessage("成员已停用。");
   }
 
   const stats = useMemo(() => {
@@ -700,33 +720,28 @@ export default function Home() {
     setBatchModalOpen(false);
   }
 
-  function saveProfile() {
+  async function saveProfile() {
     if (!currentUser) return;
-    const users = readAuthUsers();
-    const current = users[currentUser];
+    const current = authUsers[currentUser];
     if (!current) return;
-    users[currentUser] = { ...current, displayName: memberNameDraft.trim() || current.displayName || current.account };
-    writeAuthUsers(users);
-    alert("个人信息已更新。");
+    const response = await fetch(`/api/users/${current.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: memberNameDraft.trim() || current.displayName || current.account })
+    });
+    const result = await response.json();
+    if (!response.ok || result.code !== 0) return alert(result.message || "个人信息更新失败。");
+    await fetchUsers();
+    setUserActionMessage("个人信息已更新。");
   }
 
   function createApiKey() {
-    if (!currentUser) return;
-    const users = readAuthUsers();
-    const current = users[currentUser];
-    if (!current) return;
-    const nextKey = { id: String(Date.now()), name: `Key-${(current.apiKeys?.length || 0) + 1}`, value: `mk_${Math.random().toString(36).slice(2, 18)}`, createdAt: Date.now() };
-    users[currentUser] = { ...current, apiKeys: [nextKey, ...(current.apiKeys || [])] };
-    writeAuthUsers(users);
+    setUserActionMessage("个人 API Key 管理会在账号体系稳定后接入服务端存储。");
   }
 
   function deleteApiKey(id: string) {
-    if (!currentUser) return;
-    const users = readAuthUsers();
-    const current = users[currentUser];
-    if (!current) return;
-    users[currentUser] = { ...current, apiKeys: (current.apiKeys || []).filter(item => item.id !== id) };
-    writeAuthUsers(users);
+    void id;
+    setUserActionMessage("个人 API Key 管理会在账号体系稳定后接入服务端存储。");
   }
 
   function inferApiProfileDraft(baseUrlValue: string, apiKeyValue: string) {
@@ -1322,51 +1337,28 @@ export default function Home() {
     }, 900);
   }
 
-  function saveAuthSession(account: string) {
-    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({ account }));
-    setCurrentUser(account);
-    setAuthMessage("");
-  }
-
-  function submitAuth() {
+  async function submitAuth() {
     const account = loginAccount.trim();
     const password = loginPassword.trim();
-    const code = loginCode.trim();
-    if (!account) {
-      setAuthMessage("请输入用户名或手机号。");
+    if (!account || !password) {
+      setAuthMessage("请输入账号和密码。");
       return;
     }
-    if (authMode === "password" && password.length < 4) {
-      setAuthMessage("密码至少需要 4 位。");
+    const response = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ account, password })
+    });
+    const result = await response.json();
+    if (!response.ok || result.code !== 0 || !result.data) {
+      setAuthMessage(result.message || "登录失败。");
       return;
     }
-    if (authMode === "code" && code.length < 4) {
-      setAuthMessage("请输入 4 位以上验证码。");
-      return;
-    }
-
-    const users = readAuthUsers();
-    if (authView === "register") {
-      if (users[account]) {
-        setAuthMessage("该账号已存在，请直接登录。");
-        return;
-      }
-      const nextUsers = { ...users, [account]: { account, password: authMode === "password" ? password : code, createdAt: Date.now(), role: "admin", displayName: account, language: "简体中文", apiKeys: [] } };
-      window.localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(nextUsers));
-      saveAuthSession(account);
-      return;
-    }
-
-    const user = users[account];
-    if (!user) {
-      setAuthMessage("账号不存在，请先注册。");
-      return;
-    }
-    if (authMode === "password" && user.password !== password) {
-      setAuthMessage("密码不正确，请重新输入。");
-      return;
-    }
-    saveAuthSession(account);
+    setCurrentUser(result.data.account);
+    setShowLoginPage(false);
+    setLoginPassword("");
+    setAuthMessage("");
+    await fetchUsers();
   }
 
   function switchLanguage() {
@@ -1377,13 +1369,10 @@ export default function Home() {
     if (typeof window !== "undefined") window.localStorage.setItem("manjing-language", nextLanguage);
   }
 
-  function logout() {
-    if (typeof window !== "undefined") window.localStorage.removeItem(AUTH_STORAGE_KEY);
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
     setCurrentUser(null);
     setLoginPassword("");
-    setLoginCode("");
-    setAuthView("login");
-    setAuthMode("password");
     setUserMenuOpen(false);
     setAuthMessage("已退出登录，请重新登录。");
     setUserActionMessage("已退出登录，请重新登录。");
@@ -1405,29 +1394,18 @@ export default function Home() {
         <section className="login-panel-wrap">
           <div className="login-card">
             <div className="login-card-logo">M</div>
-            <h2>欢迎回来</h2>
-            <div className="login-tabs">
-              <button className={authMode === "password" ? "active" : ""} onClick={() => setAuthMode("password")}>密码登录</button>
-              <button className={authMode === "code" ? "active" : ""} onClick={() => setAuthMode("code")}>验证码登录</button>
-            </div>
+            <h2>内部账号登录</h2>
             <div className="login-form">
-              <label>用户名</label>
+              <label>账号</label>
               <div className="login-input"><span>♙</span><input value={loginAccount} onChange={event => setLoginAccount(event.target.value)} placeholder="输入您的账号" /></div>
-              {authMode === "password" ? <>
-                <div className="login-label-row"><label>登录密码</label><button onClick={() => setAuthMessage("本地演示账号请注册后使用；后续可接真实找回密码接口。")}>忘记密码?</button></div>
-                <div className="login-input"><span>▢</span><input type="password" value={loginPassword} onChange={event => setLoginPassword(event.target.value)} placeholder="输入您的密码" /></div>
-              </> : <>
-                <label>验证码</label>
-                <div className="login-code-row"><div className="login-input"><span>✦</span><input value={loginCode} onChange={event => setLoginCode(event.target.value)} placeholder="输入验证码" /></div><button onClick={() => setAuthMessage("演示验证码任意 4 位以上即可。")}>获取验证码</button></div>
-              </>}
+              <div className="login-label-row"><label>密码</label><button onClick={() => setAuthMessage("请联系管理员重置密码。")}>忘记密码?</button></div>
+              <div className="login-input"><span>▢</span><input type="password" value={loginPassword} onChange={event => setLoginPassword(event.target.value)} placeholder="输入您的密码" onKeyDown={event => { if (event.key === "Enter") submitAuth(); }} /></div>
               {authMessage && <p className="login-message">{authMessage}</p>}
-              <button className="login-submit" onClick={submitAuth}>{authView === "login" ? "进入工作空间" : "注册并进入"} <span>→</span></button>
-              <button className="btn-ghost" style={{ width: "100%", marginTop: 12 }} onClick={() => setShowLoginPage(false)}>返回项目首页</button>
+              <button className="login-submit" onClick={submitAuth}>进入工作空间 <span>→</span></button>
             </div>
             <div className="login-divider" />
-            <p className="login-switch">{authView === "login" ? "还没有账号？" : "已有账号？"}<button onClick={() => { setAuthView(authView === "login" ? "register" : "login"); setAuthMessage(""); }}>{authView === "login" ? "立即注册" : "立即登录"}</button></p>
+            <p className="login-switch">账号由管理员在人员管理中创建。</p>
           </div>
-          <p className="login-terms">登录即表示您已阅读并同意 <span>《用户服务协议》</span> 和 <span>《隐私政策》</span></p>
         </section>
       </div>
     );
@@ -1515,19 +1493,19 @@ export default function Home() {
         </div>
 
         <section className="card" style={sectionStyle("members")}>
-          <div className="asset-workspace-head"><div><h2>人员管理</h2><p className="muted">按成员职能分配权限。仅管理员可添加、修改、删除成员。</p></div><span className="source-pill internal">团队协作</span></div>
-          <div className="member-role-grid"><div className="member-role-card"><strong>管理员</strong><p>拥有项目所有设置及全流程编辑权。</p></div><div className="member-role-card"><strong>编剧</strong><p>仅可编辑剧本内容。</p></div><div className="member-role-card"><strong>美术师</strong><p>专注资产库（AMS）的批量生产与精调。</p></div><div className="member-role-card"><strong>分镜师</strong><p>负责分镜板参数精调与视频节点生成。</p></div></div>
+          <div className="asset-workspace-head"><div><h2>人员管理</h2><p className="muted">管理员创建团队账号、设置初始密码并分配角色。</p></div><span className="source-pill internal">内部账号</span></div>
+          <div className="member-role-grid"><div className="member-role-card"><strong>管理员</strong><p>成员、项目、API Profile 和全流程管理。</p></div><div className="member-role-card"><strong>制片</strong><p>负责项目推进与交付检查。</p></div><div className="member-role-card"><strong>编剧</strong><p>负责剧本内容与单集拆分。</p></div><div className="member-role-card"><strong>美术 / 分镜</strong><p>负责素材、分镜和视频生成。</p></div></div>
           <div className="form" style={{ marginTop: 20 }}>
-            <div className="script-core-grid"><div><label>成员账号</label><input value={memberAccountDraft} onChange={event => setMemberAccountDraft(event.target.value)} placeholder="输入用户名" /></div><div><label>成员姓名</label><input value={memberNameDraft} onChange={event => setMemberNameDraft(event.target.value)} placeholder="输入显示名称" /></div><div><label>成员职能</label><select value={memberRoleDraft} onChange={event => setMemberRoleDraft(event.target.value as MemberRole)}><option value="admin">管理员</option><option value="writer">编剧</option><option value="artist">美术师</option><option value="board">分镜师</option></select></div><div><label>权限说明</label><input value={memberRoleDraft === "admin" ? "项目全权限" : memberRoleDraft === "writer" ? "仅剧本编辑" : memberRoleDraft === "artist" ? "AMS素材生产" : "分镜与视频生成"} readOnly /></div></div>
-            <div className="actions"><button className="btn-primary" onClick={upsertMember} disabled={currentUserRole !== "admin"}>添加 / 修改成员</button></div>
+            <div className="script-core-grid"><div><label>成员账号</label><input value={memberAccountDraft} onChange={event => setMemberAccountDraft(event.target.value)} placeholder="例如 zhangsan" /></div><div><label>显示名称</label><input value={memberNameDraft} onChange={event => setMemberNameDraft(event.target.value)} placeholder="输入显示名称" /></div><div><label>初始/重置密码</label><input type="password" value={memberPasswordDraft} onChange={event => setMemberPasswordDraft(event.target.value)} placeholder="新成员必填，至少 8 位" /></div><div><label>成员角色</label><select value={memberRoleDraft} onChange={event => setMemberRoleDraft(event.target.value as MemberRole)}><option value="admin">管理员</option><option value="producer">制片</option><option value="writer">编剧</option><option value="artist">美术师</option><option value="board">分镜师</option><option value="viewer">只读查看</option></select></div></div>
+            <div className="actions"><button className="btn-primary" onClick={upsertMember} disabled={currentUserRole !== "admin"}>保存成员账号</button></div>
           </div>
-          <div className="table-wrap" style={{ marginTop: 18 }}><table className="table"><thead><tr><th>用户名</th><th>显示名</th><th>职能</th><th>权限范围</th><th>操作</th></tr></thead><tbody>{Object.values(authUsers).map(user => <tr key={user.account}><td>{user.account}</td><td>{user.displayName || user.account}</td><td>{user.role === "admin" ? "管理员" : user.role === "writer" ? "编剧" : user.role === "artist" ? "美术师" : "分镜师"}</td><td>{user.role === "admin" ? "全流程编辑" : user.role === "writer" ? "仅剧本" : user.role === "artist" ? "资产库/AMS" : "分镜/视频节点"}</td><td><button className="btn-ghost btn-small" disabled={currentUserRole !== "admin"} onClick={() => { setMemberAccountDraft(user.account); setMemberNameDraft(user.displayName || user.account); setMemberRoleDraft(user.role); }}>编辑</button><button className="btn-danger btn-small" disabled={currentUserRole !== "admin"} onClick={() => deleteMember(user.account)}>删除</button></td></tr>)}</tbody></table></div>
+          <div className="table-wrap" style={{ marginTop: 18 }}><table className="table"><thead><tr><th>账号</th><th>显示名</th><th>角色</th><th>状态</th><th>权限范围</th><th>操作</th></tr></thead><tbody>{Object.values(authUsers).map(user => <tr key={user.account}><td>{user.account}</td><td>{user.displayName || user.account}</td><td>{user.role === "admin" ? "管理员" : user.role === "producer" ? "制片" : user.role === "writer" ? "编剧" : user.role === "artist" ? "美术师" : user.role === "board" ? "分镜师" : "只读查看"}</td><td><span className={user.status === "active" ? "tag done" : "tag pending"}>{user.status === "active" ? "启用" : "停用"}</span></td><td>{user.role === "admin" ? "全流程管理" : user.role === "producer" ? "项目推进/交付检查" : user.role === "writer" ? "剧本内容" : user.role === "artist" ? "素材/生图" : user.role === "board" ? "分镜/视频生成" : "只读查看"}</td><td><button className="btn-ghost btn-small" disabled={currentUserRole !== "admin" || user.status !== "active"} onClick={() => { setMemberAccountDraft(user.account); setMemberNameDraft(user.displayName || user.account); setMemberRoleDraft(user.role); setMemberPasswordDraft(""); }}>编辑</button><button className="btn-danger btn-small" disabled={currentUserRole !== "admin" || user.status !== "active"} onClick={() => deleteMember(user.account)}>停用</button></td></tr>)}</tbody></table></div>
           <div className="api-profile-panel"><div className="asset-workspace-head"><div><h2>第三方 API Profile</h2><p className="muted">管理员可保存多个 Seedance 兼容平台，测试时只切换当前 Profile，不覆盖默认 AIfastgate 配置。</p></div><span className="source-pill external">当前：{addingApiProfile ? "新增第三方 API" : activeApiProfile?.name || "默认 AIfastgate"}</span></div>{userActionMessage && <div className="api-active-banner">{userActionMessage}<small>{addingApiProfile ? "新增第三方 API 中" : activeApiProfile?.baseUrl || "使用 .env.local 默认 AIfastgate 配置"}</small></div>}<div className="api-switch-row"><div><label>当前使用接口</label><select value={addingApiProfile ? "__add__" : activeApiProfileId} onChange={event => { if (event.target.value === "__add__") { setAddingApiProfile(true); setApiProfileName(""); setApiProfileBaseUrl(""); setApiProfileKey(""); setApiProfileModel(""); setUserActionMessage("请填写 Base URL 和 API Key，系统会自动补齐平台名称和模型名。"); } else { setAddingApiProfile(false); switchApiProfile(event.target.value); } }}><option value="__add__">+ 添加第三方 API</option>{apiProfiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></div><div><label>当前 Base URL</label><input readOnly value={addingApiProfile ? "" : activeApiProfile?.baseUrl || "使用 .env.local 默认 AIfastgate 配置"} /></div></div><div className="script-core-grid"><div><label>平台名称</label><input value={apiProfileName} onChange={event => setApiProfileName(event.target.value)} /></div><div><label>API Base URL</label><input value={apiProfileBaseUrl} onChange={event => updateApiProfileDraft("baseUrl", event.target.value)} placeholder="http://43.159.135.17/api/v3" /></div><div><label>API Key</label><input type="password" autoComplete="new-password" value={apiProfileKey} onChange={event => updateApiProfileDraft("apiKey", event.target.value)} placeholder="保存后自动隐藏，平台不再显示明文" /></div><div><label>模型名</label><input value={apiProfileModel} onChange={event => setApiProfileModel(event.target.value)} placeholder="doubao-seedance-2.0-fast" /></div></div><div className="actions"><button className="btn-primary" onClick={saveApiProfile}>保存 Profile</button></div><div className="table-wrap" style={{ marginTop: 14 }}><table className="table"><thead><tr><th>状态</th><th>平台</th><th>Base URL</th><th>模型</th><th>Key</th><th>操作</th></tr></thead><tbody>{apiProfiles.map(profile => <tr key={profile.id}><td>{profile.id === activeApiProfileId ? <span className="tag done">当前使用</span> : <span className="tag pending">备用</span>}</td><td>{profile.name}</td><td><code>{profile.baseUrl || "环境变量默认"}</code></td><td>{profile.model || "环境变量默认"}</td><td><span className={profile.hasApiKey ? "tag done" : "tag pending"}>{profile.hasApiKey ? "已隐藏" : "未配置"}</span></td><td><button className="btn-ghost btn-small" onClick={() => activateApiProfile(profile.id)}>{profile.id === activeApiProfileId ? "已启用" : "启用"}</button><button className="btn-danger btn-small" disabled={currentUserRole !== "admin" || profile.id === "fastgate-default"} onClick={() => deleteApiProfile(profile.id)}>删除</button></td></tr>)}</tbody></table></div></div>
         </section>
 
         <section className="profile-layout" style={sectionStyle("profile")}>
           <aside className="profile-side"><div className="profile-user-card"><div className="profile-avatar">{avatarLabel}</div><strong>{currentDisplayName}</strong><span>欢迎回来！</span></div><button className={profileSection === "basic" ? "active" : ""} onClick={() => setProfileSection("basic")}>基础信息</button><button className={profileSection === "security" ? "active" : ""} onClick={() => setProfileSection("security")}>账户安全</button><button className={profileSection === "api" ? "active" : ""} onClick={() => setProfileSection("api")}>API 密钥</button></aside>
-          <div className="profile-content">{profileSection === "basic" && <section className="card profile-panel"><h2 style={{ marginTop: 0 }}>基础信息</h2><p className="muted">您的个人资料信息</p><div className="profile-info-list"><div><span>用户名</span><strong>{currentDisplayName}</strong></div><div><span>邮箱</span><strong>{currentUserRecord?.email || "-"}</strong></div><div><span>注册时间</span><strong>{new Date(currentUserRecord?.createdAt || Date.now()).getFullYear()}/6/10</strong></div><div><span>钱包余额</span><strong>0.00 Fee</strong></div></div><div className="form" style={{ marginTop: 16 }}><div><label>显示名称</label><input value={memberNameDraft} onChange={event => setMemberNameDraft(event.target.value)} placeholder="输入新的显示名称" /></div><div className="actions"><button className="btn-primary" onClick={saveProfile}>修改个人信息</button></div></div></section>}{profileSection === "security" && <section className="card profile-panel"><h2 style={{ marginTop: 0 }}>账户安全</h2><p className="muted">管理您的安全设置</p><div className="security-list"><div><span>账户状态</span><strong className="ok">正常</strong></div><div><span>重置密码</span><button className="btn-ghost" onClick={() => setPasswordModalOpen(true)}>修改密码</button></div></div></section>}{profileSection === "api" && <section className="card profile-panel"><div className="card-title-row"><div><h2 style={{ marginTop: 0 }}>API 密钥</h2><p className="muted">管理您的 API 访问密钥，用于通过 API 调用平台功能</p></div><button className="btn-primary" onClick={createApiKey}>+ 创建密钥</button></div>{currentApiKeys.length ? <div className="table-wrap"><table className="table"><thead><tr><th>名称</th><th>密钥</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{currentApiKeys.map(item => <tr key={item.id}><td>{item.name}</td><td><code>{item.value}</code></td><td>{new Date(item.createdAt).toLocaleDateString()}</td><td><button className="btn-danger btn-small" onClick={() => deleteApiKey(item.id)}>删除</button></td></tr>)}</tbody></table></div> : <div className="empty-result"><div className="empty-ico">⌘</div><strong>暂无 API 密钥</strong><p className="muted">创建 API 密钥以便通过 API 访问平台功能。</p></div>}</section>}</div>
+          <div className="profile-content">{profileSection === "basic" && <section className="card profile-panel"><h2 style={{ marginTop: 0 }}>基础信息</h2><p className="muted">您的个人资料信息</p><div className="profile-info-list"><div><span>账号</span><strong>{currentUserRecord?.account || "-"}</strong></div><div><span>邮箱</span><strong>{currentUserRecord?.email || "-"}</strong></div><div><span>创建时间</span><strong>{currentUserRecord?.createdAt ? new Date(currentUserRecord.createdAt).toLocaleDateString() : "-"}</strong></div><div><span>角色</span><strong>{currentUserRole === "admin" ? "管理员" : currentUserRole === "producer" ? "制片" : currentUserRole === "writer" ? "编剧" : currentUserRole === "artist" ? "美术师" : currentUserRole === "board" ? "分镜师" : "只读查看"}</strong></div></div><div className="form" style={{ marginTop: 16 }}><div><label>显示名称</label><input value={memberNameDraft} onChange={event => setMemberNameDraft(event.target.value)} placeholder="输入新的显示名称" /></div><div className="actions"><button className="btn-primary" onClick={saveProfile}>修改个人信息</button></div></div></section>}{profileSection === "security" && <section className="card profile-panel"><h2 style={{ marginTop: 0 }}>账户安全</h2><p className="muted">管理您的安全设置</p><div className="security-list"><div><span>账户状态</span><strong className="ok">{currentUserRecord?.status === "active" ? "正常" : "停用"}</strong></div><div><span>重置密码</span><button className="btn-ghost" onClick={() => setPasswordModalOpen(true)}>修改密码</button></div></div></section>}{profileSection === "api" && <section className="card profile-panel"><div className="card-title-row"><div><h2 style={{ marginTop: 0 }}>API 密钥</h2><p className="muted">管理您的 API 访问密钥，用于通过 API 调用平台功能</p></div><button className="btn-primary" onClick={createApiKey}>+ 创建密钥</button></div>{currentApiKeys.length ? <div className="table-wrap"><table className="table"><thead><tr><th>名称</th><th>密钥</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{currentApiKeys.map(item => <tr key={item.id}><td>{item.name}</td><td><code>{item.value}</code></td><td>{new Date(item.createdAt).toLocaleDateString()}</td><td><button className="btn-danger btn-small" onClick={() => deleteApiKey(item.id)}>删除</button></td></tr>)}</tbody></table></div> : <div className="empty-result"><div className="empty-ico">⌘</div><strong>暂无 API 密钥</strong><p className="muted">个人 API Key 将在账号体系稳定后接入服务端存储。</p></div>}</section>}</div>
         </section>
 
         <section id="script" className="card script-workbench" style={sectionStyle("script")}>
