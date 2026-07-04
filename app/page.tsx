@@ -31,10 +31,10 @@ type AuthUser = {
   apiKeys?: { id: string; name: string; value: string; createdAt: number }[];
 };
 type AuthUsers = Record<string, AuthUser>;
-type MemberRole = "admin" | "user";
+type MemberRole = "super_admin" | "tenant_admin" | "user";
 type ProfileSection = "basic" | "security" | "api";
-type WorkspaceSection = "project-home" | "overview" | "script" | "shots" | "image-workbench" | "material-assets" | "tasks" | "generated-videos" | "assets" | "members" | "profile";
-type ApiProfile = { id: string; name: string; baseUrl: string; apiKey?: string; model: string; active: boolean; createdAt: number; hasApiKey?: boolean };
+type WorkspaceSection = "project-home" | "overview" | "script" | "shots" | "image-workbench" | "material-assets" | "tasks" | "generated-videos" | "assets" | "members" | "channel-management" | "profile";
+type ApiProfile = { id: string; name: string; baseUrl: string; apiKey?: string; model?: string; videoModels: string[]; imageModels: string[]; concurrencyLimit?: number; active: boolean; createdAt: number; hasApiKey?: boolean };
 type VisualAsset = {
   id: string;
   asset_url: string;
@@ -56,10 +56,7 @@ const USER_STORAGE_KEY = "manjing-video-users";
 const API_PROFILE_STORAGE_KEY = "manjing-video-api-profiles";
 const ACTIVE_API_PROFILE_STORAGE_KEY = "manjing-video-active-api-profile";
 const DEFAULT_ASSET_GROUP_ID = "181862014778343444";
-const defaultApiProfiles: ApiProfile[] = [
-  { id: "fastgate-default", name: "默认 AIfastgate", baseUrl: "", model: "", active: false, createdAt: 0, hasApiKey: false },
-  { id: "ark-v3-test", name: "Ark v3 测试平台", baseUrl: "http://43.159.135.17/api/v3", model: "doubao-seedance-2-0-fast-260128", active: true, createdAt: Date.now(), hasApiKey: true }
-];
+const defaultApiProfiles: ApiProfile[] = [];
 
 const seedState: AppState = {
   project: { id: 1, name: "短剧团队 Demo", type: "都市短剧", script: "女主带着关键合同来到男主公司，两人在会议室正面对峙，揭开三年前误会的真相。" },
@@ -148,27 +145,55 @@ function usersToMap(users: AuthUser[]) {
 }
 
 function roleLabel(role: MemberRole) {
-  return role === "admin" ? "管理员" : "用户";
+  if (role === "super_admin") return "系统管理员";
+  if (role === "tenant_admin") return "管理员";
+  return "用户";
 }
 
 function roleScope(role: MemberRole) {
-  return role === "admin" ? "系统管理与全部功能" : "项目生产功能";
+  if (role === "super_admin") return "平台配置、租户管理与全部功能";
+  if (role === "tenant_admin") return "本租户成员管理与生产功能";
+  return "项目生产功能";
+}
+
+function canManageMembers(role: MemberRole) {
+  return role === "super_admin" || role === "tenant_admin";
+}
+
+function canManageApiProfiles(role: MemberRole) {
+  return role === "super_admin";
+}
+
+function assignableRoles(role: MemberRole): MemberRole[] {
+  if (role === "super_admin") return ["tenant_admin", "user"];
+  if (role === "tenant_admin") return ["user"];
+  return [];
+}
+
+function canManageTargetMember(operatorRole: MemberRole, targetRole: MemberRole) {
+  if (operatorRole === "super_admin") return true;
+  if (operatorRole === "tenant_admin") return targetRole === "user";
+  return false;
 }
 
 function normalizeApiProfiles(saved: ApiProfile[]) {
   const merged = [...defaultApiProfiles];
   saved.forEach(profile => {
-    const normalizedProfile = profile.model === "doubao-seedance-2.0-fast" ? { ...profile, model: "doubao-seedance-2-0-fast-260128" } : profile;
+    const legacyModel = profile.model === "doubao-seedance-2.0-fast" ? "doubao-seedance-2-0-fast-260128" : profile.model;
+    const videoModels = Array.from(new Set([legacyModel, ...(profile.videoModels || [])].map(item => item?.trim()).filter(Boolean) as string[]));
+    const imageModels = Array.from(new Set((profile.imageModels || []).map(item => item.trim()).filter(Boolean)));
+    const concurrencyLimit = Math.max(1, Math.min(50, Number(profile.concurrencyLimit || 1)));
+    const normalizedProfile = { ...profile, model: videoModels[0] || "", videoModels, imageModels, concurrencyLimit };
     const index = merged.findIndex(item => item.id === normalizedProfile.id);
-    if (index >= 0) merged[index] = { ...merged[index], ...normalizedProfile };
+    if (index >= 0) merged[index] = normalizedProfile;
     else merged.push(normalizedProfile);
   });
   const deduped = merged.filter((profile, index, list) => {
-    const key = `${profile.name.trim()}|${profile.baseUrl.trim().replace(/\/$/, "")}|${profile.model.trim()}`;
-    return index === list.findIndex(item => `${item.name.trim()}|${item.baseUrl.trim().replace(/\/$/, "")}|${item.model.trim()}` === key);
+    const key = `${profile.name.trim()}|${profile.baseUrl.trim().replace(/\/$/, "")}`;
+    return index === list.findIndex(item => `${item.name.trim()}|${item.baseUrl.trim().replace(/\/$/, "")}` === key);
   });
-  const hasExplicitNonDefaultActive = deduped.some(profile => profile.active && profile.id !== "fastgate-default");
-  return hasExplicitNonDefaultActive ? deduped.map(profile => ({ ...profile, active: profile.id === deduped.find(item => item.active && item.id !== "fastgate-default")?.id })) : deduped.map(profile => ({ ...profile, active: profile.id === "ark-v3-test" }));
+  const activeId = deduped.find(profile => profile.active)?.id || deduped[0]?.id || "";
+  return deduped.map(profile => ({ ...profile, active: profile.id === activeId }));
 }
 
 function readApiProfiles() {
@@ -188,7 +213,7 @@ function writeApiProfiles(profiles: ApiProfile[]) {
 
 function publicApiProfile(profile?: ApiProfile) {
   if (!profile) return undefined;
-  return { id: profile.id, name: profile.name, baseUrl: profile.baseUrl, model: profile.model };
+  return { id: profile.id, name: profile.name, baseUrl: profile.baseUrl, model: profile.model, videoModels: profile.videoModels, imageModels: profile.imageModels, concurrencyLimit: profile.concurrencyLimit };
 }
 
 export default function Home() {
@@ -252,12 +277,13 @@ export default function Home() {
   const [expandedShotContentIds, setExpandedShotContentIds] = useState<number[]>([]);
   const [showAllTasks, setShowAllTasks] = useState(false);
   const [showAllVideoAssets, setShowAllVideoAssets] = useState(false);
-  const [recoverTaskId, setRecoverTaskId] = useState("");
   const [showAllLizhenAssets, setShowAllLizhenAssets] = useState(false);
   const [memberRoleDraft, setMemberRoleDraft] = useState<MemberRole>("user");
   const [memberAccountDraft, setMemberAccountDraft] = useState("");
   const [memberNameDraft, setMemberNameDraft] = useState("");
   const [memberPasswordDraft, setMemberPasswordDraft] = useState("");
+  const [memberEditorOpen, setMemberEditorOpen] = useState(false);
+  const [editingMemberAccount, setEditingMemberAccount] = useState("");
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [profileSection, setProfileSection] = useState<ProfileSection>("basic");
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
@@ -268,12 +294,17 @@ export default function Home() {
   const [languageLabel, setLanguageLabel] = useState("简体中文");
   const [userActionMessage, setUserActionMessage] = useState("");
   const [apiProfiles, setApiProfiles] = useState<ApiProfile[]>(defaultApiProfiles);
-  const [activeApiProfileId, setActiveApiProfileId] = useState("ark-v3-test");
-  const [apiProfileName, setApiProfileName] = useState("Ark v3 测试平台");
-  const [apiProfileBaseUrl, setApiProfileBaseUrl] = useState("http://43.159.135.17/api/v3");
+  const [activeApiProfileId, setActiveApiProfileId] = useState("");
+  const [apiProfileName, setApiProfileName] = useState("");
+  const [apiProfileBaseUrl, setApiProfileBaseUrl] = useState("");
   const [apiProfileKey, setApiProfileKey] = useState("");
-  const [apiProfileModel, setApiProfileModel] = useState("doubao-seedance-2-0-fast-260128");
+  const [apiProfileVideoModels, setApiProfileVideoModels] = useState("");
+  const [apiProfileImageModels, setApiProfileImageModels] = useState("");
+  const [apiProfileConcurrencyLimit, setApiProfileConcurrencyLimit] = useState(1);
+  const [selectedVideoModel, setSelectedVideoModel] = useState("doubao-seedance-2-0-fast-260128");
   const [addingApiProfile, setAddingApiProfile] = useState(false);
+  const [apiProfileEditorOpen, setApiProfileEditorOpen] = useState(false);
+  const [editingApiProfileId, setEditingApiProfileId] = useState("");
   const [batchTargetDuration, setBatchTargetDuration] = useState(12);
   const [mentionMenuOpen, setMentionMenuOpen] = useState(false);
   const [omniReferenceEnabled, setOmniReferenceEnabled] = useState(false);
@@ -285,8 +316,18 @@ export default function Home() {
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [loginAccount, setLoginAccount] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  function loadApiProfileDraft(profile?: ApiProfile) {
+    setApiProfileName(profile?.name || "");
+    setApiProfileBaseUrl(profile?.baseUrl || "");
+    setApiProfileKey("");
+    setApiProfileVideoModels((profile?.videoModels || []).join("\n"));
+    setApiProfileImageModels((profile?.imageModels || []).join("\n"));
+    setApiProfileConcurrencyLimit(Math.max(1, Math.min(50, Number(profile?.concurrencyLimit || 1))));
+  }
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -296,22 +337,27 @@ export default function Home() {
       const profiles = readApiProfiles();
       setApiProfiles(profiles);
       writeApiProfiles(profiles);
-      const savedActiveProfileId = window.localStorage.getItem(ACTIVE_API_PROFILE_STORAGE_KEY) || profiles.find(item => item.active)?.id || "ark-v3-test";
-      const nextActiveProfileId = savedActiveProfileId === "fastgate-default" ? "ark-v3-test" : savedActiveProfileId;
-      setActiveApiProfileId(profiles.some(item => item.id === nextActiveProfileId) ? nextActiveProfileId : "ark-v3-test");
-      window.localStorage.setItem(ACTIVE_API_PROFILE_STORAGE_KEY, profiles.some(item => item.id === nextActiveProfileId) ? nextActiveProfileId : "ark-v3-test");
+      const savedActiveProfileId = window.localStorage.getItem(ACTIVE_API_PROFILE_STORAGE_KEY) || profiles.find(item => item.active)?.id || profiles[0]?.id || "";
+      const nextActiveProfileId = profiles.some(item => item.id === savedActiveProfileId) ? savedActiveProfileId : profiles[0]?.id || "";
+      setActiveApiProfileId(nextActiveProfileId);
+      loadApiProfileDraft(profiles.find(item => item.id === nextActiveProfileId));
+      if (nextActiveProfileId) window.localStorage.setItem(ACTIVE_API_PROFILE_STORAGE_KEY, nextActiveProfileId);
+      else window.localStorage.removeItem(ACTIVE_API_PROFILE_STORAGE_KEY);
       fetch("/api/api-profiles").then(response => response.json()).then(result => {
         if (result.code !== 0 || !Array.isArray(result.data)) return;
         const serverProfiles = normalizeApiProfiles(result.data as ApiProfile[]);
         setApiProfiles(serverProfiles);
         writeApiProfiles(serverProfiles);
-        const serverActiveId = serverProfiles.find(profile => profile.active)?.id || "ark-v3-test";
+        const serverActiveId = serverProfiles.find(profile => profile.active)?.id || serverProfiles[0]?.id || "";
         setActiveApiProfileId(serverActiveId);
-        window.localStorage.setItem(ACTIVE_API_PROFILE_STORAGE_KEY, serverActiveId);
+        loadApiProfileDraft(serverProfiles.find(profile => profile.id === serverActiveId));
+        if (serverActiveId) window.localStorage.setItem(ACTIVE_API_PROFILE_STORAGE_KEY, serverActiveId);
+        else window.localStorage.removeItem(ACTIVE_API_PROFILE_STORAGE_KEY);
       }).catch(() => undefined);
       fetch("/api/auth/me").then(async response => {
         const result = await response.json();
         if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "未登录");
+        setAuthUsers(prev => ({ ...prev, [result.data.account]: result.data as AuthUser }));
         setCurrentUser(result.data.account);
         setShowLoginPage(false);
         return fetchUsers();
@@ -339,7 +385,8 @@ export default function Home() {
 
   useEffect(() => {
     const role = currentUser ? authUsers[currentUser]?.role || "user" : "user";
-    if (role !== "admin" && activeSection === "members") setActiveSection("project-home");
+    if (!canManageMembers(role) && activeSection === "members") setActiveSection("project-home");
+    if (!canManageApiProfiles(role) && activeSection === "channel-management") setActiveSection("project-home");
   }, [authUsers, currentUser, activeSection]);
 
   useEffect(() => {
@@ -419,7 +466,7 @@ export default function Home() {
 
   async function upsertMember() {
     if (!currentUser) return alert("请先登录管理员账号。");
-    if ((authUsers[currentUser]?.role || "user") !== "admin") return alert("只有管理员可以添加或修改成员。");
+    if (!canManageMembers(authUsers[currentUser]?.role || "user")) return alert("只有管理员可以添加或修改成员。");
     const account = memberAccountDraft.trim();
     if (!account) return alert("请输入成员账号。");
     const current = authUsers[account];
@@ -437,23 +484,51 @@ export default function Home() {
     const result = await response.json();
     if (!response.ok || result.code !== 0) return alert(result.message || "保存成员失败。");
     await fetchUsers();
-    setMemberAccountDraft("");
-    setMemberNameDraft("");
-    setMemberPasswordDraft("");
+    closeMemberEditor();
     setUserActionMessage(current ? "成员信息已更新。" : "成员账号已创建。");
   }
 
-  async function deleteMember(account: string) {
+  function openNewMemberEditor() {
+    setEditingMemberAccount("");
+    setMemberAccountDraft("");
+    setMemberNameDraft("");
+    setMemberPasswordDraft("");
+    setMemberRoleDraft(memberRoleOptions[0] || "user");
+    setMemberEditorOpen(true);
+  }
+
+  function openEditMemberEditor(user: AuthUser) {
+    setEditingMemberAccount(user.account);
+    setMemberAccountDraft(user.account);
+    setMemberNameDraft(user.displayName || user.account);
+    setMemberRoleDraft(memberRoleOptions.includes(user.role) ? user.role : memberRoleOptions[0] || "user");
+    setMemberPasswordDraft("");
+    setMemberEditorOpen(true);
+  }
+
+  function closeMemberEditor() {
+    setEditingMemberAccount("");
+    setMemberAccountDraft("");
+    setMemberNameDraft("");
+    setMemberPasswordDraft("");
+    setMemberEditorOpen(false);
+  }
+
+  async function updateMemberStatus(account: string, status: AuthUser["status"]) {
     if (!currentUser) return;
-    if ((authUsers[currentUser]?.role || "user") !== "admin") return alert("只有管理员可以停用成员。");
-    if (account === currentUser) return alert("不能删除当前登录管理员。");
+    if (!canManageMembers(authUsers[currentUser]?.role || "user")) return alert("只有管理员可以调整成员状态。");
+    if (account === currentUser && status === "disabled") return alert("不能停用当前登录管理员。");
     const target = authUsers[account];
     if (!target) return alert("未找到成员。");
-    const response = await fetch(`/api/users/${target.id}`, { method: "DELETE" });
+    const response = await fetch(`/api/users/${target.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status })
+    });
     const result = await response.json();
-    if (!response.ok || result.code !== 0) return alert(result.message || "停用成员失败。");
+    if (!response.ok || result.code !== 0) return alert(result.message || "调整成员状态失败。");
     await fetchUsers();
-    setUserActionMessage("成员已停用。");
+    setUserActionMessage(status === "active" ? "成员已启用。" : "成员已停用。");
   }
 
   const stats = useMemo(() => {
@@ -761,10 +836,10 @@ export default function Home() {
   function inferApiProfileDraft(baseUrlValue: string, apiKeyValue: string) {
     const normalizedUrl = baseUrlValue.trim().toLowerCase();
     const normalizedKey = apiKeyValue.trim().toLowerCase();
-    if (normalizedUrl.includes("/api/v3") || normalizedUrl.includes("43.159.135.17") || normalizedKey.startsWith("arkr_")) return { name: "Ark v3 测试平台", model: "doubao-seedance-2-0-fast-260128" };
-    if (normalizedUrl.includes("aifastgate")) return { name: "AIfastgate", model: "doubao-seedance-2.0-fast" };
+    if (normalizedUrl.includes("/api/v3") || normalizedUrl.includes("43.159.135.17") || normalizedKey.startsWith("arkr_")) return { name: "Ark v3 测试平台", videoModels: "doubao-seedance-2-0-fast-260128\ndoubao-seedance-2-0-260128", imageModels: "doubao-seedream-3-0-t2i-250415" };
+    if (normalizedUrl.includes("aifastgate")) return { name: "AIfastgate", videoModels: "doubao-seedance-2-0-fast-260128", imageModels: "" };
     const host = (() => { try { return new URL(baseUrlValue).hostname.replace(/^api\./, ""); } catch { return "第三方 API"; } })();
-    return { name: host || "第三方 API", model: "doubao-seedance-2-0-fast-260128" };
+    return { name: host || "第三方 API", videoModels: "doubao-seedance-2-0-fast-260128", imageModels: "" };
   }
 
   function updateApiProfileDraft(field: "baseUrl" | "apiKey", value: string) {
@@ -775,67 +850,109 @@ export default function Home() {
     if (!nextBaseUrl.trim()) return;
     const inferred = inferApiProfileDraft(nextBaseUrl, nextApiKey);
     if (!apiProfileName.trim() || ["Ark v3 测试平台", "AIfastgate", "第三方 API"].includes(apiProfileName.trim())) setApiProfileName(inferred.name);
-    if (!apiProfileModel.trim() || ["doubao-seedance-2-0-fast-260128", "doubao-seedance-2.0-fast"].includes(apiProfileModel.trim())) setApiProfileModel(inferred.model);
+    if (!apiProfileVideoModels.trim()) setApiProfileVideoModels(inferred.videoModels);
+    if (!apiProfileImageModels.trim()) setApiProfileImageModels(inferred.imageModels);
+  }
+
+  function openNewApiProfileEditor() {
+    setAddingApiProfile(true);
+    setApiProfileEditorOpen(true);
+    setEditingApiProfileId("");
+    setApiProfileName("");
+    setApiProfileBaseUrl("");
+    setApiProfileKey("");
+    setApiProfileVideoModels("");
+    setApiProfileImageModels("");
+    setApiProfileConcurrencyLimit(1);
+    setUserActionMessage("");
+  }
+
+  function openEditApiProfileEditor(profile: ApiProfile) {
+    setAddingApiProfile(false);
+    setApiProfileEditorOpen(true);
+    setEditingApiProfileId(profile.id);
+    loadApiProfileDraft(profile);
+    setUserActionMessage("");
+  }
+
+  function closeApiProfileEditor() {
+    setAddingApiProfile(false);
+    setApiProfileEditorOpen(false);
+    setEditingApiProfileId("");
+    loadApiProfileDraft(apiProfiles.find(profile => profile.id === activeApiProfileId));
   }
 
   async function saveApiProfile() {
     const name = apiProfileName.trim();
     const baseUrl = apiProfileBaseUrl.trim().replace(/\/$/, "");
     const apiKey = apiProfileKey.trim();
-    const model = apiProfileModel.trim();
-    if (!name || !baseUrl || !apiKey || !model) return alert("请完整填写平台名称、Base URL、API Key 和模型名。");
+    const videoModels = Array.from(new Set(apiProfileVideoModels.split(/\r?\n|,/).map(item => item.trim()).filter(Boolean)));
+    const imageModels = Array.from(new Set(apiProfileImageModels.split(/\r?\n|,/).map(item => item.trim()).filter(Boolean)));
+    const concurrencyLimit = Math.max(1, Math.min(50, Number(apiProfileConcurrencyLimit || 1)));
+    const editingProfile = !addingApiProfile ? apiProfiles.find(profile => profile.id === editingApiProfileId) : undefined;
+    if (!name || !baseUrl || (!apiKey && !editingProfile?.hasApiKey) || (!videoModels.length && !imageModels.length)) return alert("请完整填写服务名称、Base URL、API Key，并至少配置一个视频或图片模型 ID。编辑已有配置时 API Key 可留空。");
     try {
-      const response = await fetch("/api/api-profiles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, baseUrl, apiKey, model }) });
+      const response = await fetch("/api/api-profiles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: editingProfile?.id, name, baseUrl, apiKey, videoModels, imageModels, concurrencyLimit, active: editingProfile?.active ?? apiProfiles.length === 0 }) });
       const result = await response.json();
-      if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "保存 API Profile 失败");
-      const next = normalizeApiProfiles([result.data as ApiProfile, ...apiProfiles]);
+      if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "保存模型渠道失败");
+      const savedProfile = result.data as ApiProfile;
+      const next = normalizeApiProfiles([savedProfile, ...apiProfiles.filter(profile => profile.id !== savedProfile.id)]);
       setApiProfiles(next);
       writeApiProfiles(next);
       setApiProfileKey("");
       setAddingApiProfile(false);
-      setUserActionMessage(`${result.updated ? "已更新" : "已保存"} API Profile：${name}，已添加到下方状态列表。API Key 已隐藏保存，平台前端不会再显示明文。请选择“启用”后用于后续真实生成。`);
+      setApiProfileEditorOpen(false);
+      setEditingApiProfileId("");
+      const nextActiveId = next.find(profile => profile.active)?.id || "";
+      setActiveApiProfileId(nextActiveId);
+      setSelectedVideoModel(videoModels[0] || selectedVideoModel);
+      setImageModel(imageModels[0] || imageModel);
+      if (nextActiveId) window.localStorage.setItem(ACTIVE_API_PROFILE_STORAGE_KEY, nextActiveId);
+      setUserActionMessage(`${result.updated ? "已更新" : "已保存"}模型渠道：${name}。API Key 已隐藏保存。`);
     } catch (error) {
-      setUserActionMessage(error instanceof Error ? error.message : "保存 API Profile 失败");
+      setUserActionMessage(error instanceof Error ? error.message : "保存模型渠道失败");
     }
   }
 
   async function switchApiProfile(id: string) {
     const target = apiProfiles.find(item => item.id === id);
-    if (!target) return alert("未找到这个 API Profile，请刷新后重试。");
+    if (!target) return alert("未找到这个模型渠道，请刷新后重试。");
     try {
       const response = await fetch("/api/api-profiles", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
       const result = await response.json();
-      if (!response.ok || result.code !== 0) throw new Error(result.message || "启用 API Profile 失败");
+      if (!response.ok || result.code !== 0) throw new Error(result.message || "设置当前模型渠道失败");
       const next = apiProfiles.map(item => ({ ...item, active: item.id === id }));
       setApiProfiles(next);
       setActiveApiProfileId(id);
+      loadApiProfileDraft(target);
+      setSelectedVideoModel(target.videoModels[0] || selectedVideoModel);
+      setImageModel(target.imageModels[0] || imageModel);
       writeApiProfiles(next);
       window.localStorage.setItem(ACTIVE_API_PROFILE_STORAGE_KEY, id);
-      setUserActionMessage(`已启用 API Profile：${target.name}，后续视频生成将使用 ${target.baseUrl || "环境变量默认接口"}。`);
+      setUserActionMessage(`当前模型渠道已切换为：${target.name}。`);
     } catch (error) {
-      setUserActionMessage(error instanceof Error ? error.message : "启用 API Profile 失败");
+      setUserActionMessage(error instanceof Error ? error.message : "设置当前模型渠道失败");
     }
   }
 
-  function activateApiProfile(id: string) {
-    switchApiProfile(id);
-  }
-
   async function deleteApiProfile(id: string) {
-    if (id === "fastgate-default") return alert("默认 AIfastgate Profile 不能删除。");
     try {
       const response = await fetch(`/api/api-profiles?id=${encodeURIComponent(id)}`, { method: "DELETE" });
       const result = await response.json();
-      if (!response.ok || result.code !== 0) throw new Error(result.message || "删除 API Profile 失败");
-      const nextActiveId = activeApiProfileId === id ? "ark-v3-test" : activeApiProfileId;
+      if (!response.ok || result.code !== 0) throw new Error(result.message || "删除模型渠道失败");
+      const remainingProfiles = apiProfiles.filter(item => item.id !== id);
+      const nextActiveId = activeApiProfileId === id ? remainingProfiles[0]?.id || "" : activeApiProfileId;
       const normalized = apiProfiles.filter(item => item.id !== id).map(item => ({ ...item, active: item.id === nextActiveId }));
       setApiProfiles(normalized);
       setActiveApiProfileId(nextActiveId);
+      loadApiProfileDraft(normalized.find(profile => profile.id === nextActiveId));
+      if (editingApiProfileId === id) closeApiProfileEditor();
       writeApiProfiles(normalized);
-      window.localStorage.setItem(ACTIVE_API_PROFILE_STORAGE_KEY, nextActiveId);
-      setUserActionMessage("已删除 API Profile。");
+      if (nextActiveId) window.localStorage.setItem(ACTIVE_API_PROFILE_STORAGE_KEY, nextActiveId);
+      else window.localStorage.removeItem(ACTIVE_API_PROFILE_STORAGE_KEY);
+      setUserActionMessage("已删除模型渠道。");
     } catch (error) {
-      setUserActionMessage(error instanceof Error ? error.message : "删除 API Profile 失败");
+      setUserActionMessage(error instanceof Error ? error.message : "删除模型渠道失败");
     }
   }
 
@@ -995,11 +1112,20 @@ export default function Home() {
       return;
     }
 
+    const concurrencyLimit = Math.max(1, Number(activeApiProfile?.concurrencyLimit || 1));
+    const runningTaskCount = state.tasks.filter(task => task.status === "running").length;
+    if (runningTaskCount >= concurrencyLimit) {
+      alert(`当前渠道并发数为 ${concurrencyLimit}，已有 ${runningTaskCount} 个任务生成中。请等待任务完成后再提交。`);
+      return;
+    }
+
     const selectedAssetCount = state.materials.filter(item => selectedMaterialIds.includes(item.id) && materialApiUrl(item)).length + selectedLizhenAssetIds.length;
     const taskApiProfile = publicApiProfile(activeApiProfile);
-    const taskProviderName = activeApiProfile?.name || "默认 AIfastgate";
-    const taskProviderBaseUrl = taskApiProfile?.baseUrl || "环境变量默认接口";
-    const task: VideoTask = { id: localTaskId, shotId: shot.id, shotTitle: shot.title, provider: taskProviderName, status: "running", result: selectedAssetCount ? `已进入高并发队列，使用接口：${taskProviderName}（${taskProviderBaseUrl}），${omniReferenceEnabled ? "全能参考模式已启用，" : ""}正在提交真实生成任务，已调用 ${selectedAssetCount} 个真实可用素材` : `已进入高并发队列，使用接口：${taskProviderName}（${taskProviderBaseUrl}），正在提交真实生成任务` };
+    const taskProviderName = activeApiProfile?.name || "未选择渠道";
+    const taskProviderBaseUrl = taskApiProfile?.baseUrl || "";
+    const modelForGeneration = selectedVideoModel || activeApiProfile?.videoModels[0] || activeApiProfile?.model || "";
+    const taskChannelText = taskProviderBaseUrl ? `${taskProviderName}（${taskProviderBaseUrl}）` : taskProviderName;
+    const task: VideoTask = { id: localTaskId, shotId: shot.id, shotTitle: shot.title, provider: taskProviderName, status: "running", result: selectedAssetCount ? `任务已提交，使用接口：${taskChannelText}，模型：${modelForGeneration || "未选择模型"}，${omniReferenceEnabled ? "全能参考模式已启用，" : ""}正在调用 ${selectedAssetCount} 个真实可用素材` : `任务已提交，使用接口：${taskChannelText}，模型：${modelForGeneration || "未选择模型"}` };
 
     setState(prev => ({
       ...prev,
@@ -1013,7 +1139,7 @@ export default function Home() {
       const response = await fetch("/api/video-tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shot: omniReferenceEnabled ? { ...shotForGeneration, prompt: `${shotForGeneration.prompt}\n\n全能参考模式：已启用。请综合所有提交的图片、视频、音频参考素材，保持人物外貌、服装、场景、道具、动作节奏和画面风格一致。优先遵循 reference inputs，不要自行替换角色或背景。` } : shotForGeneration, provider: "seedance-2.0", resolution: shot.resolution || "720p", input_type: inferInputType(), omni_reference: omniReferenceEnabled, profile_id: activeApiProfile?.id, api_profile: taskApiProfile, ...buildMediaPayload() })
+        body: JSON.stringify({ shot: omniReferenceEnabled ? { ...shotForGeneration, prompt: `${shotForGeneration.prompt}\n\n全能参考模式：已启用。请综合所有提交的图片、视频、音频参考素材，保持人物外貌、服装、场景、道具、动作节奏和画面风格一致。优先遵循 reference inputs，不要自行替换角色或背景。` } : shotForGeneration, provider: "seedance-2.0", model_id: modelForGeneration, resolution: shot.resolution || "720p", input_type: inferInputType(), omni_reference: omniReferenceEnabled, profile_id: activeApiProfile?.id, api_profile: taskApiProfile, ...buildMediaPayload() })
       });
       const result = await response.json();
       if (!response.ok || result.code !== 0 || !result.data?.task_id) throw new Error(result.message || "创建视频任务失败");
@@ -1021,7 +1147,8 @@ export default function Home() {
       const selectedLizhenNames = lizhenAssets.filter(item => selectedLizhenAssetIds.includes(item.id)).map(item => item.asset_name).join("、");
       const actualProvider = result.data.provider || taskProviderName;
       const actualBaseUrl = result.data.base_url || taskProviderBaseUrl;
-      setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, provider: actualProvider, providerTaskId, result: `任务已提交：${providerTaskId}｜接口：${actualProvider}（${actualBaseUrl}）${selectedLizhenNames ? `｜参考素材：${selectedLizhenNames}` : ""}` } : item) }));
+      const actualModel = result.data.model || modelForGeneration;
+      setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, provider: actualProvider, providerTaskId, result: `任务已提交：${providerTaskId}｜接口：${actualProvider}（${actualBaseUrl}）｜模型：${actualModel}${selectedLizhenNames ? `｜参考素材：${selectedLizhenNames}` : ""}` } : item) }));
       pollGenerationStatus(shotId, localTaskId, providerTaskId, activeApiProfile?.id, taskApiProfile);
     } catch (error) {
       markGenerationFailed(shotId, localTaskId, error instanceof Error ? error.message : "创建视频任务失败");
@@ -1123,35 +1250,9 @@ export default function Home() {
     const tasks = state.tasks.filter(task => task.providerTaskId && !task.id.startsWith("imported-"));
     try {
       for (const task of tasks) await refreshTaskStatus(task);
-      setUserActionMessage(tasks.length ? `已同步 ${tasks.length} 个本平台提交的后台任务，未再导入账号历史视频。` : "没有本平台提交的后台任务可同步。为避免误导入账号历史视频，系统不会自动批量恢复任务。");
+      setUserActionMessage(tasks.length ? `已同步 ${tasks.length} 个生成任务。` : "没有可同步的生成任务。");
     } catch (error) {
       setUserActionMessage(error instanceof Error ? error.message : "同步本页任务状态失败");
-    }
-  }
-
-  async function recoverCompletedTaskById() {
-    const taskId = recoverTaskId.trim();
-    if (!taskId) return setUserActionMessage("请先输入要恢复的 Ark task_id。");
-    try {
-      const recoveryProfile = taskId.startsWith("cgt-") ? apiProfiles.find(profile => profile.id === "ark-v3-test") || activeApiProfile : activeApiProfile;
-      const response = await fetch("/api/video-tasks/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task_id: taskId, profile_id: recoveryProfile?.id, api_profile: publicApiProfile(recoveryProfile) }) });
-      const result = await response.json();
-      if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "恢复任务失败");
-      const data = result.data as { status: string; video_url?: string; duration?: number; error?: string };
-      if (data.status !== "succeeded" || !data.video_url) return setUserActionMessage(`该任务暂未完成或未在最近任务列表中找到：${data.status}${data.error ? ` / ${data.error}` : ""}`);
-      setState(prev => {
-        if (prev.tasks.some(task => task.providerTaskId === taskId) || prev.assets.some(asset => asset.providerTaskId === taskId)) return prev;
-        const shot = prev.shots[0];
-        const shotId = shot?.id || Date.now();
-        const title = shot?.title || "恢复的视频任务";
-        const task: VideoTask = { id: `recovered-${taskId}`, shotId, shotTitle: title, provider: "Ark v3 Seedance 2.0", status: "done", result: "已恢复，可预览下载", providerTaskId: taskId };
-        const asset: VideoAsset = { id: Date.now(), shotId, title: `${title} · 已恢复`, meta: `${data.duration || shot?.duration || 5}秒 / Ark v3 / Seedance 2.0`, gradient: randomGradient(), videoUrl: data.video_url, providerTaskId: taskId };
-        return { ...prev, tasks: [task, ...prev.tasks], assets: [asset, ...prev.assets] };
-      });
-      setRecoverTaskId("");
-      setUserActionMessage("已按 task_id 恢复完成视频，可在生成任务和已生成视频中预览。");
-    } catch (error) {
-      setUserActionMessage(error instanceof Error ? error.message : "恢复任务失败");
     }
   }
 
@@ -1218,19 +1319,22 @@ export default function Home() {
   const hiddenLizhenAssetCount = Math.max(filteredLizhenAssets.length - 5, 0);
   const currentUserRecord = currentUser ? authUsers[currentUser] : null;
   const currentUserRole = currentUserRecord?.role || "user";
+  const currentUserCanManageMembers = canManageMembers(currentUserRole);
+  const currentUserCanManageApiProfiles = canManageApiProfiles(currentUserRole);
+  const memberRoleOptions = assignableRoles(currentUserRole);
   const currentApiKeys = currentUserRecord?.apiKeys || [];
   const activeApiProfile = apiProfiles.find(item => item.id === activeApiProfileId) || apiProfiles.find(item => item.active) || apiProfiles[0];
+  const activeVideoModels = useMemo(() => activeApiProfile?.videoModels?.length ? activeApiProfile.videoModels : [activeApiProfile?.model || "doubao-seedance-2-0-fast-260128"].filter(Boolean), [activeApiProfile]);
+  const activeImageModels = useMemo(() => activeApiProfile?.imageModels?.length ? activeApiProfile.imageModels : ["gpt-image-2", "seedream-3.0", "stable-image-ultra", "flux-pro"], [activeApiProfile]);
   const currentDisplayName = currentUserRecord?.displayName || currentUser || "访客";
-  const concurrentRunningTasks = state.tasks.filter(task => task.status === "running");
-  const concurrentSubmittedTasks = state.tasks.filter(task => task.providerTaskId && task.status !== "failed");
-  const concurrentAccountCount = Math.max(Object.keys(authUsers).length, 10);
-  const maxConcurrentChannels = Math.max(concurrentAccountCount * 2, 20);
-  const availableConcurrentChannels = Math.max(maxConcurrentChannels - concurrentRunningTasks.length, 0);
-  const concurrencyPercent = Math.min(100, Math.round((concurrentRunningTasks.length / maxConcurrentChannels) * 100));
-  const concurrencyLanes = Array.from({ length: Math.min(maxConcurrentChannels, 8) }, (_, index) => concurrentRunningTasks[index]);
   const avatarLabel = currentDisplayName.slice(0, 2).toUpperCase();
   const scriptTooLong = state.project.script.length > 220;
   const scriptPreview = showFullScript || !scriptTooLong ? state.project.script : `${state.project.script.slice(0, 220)}...`;
+
+  useEffect(() => {
+    if (activeVideoModels.length && !activeVideoModels.includes(selectedVideoModel)) setSelectedVideoModel(activeVideoModels[0]);
+    if (activeImageModels.length && !activeImageModels.includes(imageModel)) setImageModel(activeImageModels[0]);
+  }, [activeApiProfileId, apiProfiles, activeVideoModels, activeImageModels, selectedVideoModel, imageModel]);
 
   function resetDemo() {
     if (!confirm("确定重置为初始演示数据吗？")) return;
@@ -1372,6 +1476,7 @@ export default function Home() {
         setAuthMessage(result.message || "登录失败。");
         return;
       }
+      setAuthUsers(prev => ({ ...prev, [result.data.account]: result.data as AuthUser }));
       setCurrentUser(result.data.account);
       setShowLoginPage(false);
       setLoginPassword("");
@@ -1417,17 +1522,15 @@ export default function Home() {
         <section className="login-panel-wrap">
           <div className="login-card">
             <div className="login-card-logo">M</div>
-            <h2>内部账号登录</h2>
+            <h2>账号登录</h2>
             <div className="login-form">
               <label>账号</label>
-              <div className="login-input"><span>♙</span><input value={loginAccount} onChange={event => setLoginAccount(event.target.value)} placeholder="输入您的账号" /></div>
+              <div className="login-input"><input value={loginAccount} onChange={event => setLoginAccount(event.target.value)} placeholder="输入您的账号" /></div>
               <div className="login-label-row"><label>密码</label><button onClick={() => setAuthMessage("请联系管理员重置密码。")}>忘记密码?</button></div>
-              <div className="login-input"><span>▢</span><input type="password" value={loginPassword} onChange={event => setLoginPassword(event.target.value)} placeholder="输入您的密码" onKeyDown={event => { if (event.key === "Enter") submitAuth(); }} /></div>
+              <div className="login-input login-password-input"><input type={showLoginPassword ? "text" : "password"} value={loginPassword} onChange={event => setLoginPassword(event.target.value)} placeholder="输入您的密码" onKeyDown={event => { if (event.key === "Enter") submitAuth(); }} /><button type="button" aria-label={showLoginPassword ? "隐藏密码" : "显示密码"} onClick={() => setShowLoginPassword(visible => !visible)}>{showLoginPassword ? "◉" : "◎"}</button></div>
               {authMessage && <p className="login-message">{authMessage}</p>}
               <button type="button" className="login-submit" onClick={submitAuth} disabled={isLoggingIn}>{isLoggingIn ? "正在进入..." : "进入工作空间"} <span>→</span></button>
             </div>
-            <div className="login-divider" />
-            <p className="login-switch">账号由管理员在人员管理中创建。</p>
           </div>
         </section>
       </div>
@@ -1453,6 +1556,7 @@ export default function Home() {
           ))}
         </div>}
         <nav className="workspace-nav">
+          <div className="nav-group-label">工作台</div>
           {([
             ["project-home", "⌂ 项目首页"],
             ["overview", "▦ 项目概览"],
@@ -1462,8 +1566,14 @@ export default function Home() {
             ["material-assets", "◈ 项目素材库"],
             ["tasks", "◎ 生成任务"],
             ["generated-videos", "◉ 已生成视频"],
-            ["assets", "◫ 外接资产库"],
-            ...(currentUserRole === "admin" ? [["members", "▤ 人员管理"] as [WorkspaceSection, string]] : [])
+            ["assets", "◫ 外接资产库"]
+          ] as [WorkspaceSection, string][]).map(([section, label]) => (
+            <button key={section} className={activeSection === section ? "active" : ""} onClick={() => setActiveSection(section)}>{label}</button>
+          ))}
+          {(currentUserCanManageMembers || currentUserCanManageApiProfiles) && <div className="nav-group-label">设置与管理</div>}
+          {([
+            ...(currentUserCanManageMembers ? [["members", "▤ 人员管理"] as [WorkspaceSection, string]] : []),
+            ...(currentUserCanManageApiProfiles ? [["channel-management", "◎ 模型渠道管理"] as [WorkspaceSection, string]] : [])
           ] as [WorkspaceSection, string][]).map(([section, label]) => (
             <button key={section} className={activeSection === section ? "active" : ""} onClick={() => setActiveSection(section)}>{label}</button>
           ))}
@@ -1471,15 +1581,9 @@ export default function Home() {
       </aside>
 
       <main>
-        <div className="topbar"><div className="crumb">漫镜视频 / AI 短剧生产平台</div><div className="actions"><button className="btn-secondary" onClick={refreshAllTaskStatuses}>同步本页任务状态</button>{currentUserRole === "admin" && <button className="btn-primary" onClick={() => setActiveSection("members")}>人员管理</button>}<div className="user-menu-wrap"><button className="user-chip" onClick={() => setUserMenuOpen(open => !open)}>{currentDisplayName}<span>{roleLabel(currentUserRole)}</span></button>{userMenuOpen && <div className="user-menu"><strong>{currentDisplayName}</strong><small>{currentUserRecord?.account || "-"}</small><small>{roleLabel(currentUserRole)}</small><button onClick={() => { setActiveSection("profile"); setProfileSection("basic"); setMemberNameDraft(currentDisplayName); setUserMenuOpen(false); }}>个人中心</button><button onClick={() => { setActiveSection("assets"); setUserMenuOpen(false); }}>我的资产</button><button onClick={switchLanguage}>语言 · {languageLabel}</button><button onClick={logout} className="danger">退出登录</button></div>}</div></div></div>
+        <div className="topbar"><div className="crumb">漫镜视频 / AI 短剧生产平台</div><div className="actions"><button className="btn-secondary" onClick={refreshAllTaskStatuses}>同步本页任务状态</button><div className="user-menu-wrap"><button className="user-chip" onClick={() => setUserMenuOpen(open => !open)}><strong>{currentDisplayName}</strong><span>{roleLabel(currentUserRole)}</span></button>{userMenuOpen && <div className="user-menu"><strong>{currentDisplayName}</strong><small>{currentUserRecord?.account || "-"}</small><small>{roleLabel(currentUserRole)}</small><button onClick={() => { setActiveSection("profile"); setProfileSection("basic"); setMemberNameDraft(currentDisplayName); setUserMenuOpen(false); }}>个人中心</button><button onClick={() => { setActiveSection("assets"); setUserMenuOpen(false); }}>我的资产</button><button onClick={switchLanguage}>语言 · {languageLabel}</button><button onClick={logout} className="danger">退出登录</button></div>}</div></div></div>
         {userActionMessage && <div className="action-toast">{userActionMessage}</div>}
         {(["shots", "tasks", "generated-videos"] as WorkspaceSection[]).includes(activeSection) && <div className="notice">真实 API 说明<span>已接入 Seedance 2.0。文生视频可直接生成；图生/参考素材生成需要公网 URL 或登记后的 asset://id，本地文件仅支持页面预览。</span></div>}
-        {(["shots", "tasks", "generated-videos"] as WorkspaceSection[]).includes(activeSection) && <section className="concurrency-banner">
-          <div className="concurrency-banner-main"><span className="live-dot" />高并发视频生成已开启<strong>{concurrentRunningTasks.length}/{maxConcurrentChannels} 路并行中</strong><em>支持 {concurrentAccountCount} 个账户同时提交生成任务</em></div>
-          <div className="concurrency-meter"><b style={{ width: `${Math.max(concurrencyPercent, 8)}%` }} /></div>
-          <div className="concurrency-meta"><span>可用通道 {availableConcurrentChannels}</span><span>已提交 {concurrentSubmittedTasks.length}</span><span>第三方 API 高并发队列</span></div>
-        </section>}
-
         <section id="project-home" className="project-home card" style={sectionStyle("project-home")}>
           <div className="project-home-head">
             <div><h2>项目首页</h2><p className="muted">选择一个项目进入编辑，或新建一个空白测试项目。</p></div>
@@ -1516,14 +1620,26 @@ export default function Home() {
         </div>
 
         <section className="card" style={sectionStyle("members")}>
-          <div className="asset-workspace-head"><div><h2>人员管理</h2><p className="muted">管理员维护内部账号，普通用户负责日常生产操作。</p></div><span className="source-pill internal">内部账号</span></div>
-          <div className="member-role-grid"><div className="member-role-card"><strong>管理员</strong><p>管理成员、API Profile、项目配置和全部生产功能。</p></div><div className="member-role-card"><strong>用户</strong><p>使用剧本、素材、分镜、视频生成和资产查看功能。</p></div></div>
-          <div className="form" style={{ marginTop: 20 }}>
-            <div className="script-core-grid"><div><label>成员账号</label><input value={memberAccountDraft} onChange={event => setMemberAccountDraft(event.target.value)} placeholder="例如 zhangsan" /></div><div><label>显示名称</label><input value={memberNameDraft} onChange={event => setMemberNameDraft(event.target.value)} placeholder="输入显示名称" /></div><div><label>初始/重置密码</label><input type="password" value={memberPasswordDraft} onChange={event => setMemberPasswordDraft(event.target.value)} placeholder="新成员必填；编辑成员可留空" /></div><div><label>成员角色</label><select value={memberRoleDraft} onChange={event => setMemberRoleDraft(event.target.value as MemberRole)}><option value="admin">管理员</option><option value="user">用户</option></select></div></div>
-            <div className="actions"><button className="btn-primary" onClick={upsertMember} disabled={currentUserRole !== "admin"}>保存成员账号</button></div>
-          </div>
-          <div className="table-wrap" style={{ marginTop: 18 }}><table className="table"><thead><tr><th>账号</th><th>显示名</th><th>角色</th><th>状态</th><th>权限范围</th><th>操作</th></tr></thead><tbody>{Object.values(authUsers).map(user => <tr key={user.account}><td>{user.account}</td><td>{user.displayName || user.account}</td><td>{roleLabel(user.role)}</td><td><span className={user.status === "active" ? "tag done" : "tag pending"}>{user.status === "active" ? "启用" : "停用"}</span></td><td>{roleScope(user.role)}</td><td><button className="btn-ghost btn-small" disabled={currentUserRole !== "admin" || user.status !== "active"} onClick={() => { setMemberAccountDraft(user.account); setMemberNameDraft(user.displayName || user.account); setMemberRoleDraft(user.role); setMemberPasswordDraft(""); }}>编辑</button><button className="btn-danger btn-small" disabled={currentUserRole !== "admin" || user.status !== "active"} onClick={() => deleteMember(user.account)}>停用</button></td></tr>)}</tbody></table></div>
-          <div className="api-profile-panel"><div className="asset-workspace-head"><div><h2>第三方 API Profile</h2><p className="muted">管理员可保存多个 Seedance 兼容平台，测试时只切换当前 Profile，不覆盖默认 AIfastgate 配置。</p></div><span className="source-pill external">当前：{addingApiProfile ? "新增第三方 API" : activeApiProfile?.name || "默认 AIfastgate"}</span></div>{userActionMessage && <div className="api-active-banner">{userActionMessage}<small>{addingApiProfile ? "新增第三方 API 中" : activeApiProfile?.baseUrl || "使用 .env.local 默认 AIfastgate 配置"}</small></div>}<div className="api-switch-row"><div><label>当前使用接口</label><select value={addingApiProfile ? "__add__" : activeApiProfileId} onChange={event => { if (event.target.value === "__add__") { setAddingApiProfile(true); setApiProfileName(""); setApiProfileBaseUrl(""); setApiProfileKey(""); setApiProfileModel(""); setUserActionMessage("请填写 Base URL 和 API Key，系统会自动补齐平台名称和模型名。"); } else { setAddingApiProfile(false); switchApiProfile(event.target.value); } }}><option value="__add__">+ 添加第三方 API</option>{apiProfiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></div><div><label>当前 Base URL</label><input readOnly value={addingApiProfile ? "" : activeApiProfile?.baseUrl || "使用 .env.local 默认 AIfastgate 配置"} /></div></div><div className="script-core-grid"><div><label>平台名称</label><input value={apiProfileName} onChange={event => setApiProfileName(event.target.value)} /></div><div><label>API Base URL</label><input value={apiProfileBaseUrl} onChange={event => updateApiProfileDraft("baseUrl", event.target.value)} placeholder="http://43.159.135.17/api/v3" /></div><div><label>API Key</label><input type="password" autoComplete="new-password" value={apiProfileKey} onChange={event => updateApiProfileDraft("apiKey", event.target.value)} placeholder="保存后自动隐藏，平台不再显示明文" /></div><div><label>模型名</label><input value={apiProfileModel} onChange={event => setApiProfileModel(event.target.value)} placeholder="doubao-seedance-2.0-fast" /></div></div><div className="actions"><button className="btn-primary" onClick={saveApiProfile}>保存 Profile</button></div><div className="table-wrap" style={{ marginTop: 14 }}><table className="table"><thead><tr><th>状态</th><th>平台</th><th>Base URL</th><th>模型</th><th>Key</th><th>操作</th></tr></thead><tbody>{apiProfiles.map(profile => <tr key={profile.id}><td>{profile.id === activeApiProfileId ? <span className="tag done">当前使用</span> : <span className="tag pending">备用</span>}</td><td>{profile.name}</td><td><code>{profile.baseUrl || "环境变量默认"}</code></td><td>{profile.model || "环境变量默认"}</td><td><span className={profile.hasApiKey ? "tag done" : "tag pending"}>{profile.hasApiKey ? "已隐藏" : "未配置"}</span></td><td><button className="btn-ghost btn-small" onClick={() => activateApiProfile(profile.id)}>{profile.id === activeApiProfileId ? "已启用" : "启用"}</button><button className="btn-danger btn-small" disabled={currentUserRole !== "admin" || profile.id === "fastgate-default"} onClick={() => deleteApiProfile(profile.id)}>删除</button></td></tr>)}</tbody></table></div></div>
+          <div className="asset-workspace-head"><div><h2>人员管理</h2><p className="muted">系统管理员管理平台配置；管理员维护本租户成员；用户负责日常生产操作。</p></div><button className="btn-primary" onClick={openNewMemberEditor} disabled={!currentUserCanManageMembers}>新增人员</button></div>
+          <div className="member-role-grid"><div className="member-role-card"><strong>系统管理员</strong><p>产品提供商最高权限，管理平台 API 配置和后续租户能力。</p></div><div className="member-role-card"><strong>管理员</strong><p>租户管理员，维护本租户成员和团队生产流程。</p></div><div className="member-role-card"><strong>用户</strong><p>使用剧本、素材、分镜、视频生成和资产查看功能。</p></div></div>
+          <div className="table-wrap" style={{ marginTop: 18 }}><table className="table"><thead><tr><th>账号</th><th>显示名</th><th>角色</th><th>状态</th><th>权限范围</th><th>操作</th></tr></thead><tbody>{Object.values(authUsers).map(user => <tr key={user.account}><td>{user.account}</td><td>{user.displayName || user.account}</td><td>{roleLabel(user.role)}</td><td><span className={user.status === "active" ? "tag done" : "tag pending"}>{user.status === "active" ? "启用" : "停用"}</span></td><td>{roleScope(user.role)}</td><td><button className="btn-ghost btn-small" disabled={!currentUserCanManageMembers || !canManageTargetMember(currentUserRole, user.role) || user.status !== "active"} onClick={() => openEditMemberEditor(user)}>编辑</button><button className={user.status === "active" ? "btn-danger btn-small" : "btn-ghost btn-small"} disabled={!currentUserCanManageMembers || !canManageTargetMember(currentUserRole, user.role) || (user.account === currentUser && user.status === "active")} onClick={() => updateMemberStatus(user.account, user.status === "active" ? "disabled" : "active")}>{user.status === "active" ? "停用" : "启用"}</button></td></tr>)}</tbody></table></div>
+          {memberEditorOpen && <div className="api-profile-panel">
+            <div className="asset-workspace-head"><div><h2>{editingMemberAccount ? "编辑人员" : "新增人员"}</h2><p className="muted">新人员需要设置初始密码；编辑已有人员时密码可留空。</p></div><button className="btn-ghost btn-small" onClick={closeMemberEditor}>取消</button></div>
+            <div className="script-core-grid"><div><label>成员账号</label><input value={memberAccountDraft} disabled={Boolean(editingMemberAccount)} onChange={event => setMemberAccountDraft(event.target.value)} placeholder="例如 zhangsan" /></div><div><label>显示名称</label><input value={memberNameDraft} onChange={event => setMemberNameDraft(event.target.value)} placeholder="输入显示名称" /></div><div><label>初始/重置密码</label><input type="password" value={memberPasswordDraft} onChange={event => setMemberPasswordDraft(event.target.value)} placeholder="新成员必填；编辑成员可留空" /></div><div><label>成员角色</label><select value={memberRoleDraft} onChange={event => setMemberRoleDraft(event.target.value as MemberRole)}>{memberRoleOptions.map(role => <option key={role} value={role}>{roleLabel(role)}</option>)}</select></div></div>
+            <div className="actions"><button className="btn-primary" onClick={upsertMember} disabled={!currentUserCanManageMembers}>保存人员</button><button className="btn-ghost" onClick={closeMemberEditor}>取消</button></div>
+          </div>}
+        </section>
+
+        <section className="card" style={sectionStyle("channel-management")}>
+          <div className="asset-workspace-head"><div><h2>模型渠道管理</h2><p className="muted">管理第三方中转或官方接口的调用渠道、模型 ID 和并发限制。</p></div><button className="btn-primary" onClick={openNewApiProfileEditor}>新增渠道</button></div>
+          {userActionMessage && <div className="api-active-banner">{userActionMessage}<small>{activeApiProfile?.name || ""}</small></div>}
+          <div className="table-wrap" style={{ marginTop: 14 }}><table className="table"><thead><tr><th>状态</th><th>渠道</th><th>Base URL</th><th>视频模型</th><th>图片模型</th><th>并发</th><th>Key</th><th>操作</th></tr></thead><tbody>{apiProfiles.length ? apiProfiles.map(profile => <tr key={profile.id}><td>{profile.id === activeApiProfileId ? <span className="tag done">当前使用</span> : <span className="tag pending">备用</span>}</td><td>{profile.name}</td><td><code>{profile.baseUrl}</code></td><td>{profile.videoModels.length}</td><td>{profile.imageModels.length}</td><td>{profile.concurrencyLimit || 1}</td><td><span className={profile.hasApiKey ? "tag done" : "tag pending"}>{profile.hasApiKey ? "已隐藏" : "未配置"}</span></td><td><div className="table-actions"><button onClick={() => openEditApiProfileEditor(profile)}>编辑</button>{profile.id !== activeApiProfileId && <button onClick={() => switchApiProfile(profile.id)}>设为当前</button>}<button className="danger" onClick={() => deleteApiProfile(profile.id)}>删除</button></div></td></tr>) : <tr><td colSpan={8}><div className="empty">暂无模型渠道，请新增渠道后再进行视频或图片生成。</div></td></tr>}</tbody></table></div>
+          {apiProfileEditorOpen && <div className="api-profile-panel">
+            <div className="asset-workspace-head"><div><h2>{addingApiProfile ? "新增渠道" : "编辑渠道"}</h2><p className="muted">API Key 留空时会保留原密钥；视频和图片模型 ID 一行一个。</p></div><button className="btn-ghost btn-small" onClick={closeApiProfileEditor}>取消</button></div>
+            <div className="script-core-grid"><div><label>渠道名称</label><input value={apiProfileName} onChange={event => setApiProfileName(event.target.value)} /></div><div><label>API Base URL</label><input value={apiProfileBaseUrl} onChange={event => updateApiProfileDraft("baseUrl", event.target.value)} /></div><div><label>API Key</label><input type="password" autoComplete="new-password" value={apiProfileKey} onChange={event => updateApiProfileDraft("apiKey", event.target.value)} placeholder="保存后自动隐藏" /></div><div><label>并发数</label><input type="number" min={1} max={50} value={apiProfileConcurrencyLimit} onChange={event => setApiProfileConcurrencyLimit(Math.max(1, Math.min(50, Number(event.target.value) || 1)))} /></div></div>
+            <div className="script-core-grid"><div><label>视频模型 ID</label><textarea value={apiProfileVideoModels} onChange={event => setApiProfileVideoModels(event.target.value)} /></div><div><label>图片模型 ID</label><textarea value={apiProfileImageModels} onChange={event => setApiProfileImageModels(event.target.value)} /></div></div>
+            <div className="actions"><button className="btn-primary" onClick={saveApiProfile}>保存渠道</button><button className="btn-ghost" onClick={closeApiProfileEditor}>取消</button></div>
+          </div>}
         </section>
 
         <section className="profile-layout" style={sectionStyle("profile")}>
@@ -1548,11 +1664,6 @@ export default function Home() {
         </section>
 
         <section id="shots" className="video-studio" style={sectionStyle("shots")}>
-          <div className="concurrency-panel card">
-            <div className="concurrency-panel-head"><div><span>高并发任务队列</span><strong>{concurrentRunningTasks.length ? `${concurrentRunningTasks.length} 路生成中` : "并发通道待命"}</strong></div><button className="btn-ghost btn-small" onClick={refreshAllTaskStatuses}>刷新队列</button></div>
-            <div className="lane-strip">{concurrencyLanes.map((task, index) => <div key={index} className={`lane-card ${task ? "active" : "idle"}`}><span>{task ? `${index + 1}/${maxConcurrentChannels}` : `通道 ${index + 1}`}</span><strong>{task?.shotTitle || "可接收任务"}</strong><em>{task ? task.result : "空闲"}</em></div>)}</div>
-            <div className="concurrency-panel-foot"><span>多账户并行：{concurrentAccountCount} 个账户</span><span>可用通道：{availableConcurrentChannels}</span><span>提交后无需排队等待单账户串行</span></div>
-          </div>
           <div className="video-composer">
             <div className="video-composer-head">
               <div>
@@ -1570,6 +1681,7 @@ export default function Home() {
             {mentionMenuOpen && <div className="video-mention-popover"><div className="mention-panel-head"><strong>可能@的内容</strong><span>点击素材插入到提示词；仅公网 URL 或 asset:// 会真实传给 API</span></div><div className="mention-panel-list">{mentionMaterials.length ? mentionMaterials.map(material => { const usable = Boolean(material.reviewedAssetUrl || material.seedanceAssetUrl || material.url); const selected = selectedMaterialIds.includes(material.id); return <div key={material.id} className={`mention-item ${selected ? "selected" : ""}`}><button onClick={() => insertMention(material)}><div className="mention-thumb">{material.previewUrl ? <img src={material.previewUrl} alt={material.name} /> : <span>@</span>}</div><div className="mention-meta"><strong>{material.name}</strong><span>{usable ? "可用于真实生成" : "仅本地预览，真实生成不会使用"}</span></div></button><button className="btn-ghost btn-small" onClick={() => toggleMaterial(material.id)}>{selected ? "取消@" : "选择"}</button><button className="btn-danger btn-small" onClick={() => deleteMaterial(material.id)}>删除</button></div>; }) : <div className="mention-empty">素材库里还没有图片素材，请先上传图片。</div>}</div></div>}
             <div className="video-composer-toolbar">
               <button className={`tool-chip primary ${omniReferenceEnabled ? "active" : ""}`} onClick={() => setOmniReferenceEnabled(enabled => !enabled)}>✦ 全能参考{omniReferenceEnabled ? "已开" : ""}</button>
+              <label className="tool-select">模型<select value={selectedVideoModel} onChange={event => setSelectedVideoModel(event.target.value)}>{activeVideoModels.map(model => <option key={model} value={model}>{model}</option>)}</select></label>
               <label className="tool-select">▯<select value={shotRatio} onChange={event => setShotRatio(event.target.value)}><option>9:16 竖屏短剧</option><option>16:9 横屏</option><option>1:1 方屏</option><option>4:3 宽屏</option><option>3:4 长图</option><option>adaptive 智能比例</option></select></label>
               <label className="tool-select">清晰度<select value={shotResolution} onChange={event => setShotResolution(event.target.value as Shot["resolution"])}><option value="480p">480P</option><option value="720p">720P</option><option value="1080p">1080P</option></select></label>
               <label className="tool-select">◷<select value={shotDuration} onChange={event => setShotDuration(Number(event.target.value))}><option value="4">4s</option><option value="5">5s</option><option value="6">6s</option><option value="8">8s</option><option value="10">10s</option><option value="12">12s</option><option value="15">15s</option></select></label>
@@ -1590,7 +1702,7 @@ export default function Home() {
           <div className="image-head"><div><h2>生图工作台</h2><p className="muted">填写提示词、选择模型与尺寸，生成图片素材后可用于视频生成参考。</p></div><div className="actions"><button className="btn-ghost btn-small" onClick={() => alert("生成记录功能已预留")}>记录</button><button className="btn-ghost btn-small" onClick={() => alert("参数面板已在当前页面展开")}>参数</button></div></div>
           <div className="image-form-block"><label>提示词</label><div className="image-prompt-tools"><button className="btn-ghost btn-small" onClick={() => setImageWorkbenchPrompt(shotPrompt)}>复用当前分镜提示词</button><button className="btn-ghost btn-small" onClick={() => setImageWorkbenchPrompt("电影感角色参考图，精致五官，统一服装设定，干净背景，适合短剧分镜制作")}>套用示例</button></div><textarea className="image-prompt" value={imageWorkbenchPrompt} onChange={event => setImageWorkbenchPrompt(event.target.value)} placeholder="描述画面主体、风格、构图、光线和用途" /></div>
           <div className="image-form-block"><label>参考图</label><div className="reference-box"><span>暂无参考图</span><input type="file" accept="image/*" onChange={addLocalPreview} /><button className="btn-ghost btn-small" onClick={() => document.getElementById("material-assets")?.scrollIntoView({ behavior: "smooth" })}>去素材库选择</button></div></div>
-          <div className="image-settings-grid"><div><label>模型</label><select value={imageModel} onChange={event => setImageModel(event.target.value)}><option>gpt-image-2</option><option>seedream-3.0</option><option>stable-image-ultra</option><option>flux-pro</option></select></div><div><label>质量</label><div className="segmented">{(["auto", "high", "medium", "low"] as ImageQuality[]).map(item => <button key={item} className={imageQuality === item ? "active" : ""} onClick={() => setImageQuality(item)}>{item === "auto" ? "自动" : item === "high" ? "高" : item === "medium" ? "中" : "低"}</button>)}</div></div><div><label>尺寸</label><div className="size-row"><input type="number" value={imageWidth} onChange={event => setImageWidth(Number(event.target.value))} /><span>×</span><input type="number" value={imageHeight} onChange={event => setImageHeight(Number(event.target.value))} /></div></div></div>
+          <div className="image-settings-grid"><div><label>模型</label><select value={imageModel} onChange={event => setImageModel(event.target.value)}>{activeImageModels.map(model => <option key={model} value={model}>{model}</option>)}</select></div><div><label>质量</label><div className="segmented">{(["auto", "high", "medium", "low"] as ImageQuality[]).map(item => <button key={item} className={imageQuality === item ? "active" : ""} onClick={() => setImageQuality(item)}>{item === "auto" ? "自动" : item === "high" ? "高" : item === "medium" ? "中" : "低"}</button>)}</div></div><div><label>尺寸</label><div className="size-row"><input type="number" value={imageWidth} onChange={event => setImageWidth(Number(event.target.value))} /><span>×</span><input type="number" value={imageHeight} onChange={event => setImageHeight(Number(event.target.value))} /></div></div></div>
           <div className="image-form-block"><label>宽高比</label><div className="ratio-grid">{(["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16", "auto"] as AspectRatio[]).map(item => <button key={item} className={imageRatio === item ? "active" : ""} onClick={() => updateImageRatio(item)}><span className="ratio-icon">▭</span>{item}</button>)}</div></div>
           <div className="image-form-block"><label>生成张数</label><div className="count-grid">{[1,2,3,4,5,6,7,8,9,10].map(count => <button key={count} className={imageCount === count ? "active" : ""} onClick={() => setImageCount(count)}>{count} 张</button>)}</div></div>
           <button className="btn-primary image-generate" disabled={isImageGenerating} onClick={generateImages}>{isImageGenerating ? "生成中..." : "开始生成"}</button>
@@ -1663,7 +1775,7 @@ export default function Home() {
 
         <div style={sectionStyle("generated-videos")}>
           <section className="card generated-video-library">
-            <div className="card-title-row"><div><h2 style={{ marginTop: 0 }}>已生成视频</h2><p className="muted">同步本页任务状态后，成功视频会出现在这里，可直接播放、打开或下载。</p></div><button className="btn-primary btn-small" onClick={refreshAllTaskStatuses}>同步本页任务状态</button></div><div className="recover-task-row"><input value={recoverTaskId} onChange={event => setRecoverTaskId(event.target.value)} placeholder="输入 Ark task_id 恢复单个已完成视频，例如 cgt-...（会自动使用 Ark v3）" /><button className="btn-ghost btn-small" onClick={recoverCompletedTaskById}>按 task_id 恢复</button></div>
+            <div className="card-title-row"><div><h2 style={{ marginTop: 0 }}>已生成视频</h2><p className="muted">同步本页任务状态后，成功视频会出现在这里，可直接播放、打开或下载。</p></div><button className="btn-primary btn-small" onClick={refreshAllTaskStatuses}>同步本页任务状态</button></div>
             {visibleVideoAssets.length ? <div className="video-preview-grid">{visibleVideoAssets.map(asset => <div className="video-preview-card" key={asset.id}>{asset.videoUrl && <video src={proxiedVideoUrl(asset.videoUrl, false, asset.providerTaskId, activeApiProfile)} controls preload="metadata" />}<strong>{asset.title}</strong><p className="muted">{asset.meta}</p><div className="task-video-actions">{asset.videoUrl && <a href={proxiedVideoUrl(asset.videoUrl, false, asset.providerTaskId, activeApiProfile)} target="_blank" rel="noreferrer">新窗口打开</a>}{asset.videoUrl && <a href={proxiedVideoUrl(asset.videoUrl, true, asset.providerTaskId, activeApiProfile)}>下载视频</a>}</div></div>)}</div> : <div className="empty">暂无可预览视频。请先点击“同步本页任务状态”，或等待生成任务完成。</div>}
             {hiddenVideoAssetCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllVideoAssets(prev => !prev)}>{showAllVideoAssets ? "收起" : `展开全部 ${hiddenVideoAssetCount}`}</button>}
           </section>

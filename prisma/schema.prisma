@@ -8,7 +8,8 @@ datasource db {
 }
 
 enum MemberRole {
-  admin
+  super_admin
+  tenant_admin
   user
 }
 

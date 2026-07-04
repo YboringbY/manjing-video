@@ -31,8 +31,8 @@ async function main() {
 
   await prisma.membership.upsert({
     where: { tenantId_userId: { tenantId: tenant.id, userId: user.id } },
-    update: { role: "admin", status: "active" },
-    create: { tenantId: tenant.id, userId: user.id, role: "admin" }
+    update: { role: "super_admin", status: "active" },
+    create: { tenantId: tenant.id, userId: user.id, role: "super_admin" }
   });
 
   console.log(`Seeded tenant "${tenant.slug}" and admin account "${account}".`);

@@ -6,11 +6,12 @@ type MediaInput = {
   role?: string;
 };
 
-type ApiProfile = { id?: string; name?: string; baseUrl?: string; apiKey?: string; model?: string };
+type ApiProfile = { id?: string; name?: string; baseUrl?: string; apiKey?: string; model?: string; videoModels?: string[] };
 
 type GenerateVideoPayload = {
   profile_id?: string;
   api_profile?: ApiProfile;
+  model_id?: string;
   shot?: {
     id?: number;
     title?: string;
@@ -47,6 +48,7 @@ type FastGateListItem = {
   url?: string;
   video_url?: string;
   content?: { video_url?: string; url?: string };
+  data?: Array<{ url?: string; video_url?: string }>;
   prompt?: string;
   created_at?: number;
   error?: string | { message?: string };
@@ -64,11 +66,27 @@ function normalizeBaseUrl(value?: string) {
   return (value || BASE_URL).trim().replace(/\/$/, "");
 }
 
+function isZJProvider(baseUrl: string) {
+  try {
+    return new URL(baseUrl).hostname === "zjljzn.ltd";
+  } catch {
+    return baseUrl.includes("zjljzn.ltd");
+  }
+}
+
+function appendPath(baseUrl: string, path: string) {
+  const normalized = baseUrl.replace(/\/$/, "");
+  if (normalized.endsWith("/v1")) return `${normalized}${path.replace(/^\/v1/, "")}`;
+  return `${normalized}${path}`;
+}
+
 function resolveApiProfile(profile?: ApiProfile) {
+  const videoModels = Array.isArray(profile?.videoModels) ? profile.videoModels.map(item => item.trim()).filter(Boolean) : [];
   return {
     apiKey: profile?.apiKey?.trim() || process.env.SEEDANCE_API_KEY || "",
     baseUrl: normalizeBaseUrl(profile?.baseUrl),
-    model: profile?.model?.trim() || MODEL,
+    videoModels,
+    model: profile?.model?.trim() || videoModels[0] || MODEL,
     name: profile?.name?.trim() || "默认 AIfastgate"
   };
 }
@@ -102,6 +120,10 @@ function normalizeMedia(items: MediaInput[] | undefined, limit: number, type: "i
     });
 }
 
+function normalizeMediaUrls(items: MediaInput[] | undefined, limit: number) {
+  return (items || []).map(item => item.url.trim()).filter(Boolean).slice(0, limit);
+}
+
 function extractTaskId(result: FastGateTaskResponse) {
   return result.task_id || result.data?.task_id || result.id || result.data?.id;
 }
@@ -121,7 +143,7 @@ export async function GET(request: Request) {
     );
   }
 
-  const listEndpoint = baseUrl.includes("/api/v3") ? `${baseUrl}/contents/generations/tasks` : `${baseUrl}/v1/video/generations`;
+  const listEndpoint = baseUrl.includes("/api/v3") ? `${baseUrl}/contents/generations/tasks` : isZJProvider(baseUrl) ? appendPath(baseUrl, "/v1/videos/generations") : `${baseUrl}/v1/video/generations`;
   const response = await fetch(listEndpoint, {
     method: "GET",
     headers: {
@@ -149,7 +171,7 @@ export async function GET(request: Request) {
     data: items.map(item => ({
       task_id: item.id,
       status: item.status,
-      video_url: item.video_url || item.url || item.content?.video_url || item.content?.url,
+      video_url: item.video_url || item.url || item.content?.video_url || item.content?.url || item.data?.[0]?.video_url || item.data?.[0]?.url,
       prompt: item.prompt,
       created_at: item.created_at,
       error: typeof item.error === "string" ? item.error : item.error?.message
@@ -162,7 +184,14 @@ export async function POST(request: Request) {
   const profiles = body.profile_id ? await readServerApiProfiles() : [];
   const serverProfile = body.profile_id ? profiles.find(profile => profile.id === body.profile_id) : undefined;
   if (body.profile_id && !serverProfile) return NextResponse.json({ code: 404, message: "当前选中的 API Profile 不存在，请重新选择后再生成。" }, { status: 404 });
-  const { apiKey, baseUrl, model, name } = resolveApiProfile(serverProfile || body.api_profile);
+  const { apiKey, baseUrl, model, name, videoModels } = resolveApiProfile(serverProfile || body.api_profile);
+  const requestedModel = body.model_id?.trim() || model;
+  if (videoModels.length && !videoModels.includes(requestedModel)) {
+    return NextResponse.json(
+      { code: 400, message: "当前模型渠道不支持所选视频模型，请在模型渠道管理中补充后重试。" },
+      { status: 400 }
+    );
+  }
 
   if (!apiKey) {
     return NextResponse.json(
@@ -180,6 +209,9 @@ export async function POST(request: Request) {
     );
   }
 
+  const imageUrls = normalizeMediaUrls(body.images, 9);
+  const videoUrls = normalizeMediaUrls(body.videos, 3);
+  const audioUrls = normalizeMediaUrls(body.audios, 3);
   const content = [
     { type: "text", text: shot.prompt },
     ...normalizeMedia(body.images, 9, "image"),
@@ -187,8 +219,24 @@ export async function POST(request: Request) {
     ...normalizeMedia(body.audios, 3, "audio")
   ];
 
-  const payload = {
-    model: body.mode === "pro" ? "doubao-seedance-2-0-260128" : model,
+  const inputType = imageUrls.length || videoUrls.length || audioUrls.length ? body.input_type || "reference" : "text_to_video";
+  const payload = isZJProvider(baseUrl) ? {
+    model: requestedModel,
+    prompt: shot.prompt,
+    input_type: inputType,
+    images: imageUrls,
+    videos: videoUrls,
+    audios: audioUrls,
+    ratio: normalizeRatio(shot.ratio),
+    duration: normalizeDuration(shot.duration),
+    resolution: body.resolution || "720p",
+    metadata: {
+      draft: false,
+      generate_audio: body.generate_audio ?? true,
+      watermark: body.watermark ?? false
+    }
+  } : {
+    model: requestedModel,
     prompt: shot.prompt,
     content,
     ratio: normalizeRatio(shot.ratio),
@@ -198,12 +246,13 @@ export async function POST(request: Request) {
     watermark: body.watermark ?? false
   };
 
-  const endpoint = baseUrl.includes("/api/v3") ? `${baseUrl}/contents/generations/tasks` : `${baseUrl}/v1/video/generations`;
+  const endpoint = baseUrl.includes("/api/v3") ? `${baseUrl}/contents/generations/tasks` : isZJProvider(baseUrl) ? appendPath(baseUrl, "/v1/videos/generations") : `${baseUrl}/v1/video/generations`;
 
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      Accept: "application/json",
       Authorization: `Bearer ${apiKey}`
     },
     body: JSON.stringify(payload)
@@ -231,7 +280,7 @@ export async function POST(request: Request) {
       task_id: taskId,
       provider: name,
       base_url: baseUrl,
-      model,
+      model: requestedModel,
       status: result.status || result.data?.status || "pending",
       input: payload,
       created_at: new Date().toISOString()

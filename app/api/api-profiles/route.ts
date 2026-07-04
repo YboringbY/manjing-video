@@ -7,22 +7,27 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const body = await request.json() as Partial<ServerApiProfile>;
+  const body = await request.json() as Partial<ServerApiProfile> & { videoModels?: string[] | string; imageModels?: string[] | string; active?: boolean };
   const name = body.name?.trim() || "";
   const baseUrl = normalizeBaseUrl(body.baseUrl || "");
   const apiKey = body.apiKey?.trim() || "";
-  const model = body.model?.trim() || "";
-  if (!name || !baseUrl || !apiKey || !model) return NextResponse.json({ code: 400, message: "请完整填写平台名称、Base URL、API Key 和模型名。" }, { status: 400 });
+  const videoModels = Array.from(new Set((Array.isArray(body.videoModels) ? body.videoModels : String(body.videoModels || body.model || "").split(/\r?\n|,/)).map(item => item.trim()).filter(Boolean)));
+  const imageModels = Array.from(new Set((Array.isArray(body.imageModels) ? body.imageModels : String(body.imageModels || "").split(/\r?\n|,/)).map(item => item.trim()).filter(Boolean)));
+  const concurrencyLimit = Math.max(1, Math.min(50, Number(body.concurrencyLimit || 1)));
 
   const profiles = await readServerApiProfiles();
-  const existing = profiles.find(profile => profile.id === body.id || (profile.name.trim() === name && normalizeBaseUrl(profile.baseUrl) === baseUrl && profile.model.trim() === model));
+  const existing = profiles.find(profile => profile.id === body.id || (profile.name.trim() === name && normalizeBaseUrl(profile.baseUrl) === baseUrl));
+  if (!name || !baseUrl || (!apiKey && !existing?.apiKey) || (!videoModels.length && !imageModels.length)) return NextResponse.json({ code: 400, message: "请完整填写服务名称、Base URL、API Key，并至少配置一个视频或图片模型 ID。编辑已有配置时 API Key 可留空。" }, { status: 400 });
   const nextProfile: ServerApiProfile = {
     id: existing?.id || `profile-${Date.now()}`,
     name,
     baseUrl,
-    apiKey,
-    model,
-    active: existing?.active || false,
+    apiKey: apiKey || existing?.apiKey || "",
+    model: videoModels[0] || existing?.model || "",
+    videoModels,
+    imageModels,
+    concurrencyLimit,
+    active: body.active ?? existing?.active ?? profiles.length === 0,
     createdAt: existing?.createdAt || Date.now(),
     updatedAt: Date.now()
   };
@@ -45,7 +50,6 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   const id = new URL(request.url).searchParams.get("id");
   if (!id) return NextResponse.json({ code: 400, message: "缺少 Profile ID。" }, { status: 400 });
-  if (id === "fastgate-default") return NextResponse.json({ code: 400, message: "默认 AIfastgate Profile 不能删除。" }, { status: 400 });
   const profiles = await readServerApiProfiles();
   const next = profiles.filter(profile => profile.id !== id);
   await writeServerApiProfiles(next);

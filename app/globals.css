@@ -42,10 +42,21 @@ body {
 .login-form label, .login-label-row label { color: #c4cbd2; margin: 0 0 8px; }
 .login-label-row { display: flex; justify-content: space-between; align-items: center; margin-top: 18px; }
 .login-label-row button, .login-switch button { padding: 0; background: transparent; color: #818cf8; box-shadow: none; }
-.login-input { display: grid; grid-template-columns: 28px 1fr; align-items: center; gap: 10px; padding: 0 14px; border: 1px solid #2d2f35; border-radius: 10px; background: #1a1b1f; }
-.login-input span { color: #78808a; }
+.login-input { display: grid; grid-template-columns: 1fr; align-items: center; padding: 0 14px; border: 1px solid #2d2f35; border-radius: 10px; background: #1a1b1f; }
+.login-password-input { grid-template-columns: 1fr 34px; gap: 8px; padding-right: 8px; }
 .login-input input { border: 0; border-radius: 0; background: transparent; color: #fff; padding: 15px 0; }
 .login-input input::placeholder { color: #737983; }
+.login-input input:-webkit-autofill,
+.login-input input:-webkit-autofill:hover,
+.login-input input:-webkit-autofill:focus,
+.login-input input:-webkit-autofill:active {
+  -webkit-text-fill-color: #fff;
+  caret-color: #fff;
+  box-shadow: 0 0 0 1000px #1a1b1f inset;
+  transition: background-color 9999s ease-in-out 0s;
+}
+.login-password-input button { width: 34px; height: 34px; display: grid; place-items: center; padding: 0; border-radius: 50%; background: transparent; color: #a5b4fc; box-shadow: none; font-size: 16px; }
+.login-password-input button:hover { background: rgba(129, 140, 248, .12); transform: none; }
 .login-code-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
 .login-code-row button { background: rgba(99,102,241,.14); border: 1px solid rgba(99,102,241,.38); color: #a5b4fc; box-shadow: none; }
 .login-message { margin: 14px 0 0; color: #a5b4fc; line-height: 1.5; }
@@ -67,6 +78,8 @@ aside {
   position: sticky;
   top: 0;
   height: 100vh;
+  overflow-y: auto;
+  padding-bottom: 34px;
 }
 
 .brand { display: flex; align-items: center; gap: 12px; font-weight: 800; font-size: 20px; margin-bottom: 28px; }
@@ -89,6 +102,9 @@ aside {
 nav { display: grid; gap: 8px; }
 nav a { text-decoration: none; color: #4c5a6b; padding: 13px 14px; border-radius: 13px; display: flex; gap: 10px; align-items: center; font-weight: 650; }
 nav a.active, nav a:hover { background: var(--primary-light); color: var(--primary); }
+nav button { width: 100%; text-align: left; background: transparent; color: #4c5a6b; box-shadow: none; padding: 13px 14px; border-radius: 13px; display: flex; gap: 10px; align-items: center; font-weight: 650; }
+nav button.active, nav button:hover { background: var(--primary-light); color: var(--primary); }
+.nav-group-label { margin: 12px 4px 4px; color: #9aa4b2; font-size: 12px; font-weight: 900; }
 
 main { padding: 24px 28px 44px; overflow: hidden; }
 .topbar { min-height: 54px; display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 16px; }
@@ -96,7 +112,9 @@ main { padding: 24px 28px 44px; overflow: hidden; }
 .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 button, .btn-ghost, .btn-primary, .btn-danger { border: 0; border-radius: 12px; padding: 12px 16px; font-weight: 750; cursor: pointer; transition: .2s ease; text-decoration: none; display: inline-block; }
 button:hover, .btn-ghost:hover, .btn-primary:hover, .btn-danger:hover { transform: translateY(-1px); }
-.user-chip { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px; padding: 10px 13px; background: #fff; color: var(--primary); font-weight: 850; }
+.user-chip { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 999px; padding: 8px 10px 8px 14px; background: #fff; color: var(--primary); font-weight: 850; }
+.user-chip strong { color: var(--text); font-size: 14px; line-height: 1; }
+.user-chip span { border-radius: 999px; background: var(--primary-light); color: var(--primary); padding: 5px 8px; font-size: 12px; line-height: 1; }
 .btn-primary { background: var(--primary); color: #fff; box-shadow: 0 10px 22px rgba(15,159,122,0.22); }
 .btn-ghost { background: #fff; color: var(--text); border: 1px solid var(--line); }
 .btn-danger { background: #fff1f2; color: var(--red); border: 1px solid #fecdd3; }

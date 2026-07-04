@@ -6,7 +6,10 @@ export type ServerApiProfile = {
   name: string;
   baseUrl: string;
   apiKey: string;
-  model: string;
+  model?: string;
+  videoModels: string[];
+  imageModels: string[];
+  concurrencyLimit?: number;
   active: boolean;
   createdAt: number;
   updatedAt?: number;
@@ -17,13 +20,21 @@ export type PublicApiProfile = Omit<ServerApiProfile, "apiKey"> & { hasApiKey: b
 const PROFILE_DIR = path.join(process.cwd(), ".data");
 const PROFILE_FILE = path.join(PROFILE_DIR, "api-profiles.json");
 
-const defaultProfiles: ServerApiProfile[] = [
-  { id: "fastgate-default", name: "默认 AIfastgate", baseUrl: "", apiKey: process.env.SEEDANCE_API_KEY || "", model: process.env.SEEDANCE_MODEL || "", active: false, createdAt: 0 },
-  { id: "ark-v3-test", name: "Ark v3 测试平台", baseUrl: "http://43.159.135.17/api/v3", apiKey: process.env.ARK_V3_API_KEY || "", model: "doubao-seedance-2-0-fast-260128", active: true, createdAt: 1 }
-];
+const defaultProfiles: ServerApiProfile[] = [];
 
 export function normalizeBaseUrl(value: string) {
   return value.trim().replace(/\/$/, "");
+}
+
+function normalizeModelId(value: string) {
+  return value.trim() === "doubao-seedance-2.0-fast" ? "doubao-seedance-2-0-fast-260128" : value.trim();
+}
+
+function normalizeModelList(values?: string[] | string, fallback?: string) {
+  const list = Array.isArray(values) ? values : typeof values === "string" ? values.split(/\r?\n|,/) : [];
+  const normalized = list.map(normalizeModelId).filter(Boolean);
+  const withFallback = fallback ? [normalizeModelId(fallback), ...normalized] : normalized;
+  return Array.from(new Set(withFallback));
 }
 
 export function toPublicProfile(profile: ServerApiProfile): PublicApiProfile {
@@ -34,16 +45,19 @@ export function toPublicProfile(profile: ServerApiProfile): PublicApiProfile {
 export function normalizeProfiles(profiles: ServerApiProfile[]) {
   const merged = [...defaultProfiles];
   profiles.forEach(profile => {
-    const normalized = { ...profile, baseUrl: normalizeBaseUrl(profile.baseUrl), model: profile.model === "doubao-seedance-2.0-fast" ? "doubao-seedance-2-0-fast-260128" : profile.model };
+    const videoModels = normalizeModelList(profile.videoModels, profile.model);
+    const imageModels = normalizeModelList(profile.imageModels);
+    const concurrencyLimit = Math.max(1, Math.min(50, Number(profile.concurrencyLimit || 1)));
+    const normalized = { ...profile, baseUrl: normalizeBaseUrl(profile.baseUrl), model: videoModels[0] || "", videoModels, imageModels, concurrencyLimit };
     const sameIdIndex = merged.findIndex(item => item.id === normalized.id);
-    if (sameIdIndex >= 0) merged[sameIdIndex] = { ...merged[sameIdIndex], ...normalized };
+    if (sameIdIndex >= 0) merged[sameIdIndex] = normalized;
     else merged.push(normalized);
   });
   const deduped = merged.filter((profile, index, list) => {
-    const key = `${profile.name.trim()}|${normalizeBaseUrl(profile.baseUrl)}|${profile.model.trim()}`;
-    return index === list.findIndex(item => `${item.name.trim()}|${normalizeBaseUrl(item.baseUrl)}|${item.model.trim()}` === key);
+    const key = `${profile.name.trim()}|${normalizeBaseUrl(profile.baseUrl)}`;
+    return index === list.findIndex(item => `${item.name.trim()}|${normalizeBaseUrl(item.baseUrl)}` === key);
   });
-  const activeId = deduped.find(profile => profile.active && profile.id !== "fastgate-default")?.id || "ark-v3-test";
+  const activeId = deduped.find(profile => profile.active)?.id || deduped[0]?.id || "";
   return deduped.map(profile => ({ ...profile, active: profile.id === activeId }));
 }
 

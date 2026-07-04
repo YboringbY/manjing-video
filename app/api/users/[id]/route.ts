@@ -1,10 +1,10 @@
 import { MemberRole, MemberStatus } from "@prisma/client";
 import { NextResponse } from "next/server";
-import { publicUserFromMembership, requireAdmin } from "@/lib/auth";
+import { canAssignRole, canManageMember, publicUserFromMembership, requireAdmin } from "@/lib/auth";
 import { hashPassword } from "@/lib/password";
 import { prisma } from "@/lib/prisma";
 
-const roles: MemberRole[] = ["admin", "user"];
+const roles: MemberRole[] = ["super_admin", "tenant_admin", "user"];
 const statuses: MemberStatus[] = ["active", "disabled"];
 
 function normalizeRole(value: unknown): MemberRole | undefined {
@@ -27,6 +27,9 @@ export async function PATCH(request: Request, context: { params: { id: string } 
       include: { tenant: true, user: true }
     });
     if (!membership) return NextResponse.json({ code: 404, message: "未找到成员。" }, { status: 404 });
+    if (!canManageMember(auth.membership.role, membership.role)) {
+      return NextResponse.json({ code: 403, message: "当前角色不能修改这个成员。" }, { status: 403 });
+    }
     if (membership.userId === auth.membership.userId && normalizeStatus(body.status) === "disabled") {
       return NextResponse.json({ code: 400, message: "不能停用当前登录管理员。" }, { status: 400 });
     }
@@ -39,6 +42,9 @@ export async function PATCH(request: Request, context: { params: { id: string } 
     const status = normalizeStatus(body.status);
 
     if (password && password.length < 8) return NextResponse.json({ code: 400, message: "新密码至少需要 8 位。" }, { status: 400 });
+    if (role && !canAssignRole(auth.membership.role, role)) {
+      return NextResponse.json({ code: 403, message: "当前角色不能分配这个成员权限。" }, { status: 403 });
+    }
 
     await prisma.user.update({
       where: { id: userId },
@@ -71,11 +77,18 @@ export async function DELETE(_request: Request, context: { params: { id: string 
   const userId = context.params.id;
   if (userId === auth.membership.userId) return NextResponse.json({ code: 400, message: "不能停用当前登录管理员。" }, { status: 400 });
 
-  const membership = await prisma.membership.update({
+  const membership = await prisma.membership.findUnique({
     where: { tenantId_userId: { tenantId: auth.membership.tenantId, userId } },
-    data: { status: "disabled" },
     include: { tenant: true, user: true }
   }).catch(() => null);
   if (!membership) return NextResponse.json({ code: 404, message: "未找到成员。" }, { status: 404 });
-  return NextResponse.json({ code: 0, data: publicUserFromMembership(membership) });
+  if (!canManageMember(auth.membership.role, membership.role)) {
+    return NextResponse.json({ code: 403, message: "当前角色不能停用这个成员。" }, { status: 403 });
+  }
+  const updated = await prisma.membership.update({
+    where: { tenantId_userId: { tenantId: auth.membership.tenantId, userId } },
+    data: { status: "disabled" },
+    include: { tenant: true, user: true }
+  });
+  return NextResponse.json({ code: 0, data: publicUserFromMembership(updated) });
 }

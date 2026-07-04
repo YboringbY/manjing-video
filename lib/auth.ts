@@ -84,8 +84,22 @@ export async function getCurrentMembership() {
 export async function requireAdmin() {
   const membership = await getCurrentMembership();
   if (!membership) return { error: Response.json({ code: 401, message: "请先登录。" }, { status: 401 }) };
-  if (membership.role !== "admin") return { error: Response.json({ code: 403, message: "只有管理员可以执行此操作。" }, { status: 403 }) };
+  if (!["super_admin", "tenant_admin"].includes(membership.role)) {
+    return { error: Response.json({ code: 403, message: "只有管理员可以执行此操作。" }, { status: 403 }) };
+  }
   return { membership };
+}
+
+export function canAssignRole(operatorRole: MemberRole, targetRole: MemberRole) {
+  if (operatorRole === "super_admin") return targetRole === "super_admin" || targetRole === "tenant_admin" || targetRole === "user";
+  if (operatorRole === "tenant_admin") return targetRole === "user";
+  return false;
+}
+
+export function canManageMember(operatorRole: MemberRole, targetRole: MemberRole) {
+  if (operatorRole === "super_admin") return true;
+  if (operatorRole === "tenant_admin") return targetRole === "user";
+  return false;
 }
 
 export async function getDefaultTenant() {

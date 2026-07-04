@@ -32,7 +32,7 @@ type FastGateStatusResponse = {
     content?: { video_url?: string; url?: string };
     result?: { video_url?: string; url?: string; status?: string };
     error?: string;
-  };
+  } | Array<{ url?: string; video_url?: string }>;
   items?: Array<{
     id?: string;
     task_id?: string;
@@ -47,6 +47,20 @@ type FastGateStatusResponse = {
 };
 
 const BASE_URL = process.env.SEEDANCE_BASE_URL || "https://api.aifastgate.com";
+
+function isZJProvider(baseUrl: string) {
+  try {
+    return new URL(baseUrl).hostname === "zjljzn.ltd";
+  } catch {
+    return baseUrl.includes("zjljzn.ltd");
+  }
+}
+
+function appendPath(baseUrl: string, path: string) {
+  const normalized = baseUrl.replace(/\/$/, "");
+  if (normalized.endsWith("/v1")) return `${normalized}${path.replace(/^\/v1/, "")}`;
+  return `${normalized}${path}`;
+}
 
 function resolveApiProfile(profile?: ApiProfile) {
   return {
@@ -64,14 +78,17 @@ function normalizeStatus(value?: string) {
 }
 
 function extractVideoUrl(result: FastGateStatusResponse) {
-  const output = result.output || result.data?.output;
+  const dataObject = Array.isArray(result.data) ? undefined : result.data;
+  const dataItem = Array.isArray(result.data) ? result.data[0] : undefined;
+  const output = result.output || dataObject?.output;
   if (typeof output === "string") return output;
   if (Array.isArray(output)) return output[0];
-  return output?.video_url || output?.url || result.video_url || result.data?.video_url || result.url || result.data?.url || result.content?.video_url || result.content?.url || result.data?.content?.video_url || result.data?.content?.url || result.result?.video_url || result.result?.url || result.data?.result?.video_url || result.data?.result?.url;
+  return output?.video_url || output?.url || result.video_url || dataObject?.video_url || dataItem?.video_url || result.url || dataObject?.url || dataItem?.url || result.content?.video_url || result.content?.url || dataObject?.content?.video_url || dataObject?.content?.url || result.result?.video_url || result.result?.url || dataObject?.result?.video_url || dataObject?.result?.url;
 }
 
 function extractError(result: FastGateStatusResponse) {
-  const message = typeof result.error === "string" ? result.error : result.error?.message || result.data?.error || result.message;
+  const dataObject = Array.isArray(result.data) ? undefined : result.data;
+  const message = typeof result.error === "string" ? result.error : result.error?.message || dataObject?.error || result.message;
   if (message?.includes("pre_consume_token_quota_failed") || message?.includes("token quota is not enough")) return "账户余额不足，当前额度不足以生成该视频，请充值后重试。";
   return message;
 }
@@ -100,6 +117,9 @@ export async function POST(request: Request) {
   const endpoints = baseUrl.includes("/api/v3") ? [
     `${baseUrl}/contents/generations/tasks?page=1&page_size=500`,
     `${baseUrl}/contents/generations/tasks/${body.task_id}`
+  ] : isZJProvider(baseUrl) ? [
+    appendPath(baseUrl, `/v1/videos/generations/${body.task_id}`),
+    appendPath(baseUrl, `/v1/video/generations/${body.task_id}`)
   ] : [
     `${baseUrl}/v1/video/generations/${body.task_id}`,
     `${baseUrl}/v1/tasks/${body.task_id}`,
@@ -112,7 +132,8 @@ export async function POST(request: Request) {
     response = await fetch(endpoint, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${apiKey}`
+        Authorization: `Bearer ${apiKey}`,
+        Accept: "application/json"
       }
     });
     text = await response.text();
@@ -128,7 +149,8 @@ export async function POST(request: Request) {
   try { result = text ? JSON.parse(text) as FastGateStatusResponse : {}; } catch { result = { message: text }; }
   const matchedItem = result.items?.find(item => item.id === body.task_id || item.task_id === body.task_id);
   const matchedResult = matchedItem ? { ...matchedItem } as FastGateStatusResponse : result;
-  const rawStatus = matchedResult.status || matchedResult.task_status || matchedResult.data?.status || matchedResult.data?.task_status || matchedResult.result?.status || matchedResult.data?.result?.status;
+  const dataObject = Array.isArray(matchedResult.data) ? undefined : matchedResult.data;
+  const rawStatus = matchedResult.status || matchedResult.task_status || dataObject?.status || dataObject?.task_status || matchedResult.result?.status || dataObject?.result?.status;
   const videoUrl = extractVideoUrl(matchedResult);
   const normalizedStatus = videoUrl ? "succeeded" : normalizeStatus(rawStatus);
 
@@ -157,7 +179,7 @@ export async function POST(request: Request) {
   return NextResponse.json({
     code: 0,
     data: {
-      task_id: matchedResult.id || matchedResult.task_id || matchedResult.data?.id || matchedResult.data?.task_id || body.task_id,
+      task_id: matchedResult.id || matchedResult.task_id || dataObject?.id || dataObject?.task_id || body.task_id,
       status: normalizedStatus,
       video_url: videoUrl,
       error: extractError(matchedResult),
