@@ -265,6 +265,23 @@ zjljzn.ltd
 - 已验证上传后的图片公网 URL 返回 `200 OK`，由 Nginx 从 `/data/manjing/uploads` 直接提供。
 - 注意：素材记录目前仍主要在前端/localStorage，上传文件已是真实服务器文件；下一步需要把素材元数据写入 PostgreSQL。
 
+2026-07-05 备案期间临时 IP 测试模式：
+
+- `console.manjingstudio.com` 访问被云厂商引导到 `webblock.volcengine.com`，HTTPS 公网握手也出现 reset；判断为大陆服务器未备案域名访问受限。
+- 备案完成前，生产临时使用 `http://118.196.44.191` 测试上传和生成链路。
+- 已新增 `AUTH_COOKIE_SECURE` 配置开关；默认生产仍使用 Secure cookie，服务器临时设置 `AUTH_COOKIE_SECURE=false` 以支持 HTTP IP 登录。
+- 服务器 `.env` 临时设置 `ASSET_PUBLIC_BASE_URL=http://118.196.44.191`，因此上传素材返回 IP 形式 URL。
+- Nginx 已恢复 IP 的 80 端口入口，`/uploads/` 仍映射到 `/data/manjing/uploads/`。
+- 已验证：
+  - `http://118.196.44.191/` 返回 `200 OK`。
+  - `POST /api/auth/login` 返回 `200`，Set-Cookie 不带 `Secure`。
+  - `POST /api/assets/upload` 返回 `http://118.196.44.191/uploads/...`。
+  - 上传图片 URL 返回 `200 OK`。
+- 备案完成后需要切回：
+  - `ASSET_PUBLIC_BASE_URL=https://console.manjingstudio.com`
+  - `AUTH_COOKIE_SECURE=true` 或删除该环境变量
+  - 让正式入口使用 `https://console.manjingstudio.com`
+
 ## 已完成的重要修复
 
 - 登录与本地 PostgreSQL/Prisma 账号体系已接入。
