@@ -1,22 +1,11 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ProjectListSection } from "./components/ProjectListSection";
+import { ProjectOverviewSection } from "./components/ProjectOverviewSection";
+import { Sidebar } from "./components/Sidebar";
+import { ApiProfile, AppState, AspectRatio, ImageQuality, LibraryFilter, MaterialAsset, MaterialKind, MaterialRole, MemberRole, ProfileSection, Project, ProjectStates, Shot, ShotStatus, TaskStatus, VideoAsset, VideoTask, VisualAsset, WorkspaceSection } from "./components/types";
 
-type ShotStatus = "pending" | "running" | "done" | "failed";
-type TaskStatus = "pending" | "running" | "done" | "failed";
-type MaterialKind = "image" | "video" | "audio" | "sd2";
-type MaterialRole = "reference_image" | "first_frame" | "last_frame" | "reference_video" | "reference_audio";
-type ImageQuality = "auto" | "high" | "medium" | "low";
-type AspectRatio = "1:1" | "3:2" | "2:3" | "4:3" | "3:4" | "16:9" | "9:16" | "auto";
-type LibraryFilter = "all" | "text" | "image" | "video";
-
-type Project = { id: number; name: string; type: string; script: string };
-type Shot = { id: number; title: string; prompt: string; ratio: string; duration: number; status: ShotStatus; resolution?: "480p" | "720p" | "1080p"; width?: number; height?: number };
-type VideoTask = { id: string; shotId: number; shotTitle: string; provider: string; status: TaskStatus; result: string; providerTaskId?: string };
-type VideoAsset = { id: number; shotId: number; title: string; meta: string; gradient: string; videoUrl?: string; providerTaskId?: string };
-type MaterialAsset = { id: number; name: string; url: string; kind: MaterialKind; role: MaterialRole; previewUrl?: string; seedanceAssetUrl?: string; reviewedAssetUrl?: string };
-type AppState = { project: Project; shots: Shot[]; tasks: VideoTask[]; assets: VideoAsset[]; materials: MaterialAsset[]; assetGroupId?: string | number };
-type ProjectStates = Record<number, AppState>;
 type AuthUser = {
   id: string;
   account: string;
@@ -28,27 +17,8 @@ type AuthUser = {
   email?: string;
   phone?: string;
   language?: string;
-  apiKeys?: { id: string; name: string; value: string; createdAt: number }[];
 };
 type AuthUsers = Record<string, AuthUser>;
-type MemberRole = "super_admin" | "tenant_admin" | "user";
-type ProfileSection = "basic" | "security" | "api";
-type WorkspaceSection = "project-home" | "overview" | "script" | "shots" | "image-workbench" | "material-assets" | "tasks" | "generated-videos" | "assets" | "members" | "channel-management" | "profile";
-type ApiProfile = { id: string; name: string; baseUrl: string; apiKey?: string; model?: string; videoModels: string[]; imageModels: string[]; concurrencyLimit?: number; active: boolean; createdAt: number; hasApiKey?: boolean };
-type VisualAsset = {
-  id: string;
-  asset_url: string;
-  asset_name: string;
-  类型: string;
-  同步状态: string;
-  失败原因: string;
-  资产状态: string;
-  所属组: string;
-  group_id: string;
-  创建时间: string;
-  操作: string[];
-  原始URL: string;
-};
 
 const STORAGE_KEY = "manjing-video-mvp";
 const AUTH_STORAGE_KEY = "manjing-video-auth";
@@ -57,9 +27,10 @@ const API_PROFILE_STORAGE_KEY = "manjing-video-api-profiles";
 const ACTIVE_API_PROFILE_STORAGE_KEY = "manjing-video-active-api-profile";
 const DEFAULT_ASSET_GROUP_ID = "181862014778343444";
 const defaultApiProfiles: ApiProfile[] = [];
+const PROJECT_TYPES = ["AI 漫剧", "AI 真人剧"] as const;
 
 const seedState: AppState = {
-  project: { id: 1, name: "短剧团队 Demo", type: "都市短剧", script: "女主带着关键合同来到男主公司，两人在会议室正面对峙，揭开三年前误会的真相。" },
+  project: { id: 1, name: "短剧团队 Demo", type: "AI 真人剧", script: "女主带着关键合同来到男主公司，两人在会议室正面对峙，揭开三年前误会的真相。" },
   shots: [
     { id: 1, title: "女主入场", prompt: "女主推门进入办公室，灯光偏冷，镜头缓慢推进。", ratio: "9:16 竖屏短剧", duration: 5, status: "pending" },
     { id: 2, title: "男主反应", prompt: "男主抬头看向门口，表情从惊讶转为克制。", ratio: "9:16 竖屏短剧", duration: 4, status: "pending" }
@@ -70,7 +41,7 @@ const seedState: AppState = {
 };
 
 const demo2State: AppState = {
-  project: { id: 2, name: "demo2", type: "测试项目", script: "用于保留第二个演示项目，可切换后继续添加剧本、视频和素材。" },
+  project: { id: 2, name: "demo2", type: "AI 漫剧", script: "用于保留第二个演示项目，可切换后继续添加剧本、视频和素材。" },
   shots: [],
   tasks: [],
   assets: [],
@@ -222,8 +193,10 @@ export default function Home() {
   const [projects, setProjects] = useState<Project[]>(defaultProjects);
   const [currentProjectId, setCurrentProjectId] = useState(seedState.project.id);
   const [storageReady, setStorageReady] = useState(false);
-  const [activeSection, setActiveSection] = useState<WorkspaceSection>("project-home");
+  const [activeSection, setActiveSection] = useState<WorkspaceSection>("overview");
   const [projectModalOpen, setProjectModalOpen] = useState(false);
+  const [deleteProjectTarget, setDeleteProjectTarget] = useState<Project | null>(null);
+  const [deleteProjectName, setDeleteProjectName] = useState("");
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
   const [scriptModalOpen, setScriptModalOpen] = useState(false);
   const [batchModalOpen, setBatchModalOpen] = useState(false);
@@ -451,7 +424,7 @@ export default function Home() {
   async function loadLizhenAssets() {
     try {
       setIsLoadingLizhenAssets(true);
-      setLizhenAssetMessage("正在同步外接资产库...");
+      setLizhenAssetMessage("正在同步外接资产...");
       const response = await fetch(`/api/assets?group_id=${DEFAULT_ASSET_GROUP_ID}&group_name=user_216&page=1&page_size=50`);
       const result = await response.json();
       if (!response.ok || result.code !== 0) throw new Error(result.message || "加载外接资产失败");
@@ -535,10 +508,21 @@ export default function Home() {
     const total = state.shots.length;
     const done = state.shots.filter(shot => shot.status === "done").length;
     const running = state.shots.some(shot => shot.status === "running");
+    const failed = state.shots.filter(shot => shot.status === "failed").length;
     const percent = total ? Math.round((done / total) * 100) : 0;
     const totalDuration = state.shots.reduce((sum, shot) => sum + Number(shot.duration || 0), 0);
-    return { total, done, running, percent, totalDuration };
-  }, [state.shots]);
+    const completedAssets = state.assets.filter(asset => asset.videoUrl).length;
+    const runningTasks = state.tasks.filter(task => task.status === "running" || task.status === "pending").length;
+    const failedTasks = state.tasks.filter(task => task.status === "failed").length;
+    return { total, done, failed, running, percent, totalDuration, completedAssets, runningTasks, failedTasks };
+  }, [state.shots, state.tasks, state.assets]);
+
+  const overviewNextAction = useMemo(() => {
+    if (!state.project.script.trim()) return { label: "导入剧本", section: "script" as WorkspaceSection, description: "先补齐剧本内容，后续才能拆分分镜并进入视频生成。" };
+    if (!state.shots.length) return { label: "创建分镜", section: "shots" as WorkspaceSection, description: "基于剧本创建分镜，明确画面、时长和比例。" };
+    if (stats.done < stats.total) return { label: "继续生成视频", section: "shots" as WorkspaceSection, description: "还有分镜没有可用视频，继续提交或同步生成记录。" };
+    return { label: "查看生成记录", section: "tasks" as WorkspaceSection, description: "当前分镜已全部完成，可以在生成记录里集中预览和下载视频。" };
+  }, [state.project.script, state.shots.length, stats.done, stats.total]);
 
   function sectionStyle(section: WorkspaceSection) {
     return { display: activeSection === section ? "block" : "none" } as const;
@@ -578,6 +562,40 @@ export default function Home() {
     setSelectedLizhenAssetIds([]);
     setGeneratedImages([]);
     setProjectModalOpen(false);
+  }
+
+  function openDeleteProject(project: Project) {
+    if (projects.length <= 1) {
+      alert("至少需要保留一个项目。");
+      return;
+    }
+    setDeleteProjectTarget(project);
+    setDeleteProjectName("");
+  }
+
+  function deleteProject() {
+    if (!deleteProjectTarget) return;
+    if (deleteProjectName.trim() !== deleteProjectTarget.name) {
+      alert("请输入完整项目名称后再删除。");
+      return;
+    }
+    const nextProjects = projects.filter(project => project.id !== deleteProjectTarget.id);
+    const nextProjectStates = { ...projectStates };
+    delete nextProjectStates[deleteProjectTarget.id];
+    const nextCurrentProject = deleteProjectTarget.id === currentProjectId ? nextProjects[0] : projects.find(project => project.id === currentProjectId) || nextProjects[0];
+    const nextState = nextProjectStates[nextCurrentProject.id] || createBlankProject(nextCurrentProject.name, nextCurrentProject.type);
+    setProjects(nextProjects);
+    setProjectStates(nextProjectStates);
+    setCurrentProjectId(nextCurrentProject.id);
+    setState(nextState);
+    setScriptInput(nextState.project.script);
+    setSelectedMaterialIds([]);
+    setSelectedLizhenAssetIds([]);
+    setGeneratedImages([]);
+    setDeleteProjectTarget(null);
+    setDeleteProjectName("");
+    persistWorkspace(nextState, nextProjectStates, nextProjects, nextCurrentProject.id);
+    setUserActionMessage(`项目“${deleteProjectTarget.name}”已删除。`);
   }
 
   function switchProject(project: Project) {
@@ -824,15 +842,6 @@ export default function Home() {
     setUserActionMessage("个人信息已更新。");
   }
 
-  function createApiKey() {
-    setUserActionMessage("个人 API Key 管理会在账号体系稳定后接入服务端存储。");
-  }
-
-  function deleteApiKey(id: string) {
-    void id;
-    setUserActionMessage("个人 API Key 管理会在账号体系稳定后接入服务端存储。");
-  }
-
   function inferApiProfileDraft(baseUrlValue: string, apiKeyValue: string) {
     const normalizedUrl = baseUrlValue.trim().toLowerCase();
     const normalizedKey = apiKeyValue.trim().toLowerCase();
@@ -890,7 +899,7 @@ export default function Home() {
     const imageModels = Array.from(new Set(apiProfileImageModels.split(/\r?\n|,/).map(item => item.trim()).filter(Boolean)));
     const concurrencyLimit = Math.max(1, Math.min(50, Number(apiProfileConcurrencyLimit || 1)));
     const editingProfile = !addingApiProfile ? apiProfiles.find(profile => profile.id === editingApiProfileId) : undefined;
-    if (!name || !baseUrl || (!apiKey && !editingProfile?.hasApiKey) || (!videoModels.length && !imageModels.length)) return alert("请完整填写服务名称、Base URL、API Key，并至少配置一个视频或图片模型 ID。编辑已有配置时 API Key 可留空。");
+    if (!name || !baseUrl || (!apiKey && !editingProfile?.hasApiKey) || (!videoModels.length && !imageModels.length)) return alert("请完整填写服务名称、Base URL、访问凭证，并至少配置一个视频或图片模型 ID。编辑已有配置时访问凭证可留空。");
     try {
       const response = await fetch("/api/api-profiles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: editingProfile?.id, name, baseUrl, apiKey, videoModels, imageModels, concurrencyLimit, active: editingProfile?.active ?? apiProfiles.length === 0 }) });
       const result = await response.json();
@@ -908,7 +917,7 @@ export default function Home() {
       setSelectedVideoModel(videoModels[0] || selectedVideoModel);
       setImageModel(imageModels[0] || imageModel);
       if (nextActiveId) window.localStorage.setItem(ACTIVE_API_PROFILE_STORAGE_KEY, nextActiveId);
-      setUserActionMessage(`${result.updated ? "已更新" : "已保存"}模型渠道：${name}。API Key 已隐藏保存。`);
+      setUserActionMessage(result.updated ? "配置已更新。" : "配置已保存。");
     } catch (error) {
       setUserActionMessage(error instanceof Error ? error.message : "保存模型渠道失败");
     }
@@ -929,7 +938,7 @@ export default function Home() {
       setImageModel(target.imageModels[0] || imageModel);
       writeApiProfiles(next);
       window.localStorage.setItem(ACTIVE_API_PROFILE_STORAGE_KEY, id);
-      setUserActionMessage(`当前模型渠道已切换为：${target.name}。`);
+      setUserActionMessage("配置已切换。");
     } catch (error) {
       setUserActionMessage(error instanceof Error ? error.message : "设置当前模型渠道失败");
     }
@@ -950,7 +959,7 @@ export default function Home() {
       writeApiProfiles(normalized);
       if (nextActiveId) window.localStorage.setItem(ACTIVE_API_PROFILE_STORAGE_KEY, nextActiveId);
       else window.localStorage.removeItem(ACTIVE_API_PROFILE_STORAGE_KEY);
-      setUserActionMessage("已删除模型渠道。");
+      setUserActionMessage("配置已删除。");
     } catch (error) {
       setUserActionMessage(error instanceof Error ? error.message : "删除模型渠道失败");
     }
@@ -990,7 +999,7 @@ export default function Home() {
     }
 
     try {
-      setMaterialMessage("素材已加入漫镜，正在自动上传到外接资产库...");
+      setMaterialMessage("素材已加入漫镜，正在登记到外接资产...");
       const groupId = await ensureAssetGroup();
       const response = await fetch("/api/assets", {
         method: "POST",
@@ -998,9 +1007,9 @@ export default function Home() {
         body: JSON.stringify({ group_id: groupId, url: material.url, asset_name: material.name, asset_type: assetTypeOf(material.kind) })
       });
       const result = await response.json();
-      if (!response.ok || result.code !== 0 || !result.data?.asset_url) throw new Error(result.message || "上传外接资产库失败");
+      if (!response.ok || result.code !== 0 || !result.data?.asset_url) throw new Error(result.message || "登记外接资产失败");
       setState(prev => ({ ...prev, materials: prev.materials.map(item => item.id === materialId ? { ...item, seedanceAssetUrl: result.data.asset_url } : item) }));
-      setMaterialMessage(`素材已上传到外接资产库：${result.data.asset_url}。OpenAPI 创建资产默认可用，后续生成视频会自动调用它。`);
+      setMaterialMessage("素材已登记到外接资产，可用于后续视频生成。");
     } catch (error) {
       setMaterialMessage(error instanceof Error ? `素材已加入漫镜，但上传外接资产失败：${error.message}` : "素材已加入漫镜，但上传外接资产失败");
     }
@@ -1020,11 +1029,11 @@ export default function Home() {
   async function registerMaterialToSeedance(materialId: number) {
     const material = state.materials.find(item => item.id === materialId);
     if (!material?.url) {
-      alert("该素材没有公网 URL，无法登记到 Seedance 资产库。");
+      alert("该素材没有公网 URL，无法登记为外接资产。");
       return;
     }
     try {
-      setMaterialMessage("正在登记素材到 Seedance 资产库...");
+      setMaterialMessage("正在登记素材到外接资产...");
       const groupId = await ensureAssetGroup();
       const response = await fetch("/api/assets", {
         method: "POST",
@@ -1034,7 +1043,7 @@ export default function Home() {
       const result = await response.json();
       if (!response.ok || result.code !== 0 || !result.data?.asset_url) throw new Error(result.message || "登记素材失败");
       setState(prev => ({ ...prev, materials: prev.materials.map(item => item.id === materialId ? { ...item, seedanceAssetUrl: result.data.asset_url } : item) }));
-      setMaterialMessage(`素材已上传到外接资产库：${result.data.asset_url}`);
+      setMaterialMessage("素材已登记到外接资产。");
     } catch (error) {
       setMaterialMessage(error instanceof Error ? error.message : "登记素材失败");
     }
@@ -1102,30 +1111,27 @@ export default function Home() {
     const localTaskId = `MV-${String(Date.now()).slice(-6)}`;
     const localOnlyMaterials = state.materials.filter(item => selectedMaterialIds.includes(item.id) && !materialApiUrl(item));
     if (localOnlyMaterials.length) {
-      setMaterialMessage(`已选择 ${localOnlyMaterials.length} 个仅本地预览素材，真实 API 无法读取：${localOnlyMaterials.map(item => item.name).join("、")}。请改用公网 URL 或已登记 asset:// 素材。`);
-      alert("你 @ 的图片里有本地上传素材。浏览器本地文件不会上传到视频 API，真实生成不会使用这些图片。请先填写公网 URL 或使用已登记 asset:// 素材。");
+      setMaterialMessage(`已选择 ${localOnlyMaterials.length} 个仅本地预览素材，无法用于生成：${localOnlyMaterials.map(item => item.name).join("、")}。请改用公网 URL 或已登记素材。`);
+      alert("你 @ 的图片里有本地上传素材。本地文件不会随任务提交，请先填写公网 URL 或使用已登记素材。");
       return;
     }
 
     if (omniReferenceEnabled && !omniReferenceItems.length) {
-      alert("全能参考模式需要先 @ 选择至少 1 个真实可用参考素材，或在外接资产库勾选 asset:// 资产。");
+      alert("全能参考模式需要先 @ 选择至少 1 个可用参考素材，或在外接资产中勾选已登记素材。");
       return;
     }
 
     const concurrencyLimit = Math.max(1, Number(activeApiProfile?.concurrencyLimit || 1));
     const runningTaskCount = state.tasks.filter(task => task.status === "running").length;
     if (runningTaskCount >= concurrencyLimit) {
-      alert(`当前渠道并发数为 ${concurrencyLimit}，已有 ${runningTaskCount} 个任务生成中。请等待任务完成后再提交。`);
+      alert(`当前已有 ${runningTaskCount} 个任务生成中，请等待任务完成后再提交。`);
       return;
     }
 
     const selectedAssetCount = state.materials.filter(item => selectedMaterialIds.includes(item.id) && materialApiUrl(item)).length + selectedLizhenAssetIds.length;
     const taskApiProfile = publicApiProfile(activeApiProfile);
-    const taskProviderName = activeApiProfile?.name || "未选择渠道";
-    const taskProviderBaseUrl = taskApiProfile?.baseUrl || "";
     const modelForGeneration = selectedVideoModel || activeApiProfile?.videoModels[0] || activeApiProfile?.model || "";
-    const taskChannelText = taskProviderBaseUrl ? `${taskProviderName}（${taskProviderBaseUrl}）` : taskProviderName;
-    const task: VideoTask = { id: localTaskId, shotId: shot.id, shotTitle: shot.title, provider: taskProviderName, status: "running", result: selectedAssetCount ? `任务已提交，使用接口：${taskChannelText}，模型：${modelForGeneration || "未选择模型"}，${omniReferenceEnabled ? "全能参考模式已启用，" : ""}正在调用 ${selectedAssetCount} 个真实可用素材` : `任务已提交，使用接口：${taskChannelText}，模型：${modelForGeneration || "未选择模型"}` };
+    const task: VideoTask = { id: localTaskId, shotId: shot.id, shotTitle: shot.title, provider: "视频生成", status: "running", result: selectedAssetCount ? `任务已提交，${omniReferenceEnabled ? "全能参考模式已启用，" : ""}正在使用 ${selectedAssetCount} 个参考素材生成视频。` : "任务已提交，正在生成视频。" };
 
     setState(prev => ({
       ...prev,
@@ -1145,10 +1151,7 @@ export default function Home() {
       if (!response.ok || result.code !== 0 || !result.data?.task_id) throw new Error(result.message || "创建视频任务失败");
       const providerTaskId = result.data.task_id as string;
       const selectedLizhenNames = lizhenAssets.filter(item => selectedLizhenAssetIds.includes(item.id)).map(item => item.asset_name).join("、");
-      const actualProvider = result.data.provider || taskProviderName;
-      const actualBaseUrl = result.data.base_url || taskProviderBaseUrl;
-      const actualModel = result.data.model || modelForGeneration;
-      setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, provider: actualProvider, providerTaskId, result: `任务已提交：${providerTaskId}｜接口：${actualProvider}（${actualBaseUrl}）｜模型：${actualModel}${selectedLizhenNames ? `｜参考素材：${selectedLizhenNames}` : ""}` } : item) }));
+      setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, provider: "视频生成", providerTaskId, result: `任务已提交：${providerTaskId}${selectedLizhenNames ? `｜参考素材：${selectedLizhenNames}` : ""}` } : item) }));
       pollGenerationStatus(shotId, localTaskId, providerTaskId, activeApiProfile?.id, taskApiProfile);
     } catch (error) {
       markGenerationFailed(shotId, localTaskId, error instanceof Error ? error.message : "创建视频任务失败");
@@ -1194,7 +1197,7 @@ export default function Home() {
       if (!shot) return prev;
       const index = prev.shots.findIndex(item => item.id === shotId);
       const existingTask = prev.tasks.find(item => item.id === localTaskId);
-      const asset: VideoAsset = { id: Date.now(), shotId, title: `镜头 #${String(index + 1).padStart(2, "0")} 可用片段`, meta: `${realDuration || shot.duration}秒 / ${shot.ratio.split(" ")[0]} / Seedance 2.0`, gradient: randomGradient(), videoUrl, providerTaskId: providerTaskId || existingTask?.providerTaskId };
+      const asset: VideoAsset = { id: Date.now(), shotId, title: `镜头 #${String(index + 1).padStart(2, "0")} 可用片段`, meta: `${realDuration || shot.duration}秒 / ${shot.ratio.split(" ")[0]}`, gradient: randomGradient(), videoUrl, providerTaskId: providerTaskId || existingTask?.providerTaskId };
       return { ...prev, shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "done" } : item), tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, status: "done", result: "已生成，可预览下载" } : item), assets: [asset, ...prev.assets.filter(item => item.shotId !== shotId)] };
     });
   }
@@ -1250,7 +1253,7 @@ export default function Home() {
     const tasks = state.tasks.filter(task => task.providerTaskId && !task.id.startsWith("imported-"));
     try {
       for (const task of tasks) await refreshTaskStatus(task);
-      setUserActionMessage(tasks.length ? `已同步 ${tasks.length} 个生成任务。` : "没有可同步的生成任务。");
+      setUserActionMessage(tasks.length ? `已同步 ${tasks.length} 条生成记录。` : "没有可同步的生成记录。");
     } catch (error) {
       setUserActionMessage(error instanceof Error ? error.message : "同步本页任务状态失败");
     }
@@ -1278,7 +1281,7 @@ export default function Home() {
         assets: prev.assets.filter(asset => asset.providerTaskId !== target.providerTaskId)
       };
     });
-    setUserActionMessage("生成任务已删除，关联分镜已恢复为待生成。");
+    setUserActionMessage("生成记录已删除，关联分镜已恢复为待生成。");
   }
 
   function deleteVideoAsset(assetId: number) {
@@ -1322,7 +1325,6 @@ export default function Home() {
   const currentUserCanManageMembers = canManageMembers(currentUserRole);
   const currentUserCanManageApiProfiles = canManageApiProfiles(currentUserRole);
   const memberRoleOptions = assignableRoles(currentUserRole);
-  const currentApiKeys = currentUserRecord?.apiKeys || [];
   const activeApiProfile = apiProfiles.find(item => item.id === activeApiProfileId) || apiProfiles.find(item => item.active) || apiProfiles[0];
   const activeVideoModels = useMemo(() => activeApiProfile?.videoModels?.length ? activeApiProfile.videoModels : [activeApiProfile?.model || "doubao-seedance-2-0-fast-260128"].filter(Boolean), [activeApiProfile]);
   const activeImageModels = useMemo(() => activeApiProfile?.imageModels?.length ? activeApiProfile.imageModels : ["gpt-image-2", "seedream-3.0", "stable-image-ultra", "flux-pro"], [activeApiProfile]);
@@ -1351,7 +1353,7 @@ export default function Home() {
   }
 
   function openPromptDialog() {
-    setPromptDraft(shotPrompt || "请基于当前剧本和分镜，生成一个适合 Seedance 2.0 的中文/英文视频提示词。");
+    setPromptDraft(shotPrompt || "请基于当前剧本和分镜，生成一个适合视频生成的中文/英文提示词。");
     setPromptModalOpen(true);
   }
 
@@ -1539,85 +1541,40 @@ export default function Home() {
 
   return (
     <div className="app">
-      <aside>
-        <div className="brand"><div className="logo">漫</div>漫镜视频</div>
-        <button className="workspace" onClick={() => setProjectSwitcherOpen(open => !open)}>
-          <small>当前项目 · 点击切换</small>
-          <strong>{state.project.name}</strong>
-          <span>{state.project.type} ▾</span>
-        </button>
-        {projectSwitcherOpen && <div className="project-list project-list-floating">
-          <small>选择项目</small>
-          {projects.map(project => (
-            <button key={project.id} className={project.id === currentProjectId ? "active" : ""} onClick={() => switchProject(project)}>
-              <span>{project.name}</span>
-              <em>{project.type}</em>
-            </button>
-          ))}
-        </div>}
-        <nav className="workspace-nav">
-          <div className="nav-group-label">工作台</div>
-          {([
-            ["project-home", "⌂ 项目首页"],
-            ["overview", "▦ 项目概览"],
-            ["script", "▤ 剧本工作台"],
-            ["image-workbench", "▧ 生图工作台"],
-            ["shots", "▥ 视频工作台"],
-            ["material-assets", "◈ 项目素材库"],
-            ["tasks", "◎ 生成任务"],
-            ["generated-videos", "◉ 已生成视频"],
-            ["assets", "◫ 外接资产库"]
-          ] as [WorkspaceSection, string][]).map(([section, label]) => (
-            <button key={section} className={activeSection === section ? "active" : ""} onClick={() => setActiveSection(section)}>{label}</button>
-          ))}
-          {(currentUserCanManageMembers || currentUserCanManageApiProfiles) && <div className="nav-group-label">设置与管理</div>}
-          {([
-            ...(currentUserCanManageMembers ? [["members", "▤ 人员管理"] as [WorkspaceSection, string]] : []),
-            ...(currentUserCanManageApiProfiles ? [["channel-management", "◎ 模型渠道管理"] as [WorkspaceSection, string]] : [])
-          ] as [WorkspaceSection, string][]).map(([section, label]) => (
-            <button key={section} className={activeSection === section ? "active" : ""} onClick={() => setActiveSection(section)}>{label}</button>
-          ))}
-        </nav>
-      </aside>
+      <Sidebar
+        activeSection={activeSection}
+        currentProjectId={currentProjectId}
+        currentProject={state.project}
+        projects={projects}
+        projectSwitcherOpen={projectSwitcherOpen}
+        canManageMembers={currentUserCanManageMembers}
+        canManageApiProfiles={currentUserCanManageApiProfiles}
+        onToggleProjectSwitcher={() => setProjectSwitcherOpen(open => !open)}
+        onSwitchProject={switchProject}
+        onSelectSection={setActiveSection}
+      />
 
       <main>
-        <div className="topbar"><div className="crumb">漫镜视频 / AI 短剧生产平台</div><div className="actions"><button className="btn-secondary" onClick={refreshAllTaskStatuses}>同步本页任务状态</button><div className="user-menu-wrap"><button className="user-chip" onClick={() => setUserMenuOpen(open => !open)}><strong>{currentDisplayName}</strong><span>{roleLabel(currentUserRole)}</span></button>{userMenuOpen && <div className="user-menu"><strong>{currentDisplayName}</strong><small>{currentUserRecord?.account || "-"}</small><small>{roleLabel(currentUserRole)}</small><button onClick={() => { setActiveSection("profile"); setProfileSection("basic"); setMemberNameDraft(currentDisplayName); setUserMenuOpen(false); }}>个人中心</button><button onClick={() => { setActiveSection("assets"); setUserMenuOpen(false); }}>我的资产</button><button onClick={switchLanguage}>语言 · {languageLabel}</button><button onClick={logout} className="danger">退出登录</button></div>}</div></div></div>
+        <div className="topbar"><div className="crumb">漫镜视频 / AI 短剧生产平台</div><div className="actions"><button className="btn-secondary" onClick={refreshAllTaskStatuses}>同步生成记录</button><div className="user-menu-wrap"><button className="user-chip" onClick={() => setUserMenuOpen(open => !open)}><strong>{currentDisplayName}</strong><span>{roleLabel(currentUserRole)}</span></button>{userMenuOpen && <div className="user-menu"><strong>{currentDisplayName}</strong><small>{currentUserRecord?.account || "-"}</small><small>{roleLabel(currentUserRole)}</small><button onClick={() => { setActiveSection("profile"); setProfileSection("basic"); setMemberNameDraft(currentDisplayName); setUserMenuOpen(false); }}>个人中心</button><button onClick={() => { setActiveSection("assets"); setUserMenuOpen(false); }}>我的资产</button><button onClick={switchLanguage}>语言 · {languageLabel}</button><button onClick={logout} className="danger">退出登录</button></div>}</div></div></div>
         {userActionMessage && <div className="action-toast">{userActionMessage}</div>}
-        {(["shots", "tasks", "generated-videos"] as WorkspaceSection[]).includes(activeSection) && <div className="notice">真实 API 说明<span>已接入 Seedance 2.0。文生视频可直接生成；图生/参考素材生成需要公网 URL 或登记后的 asset://id，本地文件仅支持页面预览。</span></div>}
-        <section id="project-home" className="project-home card" style={sectionStyle("project-home")}>
-          <div className="project-home-head">
-            <div><h2>项目首页</h2><p className="muted">选择一个项目进入编辑，或新建一个空白测试项目。</p></div>
-            <button className="btn-primary" onClick={() => { setProjectName(""); setProjectType("都市短剧"); setProjectModalOpen(true); }}>新建项目</button>
-          </div>
-          <div className="project-home-grid">
-            {projects.map(project => {
-              const itemState = projectStates[project.id];
-              return <button key={project.id} className={`project-home-card ${project.id === currentProjectId ? "active" : ""}`} onClick={() => switchProject(project)}>
-                <span>{project.id === currentProjectId ? "当前编辑" : "点击进入"}</span>
-                <strong>{project.name}</strong>
-                <em>{project.type}</em>
-                <small>{itemState?.shots.length || 0} 条分镜 · {itemState?.materials.length || 0} 个素材</small>
-              </button>;
-            })}
-          </div>
-        </section>
+        <ProjectListSection
+          currentProjectId={currentProjectId}
+          projects={projects}
+          projectStates={projectStates}
+          visible={activeSection === "project-home"}
+          onCreateProject={() => { setProjectName(""); setProjectType(PROJECT_TYPES[0]); setProjectModalOpen(true); }}
+          onSwitchProject={switchProject}
+          onDeleteProject={openDeleteProject}
+        />
 
-        <section id="overview" className="grid hero" style={sectionStyle("overview")}>
-          <div className="card project-card"><div><div className="pills"><span className="pill green">{stats.total === stats.done && stats.total > 0 ? "项目可交付" : "项目制作中"}</span><span className="pill">{stats.running ? "当前阶段：视频生成" : "当前阶段：分镜生成"}</span><span className="pill">面向：短剧团队</span></div><h1 className="big">{stats.percent}%</h1><p className="muted">{stats.total ? `已完成 ${stats.done} 条分镜视频生成，共 ${stats.total} 条分镜。` : "开始添加分镜后，系统会按已完成视频自动计算进度。"}</p><div className="progress"><b style={{ width: `${stats.percent}%` }} /></div></div><div className="delivery">项目可交付进度<strong>{stats.done}/{stats.total}</strong><p className="muted">按可用视频片段统计</p></div></div>
-          <div className="stats"><div className="stat"><span>可导出分镜</span><strong>{stats.done}/{stats.total}</strong></div><div className="stat"><span>视频总片段</span><strong>{stats.total}</strong></div><div className="stat"><span>已完成视频</span><strong>{stats.done}</strong></div><div className="stat"><span>预计总时长</span><strong>{stats.totalDuration}秒</strong></div></div>
-        </section>
-
-        <div style={sectionStyle("overview")}>
-          <h2>阶段进度</h2><p className="section-desc">每个阶段都围绕短剧团队从剧本到视频交付的主流程设计。</p>
-          <section className="grid steps"><div className="card step"><span className="status">{state.project.script ? "已完成" : "待开始"}</span><div className="step-icon" style={{ background: "#eef2ff", color: "var(--blue)" }}>▤</div><h3>内容准备</h3><strong>{state.project.script ? "完成" : "待开始"}</strong><p className="muted">导入项目大纲与基础设定。</p></div><div className="card step"><span className="status">{state.materials.length ? "进行中" : "待开始"}</span><div className="step-icon" style={{ background: "#eef2ff", color: "var(--primary)" }}>◈</div><h3>素材准备</h3><strong>{state.materials.length}个</strong><p className="muted">添加参考图、视频或音频。</p></div><div className="card step"><span className="status">{stats.running ? "进行中" : stats.done ? "已完成" : "待开始"}</span><div className="step-icon" style={{ background: "#f5f3ff", color: "var(--purple)" }}>◎</div><h3>视频生成</h3><strong>{stats.done}/{stats.total}</strong><p className="muted">调用 Seedance 2.0 真实任务。</p></div><div className="card step"><span className="status">{stats.done ? "进行中" : "待开始"}</span><div className="step-icon" style={{ background: "#fff7ed", color: "var(--orange)" }}>◫</div><h3>资产筛选</h3><strong>{stats.done}个资产</strong><p className="muted">筛选可用片段并归档。</p></div><div className="card step"><span className="status">{stats.total && stats.done === stats.total ? "已就绪" : "待开始"}</span><div className="step-icon" style={{ background: "#eef2ff", color: "var(--primary)" }}>⇩</div><h3>交付导出</h3><strong>{stats.total && stats.done === stats.total ? "可导出" : "待开始"}</strong><p className="muted">下载真实生成视频。</p></div></section>
-          <section className="overview-dashboard">
-            <div className="overview-mini-card"><h3>△ 当前阻塞</h3><div className="soft-note">{stats.running ? "仍有视频任务生成中，请等待任务完成后再导出。" : "当前没有阻塞项，继续补齐剩余视频即可。"}</div></div>
-            <div className="overview-mini-card"><h3>⊙ 下一步建议</h3><div className="next-suggestion"><strong>{state.project.script ? "继续完善素材，再追踪交付" : "先导入内容，再开始追踪交付"}</strong><p className="muted">上传剧本后，系统才能生成分集并建立首页进度看板。</p><span>完成后首页会开始展示粗剪与真实视频进度。</span><button className="btn-primary btn-small" onClick={() => setActiveSection("script")}>前往剧本 →</button></div></div>
-            <div className="overview-delivery card"><div className="card-title-row"><div><h2>分集交付看板</h2><p className="muted">每集直接显示真实视频覆盖率、缺口数量和当前状态，不再用分镜完成度代替交付进度。</p></div><span className="source-pill internal">共 {stats.total} 集，已可导出 {stats.done} 集</span></div></div>
-            <div className="overview-trend card"><div className="card-title-row"><h2>活动趋势</h2><span className="muted">最近30天</span></div><div className="trend-chart">{Array.from({ length: 12 }).map((_, index) => <i key={index} style={{ height: `${20 + ((index + stats.done) % 5) * 18}px` }} />)}</div><div className="trend-axis"><span>5.17</span><span>5.23</span><span>5.29</span><span>6.4</span><span>6.10</span><span>6.14</span></div></div>
-            <div className="overview-collab card"><h2>协作总览</h2><p><strong>当前编辑中</strong><span>{currentDisplayName || "暂无人在编辑"}</span></p><p><strong>最近操作</strong><span>{state.tasks[0]?.result || "暂无操作记录"}</span></p></div>
-          </section>
-        </div>
+        <ProjectOverviewSection
+          active={activeSection === "overview"}
+          state={state}
+          stats={stats}
+          activeApiProfile={activeApiProfile}
+          nextAction={overviewNextAction}
+          onSelectSection={setActiveSection}
+        />
 
         <section className="card" style={sectionStyle("members")}>
           <div className="asset-workspace-head"><div><h2>人员管理</h2><p className="muted">系统管理员管理平台配置；管理员维护本租户成员；用户负责日常生产操作。</p></div><button className="btn-primary" onClick={openNewMemberEditor} disabled={!currentUserCanManageMembers}>新增人员</button></div>
@@ -1632,19 +1589,19 @@ export default function Home() {
 
         <section className="card" style={sectionStyle("channel-management")}>
           <div className="asset-workspace-head"><div><h2>模型渠道管理</h2><p className="muted">管理第三方中转或官方接口的调用渠道、模型 ID 和并发限制。</p></div><button className="btn-primary" onClick={openNewApiProfileEditor}>新增渠道</button></div>
-          {userActionMessage && <div className="api-active-banner">{userActionMessage}<small>{activeApiProfile?.name || ""}</small></div>}
-          <div className="table-wrap" style={{ marginTop: 14 }}><table className="table"><thead><tr><th>状态</th><th>渠道</th><th>Base URL</th><th>视频模型</th><th>图片模型</th><th>并发</th><th>Key</th><th>操作</th></tr></thead><tbody>{apiProfiles.length ? apiProfiles.map(profile => <tr key={profile.id}><td>{profile.id === activeApiProfileId ? <span className="tag done">当前使用</span> : <span className="tag pending">备用</span>}</td><td>{profile.name}</td><td><code>{profile.baseUrl}</code></td><td>{profile.videoModels.length}</td><td>{profile.imageModels.length}</td><td>{profile.concurrencyLimit || 1}</td><td><span className={profile.hasApiKey ? "tag done" : "tag pending"}>{profile.hasApiKey ? "已隐藏" : "未配置"}</span></td><td><div className="table-actions"><button onClick={() => openEditApiProfileEditor(profile)}>编辑</button>{profile.id !== activeApiProfileId && <button onClick={() => switchApiProfile(profile.id)}>设为当前</button>}<button className="danger" onClick={() => deleteApiProfile(profile.id)}>删除</button></div></td></tr>) : <tr><td colSpan={8}><div className="empty">暂无模型渠道，请新增渠道后再进行视频或图片生成。</div></td></tr>}</tbody></table></div>
+          {userActionMessage && <div className="api-active-banner">{userActionMessage}</div>}
+          <div className="table-wrap" style={{ marginTop: 14 }}><table className="table"><thead><tr><th>状态</th><th>渠道</th><th>Base URL</th><th>视频模型</th><th>图片模型</th><th>并发</th><th>操作</th></tr></thead><tbody>{apiProfiles.length ? apiProfiles.map(profile => <tr key={profile.id}><td>{profile.id === activeApiProfileId ? <span className="tag done">当前使用</span> : <span className="tag pending">备用</span>}</td><td>{profile.name}</td><td><code>{profile.baseUrl}</code></td><td>{profile.videoModels.length}</td><td>{profile.imageModels.length}</td><td>{profile.concurrencyLimit || 1}</td><td><div className="table-actions"><button onClick={() => openEditApiProfileEditor(profile)}>编辑</button>{profile.id !== activeApiProfileId && <button onClick={() => switchApiProfile(profile.id)}>设为当前</button>}<button className="danger" onClick={() => deleteApiProfile(profile.id)}>删除</button></div></td></tr>) : <tr><td colSpan={7}><div className="empty">暂无模型渠道，请新增渠道后再进行视频或图片生成。</div></td></tr>}</tbody></table></div>
           {apiProfileEditorOpen && <div className="api-profile-panel">
-            <div className="asset-workspace-head"><div><h2>{addingApiProfile ? "新增渠道" : "编辑渠道"}</h2><p className="muted">API Key 留空时会保留原密钥；视频和图片模型 ID 一行一个。</p></div><button className="btn-ghost btn-small" onClick={closeApiProfileEditor}>取消</button></div>
-            <div className="script-core-grid"><div><label>渠道名称</label><input value={apiProfileName} onChange={event => setApiProfileName(event.target.value)} /></div><div><label>API Base URL</label><input value={apiProfileBaseUrl} onChange={event => updateApiProfileDraft("baseUrl", event.target.value)} /></div><div><label>API Key</label><input type="password" autoComplete="new-password" value={apiProfileKey} onChange={event => updateApiProfileDraft("apiKey", event.target.value)} placeholder="保存后自动隐藏" /></div><div><label>并发数</label><input type="number" min={1} max={50} value={apiProfileConcurrencyLimit} onChange={event => setApiProfileConcurrencyLimit(Math.max(1, Math.min(50, Number(event.target.value) || 1)))} /></div></div>
+            <div className="asset-workspace-head"><div><h2>{addingApiProfile ? "新增渠道" : "编辑渠道"}</h2><p className="muted">访问凭证留空时会保留原配置；视频和图片模型 ID 一行一个。</p></div><button className="btn-ghost btn-small" onClick={closeApiProfileEditor}>取消</button></div>
+            <div className="script-core-grid"><div><label>渠道名称</label><input value={apiProfileName} onChange={event => setApiProfileName(event.target.value)} /></div><div><label>API Base URL</label><input value={apiProfileBaseUrl} onChange={event => updateApiProfileDraft("baseUrl", event.target.value)} /></div><div><label>访问凭证</label><input type="password" autoComplete="new-password" value={apiProfileKey} onChange={event => updateApiProfileDraft("apiKey", event.target.value)} placeholder="保存后不会明文展示" /></div><div><label>并发数</label><input type="number" min={1} max={50} value={apiProfileConcurrencyLimit} onChange={event => setApiProfileConcurrencyLimit(Math.max(1, Math.min(50, Number(event.target.value) || 1)))} /></div></div>
             <div className="script-core-grid"><div><label>视频模型 ID</label><textarea value={apiProfileVideoModels} onChange={event => setApiProfileVideoModels(event.target.value)} /></div><div><label>图片模型 ID</label><textarea value={apiProfileImageModels} onChange={event => setApiProfileImageModels(event.target.value)} /></div></div>
             <div className="actions"><button className="btn-primary" onClick={saveApiProfile}>保存渠道</button><button className="btn-ghost" onClick={closeApiProfileEditor}>取消</button></div>
           </div>}
         </section>
 
         <section className="profile-layout" style={sectionStyle("profile")}>
-          <aside className="profile-side"><div className="profile-user-card"><div className="profile-avatar">{avatarLabel}</div><strong>{currentDisplayName}</strong><span>{currentUserRecord?.account || "-"}</span><small>{roleLabel(currentUserRole)}</small></div><button className={profileSection === "basic" ? "active" : ""} onClick={() => setProfileSection("basic")}>基础信息</button><button className={profileSection === "security" ? "active" : ""} onClick={() => setProfileSection("security")}>账户安全</button><button className={profileSection === "api" ? "active" : ""} onClick={() => setProfileSection("api")}>API 密钥</button></aside>
-          <div className="profile-content">{profileSection === "basic" && <section className="card profile-panel"><h2 style={{ marginTop: 0 }}>基础信息</h2><p className="muted">您的个人资料信息</p><div className="profile-info-list"><div><span>账号</span><strong>{currentUserRecord?.account || "-"}</strong></div><div><span>邮箱</span><strong>{currentUserRecord?.email || "-"}</strong></div><div><span>创建时间</span><strong>{currentUserRecord?.createdAt ? new Date(currentUserRecord.createdAt).toLocaleDateString() : "-"}</strong></div><div><span>角色</span><strong>{roleLabel(currentUserRole)}</strong></div></div><div className="form" style={{ marginTop: 16 }}><div><label>显示名称</label><input value={memberNameDraft} onChange={event => setMemberNameDraft(event.target.value)} placeholder="输入新的显示名称" /></div><div className="actions"><button className="btn-primary" onClick={saveProfile}>修改个人信息</button></div></div></section>}{profileSection === "security" && <section className="card profile-panel"><h2 style={{ marginTop: 0 }}>账户安全</h2><p className="muted">管理您的安全设置</p><div className="security-list"><div><span>账户状态</span><strong className="ok">{currentUserRecord?.status === "active" ? "正常" : "停用"}</strong></div><div><span>重置密码</span><button className="btn-ghost" onClick={() => setPasswordModalOpen(true)}>修改密码</button></div></div></section>}{profileSection === "api" && <section className="card profile-panel"><div className="card-title-row"><div><h2 style={{ marginTop: 0 }}>API 密钥</h2><p className="muted">管理您的 API 访问密钥，用于通过 API 调用平台功能</p></div><button className="btn-primary" onClick={createApiKey}>+ 创建密钥</button></div>{currentApiKeys.length ? <div className="table-wrap"><table className="table"><thead><tr><th>名称</th><th>密钥</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{currentApiKeys.map(item => <tr key={item.id}><td>{item.name}</td><td><code>{item.value}</code></td><td>{new Date(item.createdAt).toLocaleDateString()}</td><td><button className="btn-danger btn-small" onClick={() => deleteApiKey(item.id)}>删除</button></td></tr>)}</tbody></table></div> : <div className="empty-result"><div className="empty-ico">⌘</div><strong>暂无 API 密钥</strong><p className="muted">个人 API Key 将在账号体系稳定后接入服务端存储。</p></div>}</section>}</div>
+          <aside className="profile-side"><div className="profile-user-card"><div className="profile-avatar">{avatarLabel}</div><strong>{currentDisplayName}</strong><span>{currentUserRecord?.account || "-"}</span><small>{roleLabel(currentUserRole)}</small></div><button className={profileSection === "basic" ? "active" : ""} onClick={() => setProfileSection("basic")}>基础信息</button><button className={profileSection === "security" ? "active" : ""} onClick={() => setProfileSection("security")}>账户安全</button></aside>
+          <div className="profile-content">{profileSection === "basic" && <section className="card profile-panel"><h2 style={{ marginTop: 0 }}>基础信息</h2><p className="muted">您的个人资料信息</p><div className="profile-info-list"><div><span>账号</span><strong>{currentUserRecord?.account || "-"}</strong></div><div><span>邮箱</span><strong>{currentUserRecord?.email || "-"}</strong></div><div><span>创建时间</span><strong>{currentUserRecord?.createdAt ? new Date(currentUserRecord.createdAt).toLocaleDateString() : "-"}</strong></div><div><span>角色</span><strong>{roleLabel(currentUserRole)}</strong></div></div><div className="form" style={{ marginTop: 16 }}><div><label>显示名称</label><input value={memberNameDraft} onChange={event => setMemberNameDraft(event.target.value)} placeholder="输入新的显示名称" /></div><div className="actions"><button className="btn-primary" onClick={saveProfile}>修改个人信息</button></div></div></section>}{profileSection === "security" && <section className="card profile-panel"><h2 style={{ marginTop: 0 }}>账户安全</h2><p className="muted">管理您的安全设置</p><div className="security-list"><div><span>账户状态</span><strong className="ok">{currentUserRecord?.status === "active" ? "正常" : "停用"}</strong></div><div><span>重置密码</span><button className="btn-ghost" onClick={() => setPasswordModalOpen(true)}>修改密码</button></div></div></section>}</div>
         </section>
 
         <section id="script" className="card script-workbench" style={sectionStyle("script")}>
@@ -1670,14 +1627,14 @@ export default function Home() {
                 <h2>视频工作台</h2>
                 <p>输入完整视频提示词，使用 @ 绑定素材人物，点击右侧箭头生成视频。</p>
               </div>
-              <button className="btn-ghost btn-small" onClick={() => setBatchModalOpen(true)}>批量导入提示词</button>
+              <button className="btn-ghost btn-small" onClick={() => setBatchModalOpen(true)}>提示词拆分分镜</button>
             </div>
             <div className="video-selected-assets">
               {state.materials.filter(material => selectedMaterialIds.includes(material.id) && material.kind === "image").slice(0, 5).map(material => <div key={material.id} className="video-selected-thumb"><button className="selected-thumb-remove" onClick={() => toggleMaterial(material.id)}>×</button>{material.previewUrl ? <img src={material.previewUrl} alt={material.name} /> : <span>{material.name.slice(0, 1)}</span>}</div>)}
               <button className="video-add-ref" onClick={() => setMentionMenuOpen(open => !open)}>+</button>
             </div>
             <textarea className="video-prompt-editor" value={shotPrompt} onChange={event => setShotPrompt(event.target.value)} placeholder="描述视频内容，可点击 @ 选择素材库图片并插入人物名称，例如：@林凡 在教室门口回头，镜头缓慢推进。" />
-            {omniReferenceEnabled && <div className="omni-reference-panel"><div className="omni-reference-head"><span className="live-dot" /><strong>全能参考模式已开启</strong><em>{omniReferenceItems.length ? `${omniReferenceItems.length} 个真实参考素材将随视频任务提交` : "等待绑定真实参考素材"}</em></div><div className="omni-reference-strip">{omniReferenceItems.length ? omniReferenceItems.map((item, index) => <div className="omni-ref-chip" key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={item.name} /> : <span>{String(item.kind).slice(0, 2)}</span>}<b>参考{index + 1}</b><small>{item.name}</small></div>) : <div className="omni-empty">请点击 @ 选择公网/asset:// 素材，或到外接资产库勾选真实资产。</div>}</div>{localOnlyReferences.length > 0 && <p className="omni-warning">已忽略 {localOnlyReferences.length} 个本地预览素材；本地文件无法被真实 API 读取。</p>}</div>}
+            {omniReferenceEnabled && <div className="omni-reference-panel"><div className="omni-reference-head"><span className="live-dot" /><strong>全能参考模式已开启</strong><em>{omniReferenceItems.length ? `${omniReferenceItems.length} 个参考素材将随任务提交` : "等待绑定参考素材"}</em></div><div className="omni-reference-strip">{omniReferenceItems.length ? omniReferenceItems.map((item, index) => <div className="omni-ref-chip" key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={item.name} /> : <span>{String(item.kind).slice(0, 2)}</span>}<b>参考{index + 1}</b><small>{item.name}</small></div>) : <div className="omni-empty">请点击 @ 选择公网素材，或到外接资产中勾选已登记素材。</div>}</div>{localOnlyReferences.length > 0 && <p className="omni-warning">已忽略 {localOnlyReferences.length} 个本地预览素材；本地文件无法随任务提交。</p>}</div>}
             {mentionMenuOpen && <div className="video-mention-popover"><div className="mention-panel-head"><strong>可能@的内容</strong><span>点击素材插入到提示词；仅公网 URL 或 asset:// 会真实传给 API</span></div><div className="mention-panel-list">{mentionMaterials.length ? mentionMaterials.map(material => { const usable = Boolean(material.reviewedAssetUrl || material.seedanceAssetUrl || material.url); const selected = selectedMaterialIds.includes(material.id); return <div key={material.id} className={`mention-item ${selected ? "selected" : ""}`}><button onClick={() => insertMention(material)}><div className="mention-thumb">{material.previewUrl ? <img src={material.previewUrl} alt={material.name} /> : <span>@</span>}</div><div className="mention-meta"><strong>{material.name}</strong><span>{usable ? "可用于真实生成" : "仅本地预览，真实生成不会使用"}</span></div></button><button className="btn-ghost btn-small" onClick={() => toggleMaterial(material.id)}>{selected ? "取消@" : "选择"}</button><button className="btn-danger btn-small" onClick={() => deleteMaterial(material.id)}>删除</button></div>; }) : <div className="mention-empty">素材库里还没有图片素材，请先上传图片。</div>}</div></div>}
             <div className="video-composer-toolbar">
               <button className={`tool-chip primary ${omniReferenceEnabled ? "active" : ""}`} onClick={() => setOmniReferenceEnabled(enabled => !enabled)}>✦ 全能参考{omniReferenceEnabled ? "已开" : ""}</button>
@@ -1711,11 +1668,11 @@ export default function Home() {
 
         <div style={sectionStyle("material-assets")}>
         <div className="lizhen-select-tip">
-          <div><strong>要使用外接资产生成视频？</strong><p>项目素材库用于管理本项目内的 Prompt、本地预览和公网素材；外接资产库用于管理真实可被 API 调用的 asset:// 第三方资产。</p></div>
+          <div><strong>要使用外接资产生成视频？</strong><p>项目素材用于管理当前项目内的 Prompt、本地预览和公网素材；外接资产用于管理已登记、可复用的素材。</p></div>
           <button className="btn-primary" onClick={() => { setActiveSection("assets"); window.setTimeout(() => document.getElementById("assets")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0); }}>去勾选外接资产</button>
         </div>
         <section className="card asset-dynamic-workspace">
-          <div className="asset-workspace-head"><div><h2>项目素材库</h2><p className="muted">管理当前项目内的 Prompt、本地预览素材和可登记的公网素材；默认展示最近 5 个，展开后查看全部。</p></div><span className="source-pill internal">项目内素材</span></div>
+          <div className="asset-workspace-head"><div><h2>项目素材</h2><p className="muted">管理当前项目内的 Prompt、本地预览素材和可登记的公网素材；默认展示最近 5 个，展开后查看全部。</p></div><span className="source-pill internal">项目内素材</span></div>
           <div className="asset-tabs">
             {([
               ["image", "图片"],
@@ -1763,19 +1720,17 @@ export default function Home() {
             <div><label>素材类型</label><select value={materialKind} onChange={event => { const next = event.target.value as MaterialKind; setMaterialKind(next); setActiveAssetTab(next); setMaterialRole(next === "image" || next === "sd2" ? "reference_image" : next === "video" ? "reference_video" : "reference_audio"); }}><option value="image">图片</option><option value="video">视频</option><option value="audio">音频</option><option value="sd2">SD2素材</option></select></div>
             <div><label>素材角色</label><select value={materialRole} onChange={event => setMaterialRole(event.target.value as MaterialRole)}><option value="reference_image">参考图</option><option value="first_frame">首帧图</option><option value="last_frame">尾帧图</option><option value="reference_video">参考视频</option><option value="reference_audio">参考音频</option></select></div>
             <button className="btn-primary" onClick={addMaterialFromUrl}>添加并登记外接资产</button>
-            <div><label>本地上传预览（不会传给真实视频 API）</label><input type="file" accept="image/*,video/*,audio/*" onChange={addLocalPreview} /></div>
-            <p className="muted">{materialMessage || "提示：真实视频生成只能使用公网 URL 或已登记 asset:// 素材；本地上传文件仅用于页面预览，不能作为 Seedance 参考图。"}</p>
+            <div><label>本地上传预览（仅用于页面查看）</label><input type="file" accept="image/*,video/*,audio/*" onChange={addLocalPreview} /></div>
+            <p className="muted">{materialMessage || "提示：视频生成只能使用公网 URL 或已登记素材；本地上传文件仅用于页面预览。"}</p>
           </div>
         </section>
         </div>
 
         <div style={sectionStyle("tasks")}>
-          <h2 id="tasks">生成任务</h2><section className="card"><div className="task-head"><p className="muted">默认展示最近 5 个任务，完成后可在这里预览/下载，也可到资产库查看视频播放器。</p></div><div className="table-wrap"><table className="table"><thead><tr><th>任务 ID</th><th>关联分镜</th><th>服务商</th><th>进度</th><th>结果</th><th>操作</th></tr></thead><tbody>{visibleTasks.length ? visibleTasks.map(task => { const taskAsset = state.assets.find(asset => asset.shotId === task.shotId && asset.videoUrl); const taskVideoId = taskAsset?.providerTaskId || task.providerTaskId; return <tr key={task.id}><td>{task.id}</td><td>#{String(task.shotId).padStart(2, "0")} {task.shotTitle}</td><td>{task.provider}</td><td>{taskStatusTag(task.status)}</td><td>{task.result}{taskAsset?.videoUrl && <div className="task-video-actions"><a href={proxiedVideoUrl(taskAsset.videoUrl, false, taskVideoId, activeApiProfile)} target="_blank" rel="noreferrer">预览视频</a><a href={proxiedVideoUrl(taskAsset.videoUrl, true, taskVideoId, activeApiProfile)}>下载</a></div>}</td><td><button className="btn-danger btn-small" onClick={() => deleteTask(task.id)}>删除</button></td></tr>; }) : <tr><td colSpan={6}><div className="empty">暂无生成任务。</div></td></tr>}</tbody></table></div>{hiddenTaskCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllTasks(prev => !prev)}>{showAllTasks ? "收起" : `展开全部 ${hiddenTaskCount}`}</button>}</section>
-        </div>
-
-        <div style={sectionStyle("generated-videos")}>
+          <div className="card-title-row"><div><h2 id="tasks">生成记录</h2><p className="muted">集中查看生成进度、任务结果和已完成视频。</p></div><button className="btn-primary btn-small" onClick={refreshAllTaskStatuses}>同步任务状态</button></div>
+          <section className="card"><div className="task-head"><p className="muted">默认展示最近 5 个任务；完成后可直接预览或下载。</p></div><div className="table-wrap"><table className="table"><thead><tr><th>任务 ID</th><th>关联分镜</th><th>类型</th><th>进度</th><th>结果</th><th>操作</th></tr></thead><tbody>{visibleTasks.length ? visibleTasks.map(task => { const taskAsset = state.assets.find(asset => asset.shotId === task.shotId && asset.videoUrl); const taskVideoId = taskAsset?.providerTaskId || task.providerTaskId; return <tr key={task.id}><td>{task.id}</td><td>#{String(task.shotId).padStart(2, "0")} {task.shotTitle}</td><td>{task.provider}</td><td>{taskStatusTag(task.status)}</td><td>{task.result}{taskAsset?.videoUrl && <div className="task-video-actions"><a href={proxiedVideoUrl(taskAsset.videoUrl, false, taskVideoId, activeApiProfile)} target="_blank" rel="noreferrer">预览视频</a><a href={proxiedVideoUrl(taskAsset.videoUrl, true, taskVideoId, activeApiProfile)}>下载</a></div>}</td><td><button className="btn-danger btn-small" onClick={() => deleteTask(task.id)}>删除</button></td></tr>; }) : <tr><td colSpan={6}><div className="empty">暂无生成记录。请先到视频工作台提交任务。</div></td></tr>}</tbody></table></div>{hiddenTaskCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllTasks(prev => !prev)}>{showAllTasks ? "收起" : `展开全部 ${hiddenTaskCount}`}</button>}</section>
           <section className="card generated-video-library">
-            <div className="card-title-row"><div><h2 style={{ marginTop: 0 }}>已生成视频</h2><p className="muted">同步本页任务状态后，成功视频会出现在这里，可直接播放、打开或下载。</p></div><button className="btn-primary btn-small" onClick={refreshAllTaskStatuses}>同步本页任务状态</button></div>
+            <div className="card-title-row"><div><h2 style={{ marginTop: 0 }}>已完成视频</h2><p className="muted">成功生成的视频会出现在这里，可直接播放、打开或下载。</p></div></div>
             {visibleVideoAssets.length ? <div className="video-preview-grid">{visibleVideoAssets.map(asset => <div className="video-preview-card" key={asset.id}>{asset.videoUrl && <video src={proxiedVideoUrl(asset.videoUrl, false, asset.providerTaskId, activeApiProfile)} controls preload="metadata" />}<strong>{asset.title}</strong><p className="muted">{asset.meta}</p><div className="task-video-actions">{asset.videoUrl && <a href={proxiedVideoUrl(asset.videoUrl, false, asset.providerTaskId, activeApiProfile)} target="_blank" rel="noreferrer">新窗口打开</a>}{asset.videoUrl && <a href={proxiedVideoUrl(asset.videoUrl, true, asset.providerTaskId, activeApiProfile)}>下载视频</a>}</div></div>)}</div> : <div className="empty">暂无可预览视频。请先点击“同步本页任务状态”，或等待生成任务完成。</div>}
             {hiddenVideoAssetCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllVideoAssets(prev => !prev)}>{showAllVideoAssets ? "收起" : `展开全部 ${hiddenVideoAssetCount}`}</button>}
           </section>
@@ -1783,7 +1738,7 @@ export default function Home() {
 
         <div style={sectionStyle("assets")}>
           <section id="assets" className="library-section lizhen-section">
-            <div className="external-library-title"><div><h1>外接资产库</h1><p>统一管理来自第三方平台的真实 asset:// 资产。默认展示最近 5 个，展开后查看全部；勾选后会提交给真实视频 API。</p></div><span className="source-pill external">第三方资产</span></div>
+            <div className="external-library-title"><div><h1>外接资产</h1><p>统一管理已登记、可复用的外部素材。默认展示最近 5 个，展开后查看全部；勾选后可用于视频生成。</p></div><span className="source-pill external">外部素材</span></div>
             <div className="library-search">
               <span>⌕</span>
               <input value={librarySearch} onChange={event => setLibrarySearch(event.target.value)} placeholder="搜索资产名称、类型或 asset://id" />
@@ -1799,7 +1754,7 @@ export default function Home() {
               <thead><tr><th>选择</th><th>资产名称</th><th>asset://</th><th>类型</th><th>同步状态</th><th>失败原因</th><th>资产状态</th><th>所属组</th><th>创建时间</th><th>操作</th></tr></thead>
               <tbody>{visibleLizhenAssets.map(asset => <tr key={asset.id} className={selectedLizhenAssetIds.includes(asset.id) ? "selected-row" : ""}><td><input type="checkbox" checked={selectedLizhenAssetIds.includes(asset.id)} onChange={() => toggleLizhenAsset(asset.id)} /></td><td><strong>{asset.asset_name}</strong><br /><span className="muted">ID: {asset.id}</span></td><td><code>{asset.asset_url}</code></td><td>{asset.类型}</td><td><span className="sync-badge success">{asset.同步状态}</span></td><td>{asset.失败原因}</td><td><span className="sync-badge reviewed">{asset.资产状态}</span></td><td>{asset.所属组}</td><td>{asset.创建时间}</td><td><div className="table-actions"><button onClick={() => alert(JSON.stringify(asset, null, 2))}>详情</button><button onClick={() => toggleLizhenAsset(asset.id)}>{selectedLizhenAssetIds.includes(asset.id) ? "取消使用" : "用于生成"}</button><button className="danger" onClick={() => alert("删除功能下一步接入 /api/assets delete")}>删除</button></div></td></tr>)}</tbody>
             </table>
-            {!filteredLizhenAssets.length && <div className="library-empty"><div className="empty-ico">▱</div><strong>暂无外接资产</strong><p>请先上传资产，或点击刷新同步外接资产库。</p></div>}
+            {!filteredLizhenAssets.length && <div className="library-empty"><div className="empty-ico">▱</div><strong>暂无外接资产</strong><p>请先上传资产，或点击刷新同步外接资产。</p></div>}
             {hiddenLizhenAssetCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllLizhenAssets(prev => !prev)}>{showAllLizhenAssets ? "收起" : `展开全部 ${hiddenLizhenAssetCount}`}</button>}
           </div>
         </section>
@@ -1807,11 +1762,12 @@ export default function Home() {
       </main>
 
       <div className={`modal ${passwordModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setPasswordModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>修改密码</h2><button className="btn-ghost btn-small" onClick={() => setPasswordModalOpen(false)}>关闭</button></div><div className="form"><div><label>手机号</label><input value={securityPhone} onChange={event => setSecurityPhone(event.target.value)} placeholder="请输入绑定手机号" /></div><div><label>验证码</label><div className="code-row"><input value={securityCode} onChange={event => setSecurityCode(event.target.value)} placeholder="请输入 6 位验证码" /><button className="btn-primary" onClick={() => alert(`验证码已发送至 ${securityPhone}`)}>发送验证码</button></div></div><div><label>新密码</label><input type="password" value={newPassword} onChange={event => setNewPassword(event.target.value)} placeholder="请输入新密码（至少 6 个字符）" /></div><div><label>确认新密码</label><input type="password" value={confirmNewPassword} onChange={event => setConfirmNewPassword(event.target.value)} placeholder="请再次输入新密码" /></div><div className="actions"><button className="btn-ghost" onClick={() => setPasswordModalOpen(false)}>取消</button><button className="btn-primary" onClick={() => { if (!securityCode || !newPassword || newPassword !== confirmNewPassword) return alert("请确认验证码和两次密码输入一致。"); setPasswordModalOpen(false); alert("演示环境已完成密码修改流程。") }}>确认修改</button></div></div></div></div>
-      <div className={`modal ${projectModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setProjectModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>新建项目</h2><button className="btn-ghost btn-small" onClick={() => setProjectModalOpen(false)}>关闭</button></div><div className="form"><div><label>项目名称</label><input value={projectName} onChange={event => setProjectName(event.target.value)} /></div><div><label>项目类型</label><select value={projectType} onChange={event => setProjectType(event.target.value)}><option>都市短剧</option><option>古风短剧</option><option>悬疑短剧</option><option>漫剧</option></select></div><button className="btn-primary" onClick={saveProject}>创建项目</button></div></div></div>
+      <div className={`modal ${projectModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setProjectModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>新建项目</h2><button className="btn-ghost btn-small" onClick={() => setProjectModalOpen(false)}>关闭</button></div><div className="form"><div><label>项目名称</label><input value={projectName} onChange={event => setProjectName(event.target.value)} /></div><div><label>项目类型</label><select value={projectType} onChange={event => setProjectType(event.target.value)}>{PROJECT_TYPES.map(type => <option key={type}>{type}</option>)}</select></div><button className="btn-primary" onClick={saveProject}>创建项目</button></div></div></div>
+      <div className={`modal ${deleteProjectTarget ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setDeleteProjectTarget(null)}><div className="modal-card"><div className="modal-head"><h2>删除项目</h2><button className="btn-ghost btn-small" onClick={() => setDeleteProjectTarget(null)}>关闭</button></div><div className="form"><div className="danger-note"><strong>此操作会删除当前浏览器中该项目的剧本、分镜、素材和生成记录。</strong><span>请输入项目名称确认删除：{deleteProjectTarget?.name}</span></div><div><label>确认项目名称</label><input value={deleteProjectName} onChange={event => setDeleteProjectName(event.target.value)} placeholder={deleteProjectTarget?.name || ""} /></div><div className="actions"><button className="btn-ghost" onClick={() => setDeleteProjectTarget(null)}>取消</button><button className="btn-danger" onClick={deleteProject} disabled={!deleteProjectTarget || deleteProjectName.trim() !== deleteProjectTarget.name}>确认删除</button></div></div></div></div>
       <div className={`modal ${scriptModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setScriptModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>导入剧本</h2><button className="btn-ghost btn-small" onClick={() => setScriptModalOpen(false)}>关闭</button></div><div className="form"><div><label>剧本内容</label><textarea style={{ minHeight: 180 }} value={scriptInput} onChange={event => setScriptInput(event.target.value)} /></div><button className="btn-primary" onClick={saveScript}>保存剧本</button><div className="script-box">{scriptPreview || "暂无剧本内容"}</div>{scriptTooLong && <button className="collapse-toggle" onClick={() => setShowFullScript(prev => !prev)}>{showFullScript ? "收起" : "展开全部剧本"}</button>}</div></div></div>
-      <div className={`modal ${batchModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setBatchModalOpen(false)}><div className="modal-card modal-card-wide"><div className="modal-head"><h2>批量导入提示词</h2><button className="btn-ghost btn-small" onClick={() => setBatchModalOpen(false)}>关闭</button></div><div className="form"><div><label>目标总时长</label><select value={batchTargetDuration} onChange={event => setBatchTargetDuration(Number(event.target.value))}><option value="6">6s</option><option value="9">9s</option><option value="12">12s</option></select></div><div><label>粘贴完整提示词</label><textarea className="batch-prompt" value={batchPromptInput} onChange={event => setBatchPromptInput(event.target.value)} placeholder="粘贴一整段短剧视频提示词。系统会像剪辑师一样自动拆成 2-7 个镜头；不可拆分时会按上方目标总时长生成一条完整分镜。" /></div><div className="batch-preview"><strong>专业剪辑拆分规则</strong><p>不会把整段提示词保留为镜头01；镜头01就是拆分后的第一段。支持 0-3秒 时间轴，也支持无时间轴长文本自动拆分。不可拆分时按 6s/9s/12s 完整生成，避免压缩到 3s。</p></div><button className="btn-primary" onClick={importBatchShots}>生成分镜</button></div></div></div>
+      <div className={`modal ${batchModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setBatchModalOpen(false)}><div className="modal-card modal-card-wide"><div className="modal-head"><h2>提示词拆分分镜</h2><button className="btn-ghost btn-small" onClick={() => setBatchModalOpen(false)}>关闭</button></div><div className="form"><div><label>目标总时长</label><select value={batchTargetDuration} onChange={event => setBatchTargetDuration(Number(event.target.value))}><option value="6">6s</option><option value="9">9s</option><option value="12">12s</option></select></div><div><label>完整视频提示词</label><textarea className="batch-prompt" value={batchPromptInput} onChange={event => setBatchPromptInput(event.target.value)} placeholder="粘贴一整段视频提示词。系统会自动拆成 2-7 个镜头，并保存为分镜列表；不可拆分时会按上方目标总时长生成一条完整分镜。" /></div><div className="batch-preview"><strong>拆分结果会进入分镜列表</strong><p>镜头01就是拆分后的第一段，不会把整段提示词原样保留。支持 0-3秒 时间轴，也支持无时间轴长文本自动拆分。不可拆分时按 6s/9s/12s 完整生成一条分镜。</p></div><button className="btn-primary" onClick={importBatchShots}>生成分镜</button></div></div></div>
       <div className={`modal ${promptModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setPromptModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>生成 Prompt</h2><button className="btn-ghost btn-small" onClick={() => setPromptModalOpen(false)}>关闭</button></div><div className="form"><div><label>Prompt 内容</label><textarea style={{ minHeight: 180 }} value={promptDraft} onChange={event => setPromptDraft(event.target.value)} /></div><button className="btn-primary" onClick={saveGeneratedPrompt}>保存到分镜与 SD2素材</button><p className="muted">这里先提供可编辑 Prompt 生成对话框，保存后会写入当前分镜提示词，并出现在 SD2素材分类。</p></div></div></div>
-      <div className={`modal ${imageModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setImageModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>生成图片</h2><button className="btn-ghost btn-small" onClick={() => setImageModalOpen(false)}>关闭</button></div><div className="form"><div><label>图片生成描述</label><textarea style={{ minHeight: 160 }} value={imagePromptDraft} onChange={event => setImagePromptDraft(event.target.value)} /></div><button className="btn-primary" onClick={saveImagePlaceholder}>创建图片素材占位</button><p className="muted">当前视频 API 已接入；图片生成按钮先创建可管理的图片素材占位。拿到公网图片 URL 后，可在“添加素材”中用于真实视频生成。</p></div></div></div>
+      <div className={`modal ${imageModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setImageModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>生成图片</h2><button className="btn-ghost btn-small" onClick={() => setImageModalOpen(false)}>关闭</button></div><div className="form"><div><label>图片生成描述</label><textarea style={{ minHeight: 160 }} value={imagePromptDraft} onChange={event => setImagePromptDraft(event.target.value)} /></div><button className="btn-primary" onClick={saveImagePlaceholder}>创建图片素材占位</button><p className="muted">当前先创建可管理的图片素材占位。拿到公网图片 URL 后，可在“添加素材”中用于视频生成。</p></div></div></div>
     </div>
   );
 }

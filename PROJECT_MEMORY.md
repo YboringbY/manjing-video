@@ -93,7 +93,41 @@ https://github.com/YboringbY/manjing-video
 - IP：`118.196.44.191`
 - 账号：`root`
 - SSH key：项目上层文件夹曾提供 `manjing.pem`
-- 当前不要动服务器，除非用户明确说部署或同步服务器。
+- 当前不要贸然替换线上运行代码；涉及部署、拉取、重启前需要确认数据库环境已经准备好。
+
+2026-07-04 复盘状态：
+
+- 本地 `main` 与 GitHub `origin/main` 已同步到 `22c56e2 Add role-based channel management`。
+- GitHub 最新代码已经包含 PostgreSQL/Prisma 账号体系、三层角色、人员管理和模型渠道权限控制。
+- 生成服务器 `/opt/manjing-video` 仍停留在旧版提交 `6be5ef0 Add production deploy script`。
+- 服务器当前 PM2 应用 `manjing-video` 在线运行，但代码目录没有 `prisma/`，也没有 `.env` / `.env.local`。
+- 服务器 PostgreSQL 未运行，且未发现 `psql/postgres/pg_ctl` 可执行文件。
+- 服务器可以通过 GitHub remote 读取最新 `main`，说明网络和仓库访问不是主要问题。
+- 关键断点：代码架构已经升级为数据库版，但生成服务器运行环境仍是旧的无数据库环境。不能直接拉取新代码并重启，否则登录/人员管理等依赖 Prisma 的接口大概率会因为缺少 `DATABASE_URL`、数据库、迁移和 seed 数据而失败。
+
+2026-07-04 已完成的服务器准备动作：
+
+- 服务器已安装 Debian 12 默认源 PostgreSQL 15.18。
+- PostgreSQL 服务已启用并启动。
+- 已创建生产库 `manjing_video_prod`。
+- 已创建数据库用户 `manjing`，并验证可连接 `manjing_video_prod`。
+- 已在服务器 `/root/manjing-video-secrets.env` 保存生产 `DATABASE_URL` 和 `AUTH_SECRET`，文件权限为 `600`。不要在聊天或日志中打印该文件内容。
+- 服务器已从 GitHub 快进到 `22c56e2 Add role-based channel management`。
+- 已将生产环境变量写入 `/opt/manjing-video/.env`，权限为 `600`。
+- 已执行 `npm ci`、`npx prisma generate`、`npm run db:deploy`、`npm run db:seed`。
+- Prisma 3 个 migration 已全部应用，seed 已创建默认 `admin` 账号。
+- 已执行 `npm run build` 并通过。
+- 已重启 PM2 应用 `manjing-video`，当前通过 `next start -p 3000 -H 127.0.0.1` 运行。
+- Nginx 入口和公网 `http://118.196.44.191/` 均返回 200。
+- 已验证 `admin / admin123456` 可登录，`/api/auth/me` 和 `/api/users` 能从 PostgreSQL 返回 `super_admin` 用户。
+- 当前数据库计数：1 个 Tenant、1 个 User、1 个 Membership。
+- 部署前备份位于服务器 `/root/backups/manjing-video-before-db-20260704-132502.tar.gz`。
+
+生成服务器升级数据库版的建议顺序：
+
+1. 登录公网应用，手动检查左侧“人员管理”和“模型渠道管理”。
+2. 确认服务器 `.data/api-profiles.json` 中的模型渠道是否仍是可用配置。
+3. 用真实渠道生成一条 Seedance 任务，验证创建、同步、预览、下载闭环。
 
 ## 数据库与账号体系
 
@@ -203,7 +237,18 @@ zjljzn.ltd
 生成完成 -> 后台拉取上游视频 -> 上传到我们自己的对象存储 -> 数据库保存自有 URL
 ```
 
-线上对象存储尚未接入。用户目前有 500G 服务器存储，但最终仍建议使用对象存储承载图片/视频。
+线上对象存储尚未接入。用户目前有 500G 服务器存储，已挂载为 `/data`，可先作为短期自有文件存储；最终仍建议使用对象存储承载图片/视频。
+
+2026-07-05 服务器存储规划已执行：
+
+- 20G 系统盘 `/dev/vda2` 挂载 `/`，用于系统、Nginx、Node/PM2、项目代码和少量日志。
+- 500G 数据盘 `/dev/vdb` 已格式化为 ext4，挂载到 `/data`，并写入 `/etc/fstab` 自动挂载。
+- PostgreSQL 15 数据目录已从 `/var/lib/postgresql/15/main` 迁移到 `/data/postgresql/15/main`。
+- 已创建文件资产目录：
+  - `/data/manjing/uploads`：后续用户上传素材。
+  - `/data/manjing/generated`：后续生成视频转存。
+  - `/data/backups`：数据库备份和发布备份。
+- 验证结果：PostgreSQL 在线，`manjing_video_prod` 仍有 1 个 Tenant、1 个 User、1 个 Membership；公网首页返回 200，未登录接口返回 401 属正常。
 
 ## 已完成的重要修复
 
@@ -221,10 +266,23 @@ zjljzn.ltd
 - 生成视频时可按当前渠道选择模型 ID。
 - 模型渠道管理改为列表优先，新增/编辑表单按按钮展开。
 - 右上角用户区域已从重复显示改为更清晰的身份展示方向。
+- 项目首页已补充项目删除入口；删除项目需要输入完整项目名称确认，且至少保留一个项目。
+- 新建项目类型已收敛为 `AI 漫剧` 和 `AI 真人剧`。
+- 项目概览已从泛化占位看板改为当前项目状态、交付进度、风险提示、下一步动作和交付缺口。
+- 项目概览已调整为登录后的默认首屏；侧边栏项目分组顺序为“项目列表”在前、“项目概览”在后。
+- 项目概览逻辑已重构为 `剧本 -> 分镜 -> 素材 -> 生成任务 -> 交付视频` 的生产链路。
+- 视频工作台里的批量入口已改为“提示词拆分分镜”：用户粘贴一整段视频提示词，系统拆成 2-7 个镜头并保存为分镜列表。
+- 用户侧已移除“真实 API 说明”、渠道名称、接口地址、模型 ID、Key 隐藏等工程化提示；生成相关反馈改为“配置已保存/任务已提交/正在生成视频”等产品化文案。
+- 个人中心已移除 API 密钥页；模型渠道的访问凭证只在系统管理员配置表单中出现，不在普通工作台和任务结果中展示。
+- 左侧导航已按 `项目 / 工作台 / 资产 / 设置与管理` 重新分组。
+- `项目管理` 已改为 `项目列表`，只负责项目切换、新建、删除。
+- `生成任务` 与 `已生成视频` 已合并为 `生成记录`，同页展示任务进度和已完成视频。
+- `项目素材` 与 `外接资产` 已统一放到 `资产` 分组，工作台只保留剧本、生图、视频生成、生成记录。
+- 已开始拆分过大的 `app/page.tsx`：新增 `app/components/Sidebar.tsx`、`ProjectListSection.tsx`、`ProjectOverviewSection.tsx` 和 `types.ts`。当前先拆展示组件，不迁移业务状态。
 
 ## 仍需注意的问题
 
-- `app/page.tsx` 仍然过大，后续需要拆组件和拆业务逻辑。
+- `app/page.tsx` 仍然偏大，已先拆出左侧导航、项目列表、项目概览；后续继续拆剧本、生图、视频、资产和生成记录，并逐步拆业务 hooks。
 - 项目、分镜、素材、生成记录大多仍在 localStorage，需要逐步迁移到数据库。
 - 模型渠道配置目前用 `.data/api-profiles.json`，后续应迁移到数据库并按租户/平台权限隔离。
 - 上游生成视频没有自动转存到自有存储。
