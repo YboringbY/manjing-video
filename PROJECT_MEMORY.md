@@ -250,6 +250,21 @@ zjljzn.ltd
   - `/data/backups`：数据库备份和发布备份。
 - 验证结果：PostgreSQL 在线，`manjing_video_prod` 仍有 1 个 Tenant、1 个 User、1 个 Membership；公网首页返回 200，未登录接口返回 401 属正常。
 
+2026-07-05 域名与上传素材公网 URL 已执行：
+
+- 已将 `console.manjingstudio.com` 解析到 `118.196.44.191`，HTTP 访问正常。
+- 已在服务器安装 `certbot` 和 Nginx 插件，签发 `console.manjingstudio.com` HTTPS 证书。
+- 当前证书到期时间：2026-10-03；`certbot.timer` 已启用并处于 active 状态。
+- Nginx 已配置 HTTP 自动跳转 HTTPS。
+- Nginx 已将 `/uploads/` 映射到 `/data/manjing/uploads/`，用于公网访问用户上传素材。
+- 生产 `.env` 已加入：
+  - `ASSET_STORAGE_DIR=/data/manjing/uploads`
+  - `ASSET_PUBLIC_BASE_URL=https://console.manjingstudio.com`
+- 已部署提交 `9139ef6 Add real asset upload flow` 到生产服务器。
+- 已通过线上接口 `POST /api/assets/upload` 上传测试图片，返回 `https://console.manjingstudio.com/uploads/...`。
+- 已验证上传后的图片公网 URL 返回 `200 OK`，由 Nginx 从 `/data/manjing/uploads` 直接提供。
+- 注意：素材记录目前仍主要在前端/localStorage，上传文件已是真实服务器文件；下一步需要把素材元数据写入 PostgreSQL。
+
 ## 已完成的重要修复
 
 - 登录与本地 PostgreSQL/Prisma 账号体系已接入。
