@@ -22,7 +22,7 @@ export async function POST(request: Request) {
     });
     if (!membership) return NextResponse.json({ code: 403, message: "账号已停用或未加入当前团队。" }, { status: 403 });
 
-    setAuthSession(user.id, membership.tenantId);
+    await setAuthSession(user.id, membership.tenantId);
     return NextResponse.json({ code: 0, data: publicUserFromMembership(membership) });
   } catch (error) {
     return NextResponse.json({ code: 500, message: error instanceof Error ? error.message : "登录失败。" }, { status: 500 });

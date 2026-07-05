@@ -15,13 +15,15 @@ function normalizeStatus(value: unknown): MemberStatus | undefined {
   return statuses.includes(value as MemberStatus) ? value as MemberStatus : undefined;
 }
 
-export async function PATCH(request: Request, context: { params: { id: string } }) {
+type UserRouteContext = { params: Promise<{ id: string }> };
+
+export async function PATCH(request: Request, context: UserRouteContext) {
   const auth = await requireAdmin();
   if ("error" in auth) return auth.error;
 
   try {
     const body = await request.json();
-    const userId = context.params.id;
+    const { id: userId } = await context.params;
     const membership = await prisma.membership.findUnique({
       where: { tenantId_userId: { tenantId: auth.membership.tenantId, userId } },
       include: { tenant: true, user: true }
@@ -71,10 +73,10 @@ export async function PATCH(request: Request, context: { params: { id: string } 
   }
 }
 
-export async function DELETE(_request: Request, context: { params: { id: string } }) {
+export async function DELETE(_request: Request, context: UserRouteContext) {
   const auth = await requireAdmin();
   if ("error" in auth) return auth.error;
-  const userId = context.params.id;
+  const { id: userId } = await context.params;
   if (userId === auth.membership.userId) return NextResponse.json({ code: 400, message: "不能停用当前登录管理员。" }, { status: 400 });
 
   const membership = await prisma.membership.findUnique({

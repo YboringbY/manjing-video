@@ -36,8 +36,9 @@ function decodeSession(value?: string) {
   }
 }
 
-export function setAuthSession(userId: string, tenantId: string) {
-  cookies().set(AUTH_COOKIE, encodeSession({ userId, tenantId }), {
+export async function setAuthSession(userId: string, tenantId: string) {
+  const cookieStore = await cookies();
+  cookieStore.set(AUTH_COOKIE, encodeSession({ userId, tenantId }), {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
@@ -46,8 +47,9 @@ export function setAuthSession(userId: string, tenantId: string) {
   });
 }
 
-export function clearAuthSession() {
-  cookies().delete(AUTH_COOKIE);
+export async function clearAuthSession() {
+  const cookieStore = await cookies();
+  cookieStore.delete(AUTH_COOKIE);
 }
 
 export function publicUserFromMembership(membership: {
@@ -71,7 +73,8 @@ export function publicUserFromMembership(membership: {
 }
 
 export async function getCurrentMembership() {
-  const session = decodeSession(cookies().get(AUTH_COOKIE)?.value);
+  const cookieStore = await cookies();
+  const session = decodeSession(cookieStore.get(AUTH_COOKIE)?.value);
   if (!session) return null;
   const membership = await prisma.membership.findUnique({
     where: { tenantId_userId: { tenantId: session.tenantId, userId: session.userId } },
