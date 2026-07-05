@@ -12,6 +12,12 @@ function sessionSecret() {
   return process.env.AUTH_SECRET || "local-dev-auth-secret-change-before-production";
 }
 
+function shouldUseSecureCookie() {
+  if (process.env.AUTH_COOKIE_SECURE === "false") return false;
+  if (process.env.AUTH_COOKIE_SECURE === "true") return true;
+  return process.env.NODE_ENV === "production";
+}
+
 function signPayload(payload: string) {
   return createHmac("sha256", sessionSecret()).update(payload).digest("hex");
 }
@@ -41,7 +47,7 @@ export async function setAuthSession(userId: string, tenantId: string) {
   cookieStore.set(AUTH_COOKIE, encodeSession({ userId, tenantId }), {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: shouldUseSecureCookie(),
     path: "/",
     maxAge: SESSION_MAX_AGE
   });
