@@ -216,11 +216,12 @@ export default function Home() {
   const [materialKind, setMaterialKind] = useState<MaterialKind>("image");
   const [materialRole, setMaterialRole] = useState<MaterialRole>("reference_image");
   const [materialMessage, setMaterialMessage] = useState("");
+  const [isUploadingMaterial, setIsUploadingMaterial] = useState(false);
+  const [shareUploadToTeam, setShareUploadToTeam] = useState(false);
+  const [activeAssetScope, setActiveAssetScope] = useState<"project" | "shared">("project");
   const [activeAssetTab, setActiveAssetTab] = useState<MaterialKind>("image");
   const [promptModalOpen, setPromptModalOpen] = useState(false);
-  const [imageModalOpen, setImageModalOpen] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
-  const [imagePromptDraft, setImagePromptDraft] = useState("");
   const [imageWorkbenchPrompt, setImageWorkbenchPrompt] = useState("");
   const [imageModel, setImageModel] = useState("gpt-image-2");
   const [imageQuality, setImageQuality] = useState<ImageQuality>("auto");
@@ -424,14 +425,14 @@ export default function Home() {
   async function loadLizhenAssets() {
     try {
       setIsLoadingLizhenAssets(true);
-      setLizhenAssetMessage("正在同步外接资产...");
+      setLizhenAssetMessage("正在同步共享素材...");
       const response = await fetch(`/api/assets?group_id=${DEFAULT_ASSET_GROUP_ID}&group_name=user_216&page=1&page_size=50`);
       const result = await response.json();
-      if (!response.ok || result.code !== 0) throw new Error(result.message || "加载外接资产失败");
+      if (!response.ok || result.code !== 0) throw new Error(result.message || "加载共享素材失败");
       setLizhenAssets(result.data || []);
-      setLizhenAssetMessage(`已同步 ${result.total || 0} 个外接资产`);
+      setLizhenAssetMessage(`已同步 ${result.total || 0} 个共享素材`);
     } catch (error) {
-      setLizhenAssetMessage(error instanceof Error ? error.message : "加载外接资产失败");
+      setLizhenAssetMessage(error instanceof Error ? error.message : "加载共享素材失败");
     } finally {
       setIsLoadingLizhenAssets(false);
     }
@@ -974,7 +975,7 @@ export default function Home() {
   async function addMaterialFromUrl() {
     const reviewedAssetUrl = normalizeAssetUrl(reviewedAssetInput);
     if (!materialUrl.trim() && !reviewedAssetUrl) {
-      alert("请填写公网素材 URL。外接资产 OpenAPI 创建资产需要公网可访问链接；本地文件只能预览，不能直接提交资产库。");
+      alert("请填写可访问的素材链接。当前本地文件只能预览，不能直接用于生成。");
       return;
     }
 
@@ -994,12 +995,12 @@ export default function Home() {
     setReviewedAssetInput("");
 
     if (reviewedAssetUrl) {
-      setMaterialMessage(`已绑定外接资产：${reviewedAssetUrl}，生成视频会优先调用它。`);
+      setMaterialMessage("素材已加入当前项目，可用于生成。");
       return;
     }
 
     try {
-      setMaterialMessage("素材已加入漫镜，正在登记到外接资产...");
+      setMaterialMessage("素材已加入当前项目，正在准备生成引用...");
       const groupId = await ensureAssetGroup();
       const response = await fetch("/api/assets", {
         method: "POST",
@@ -1007,33 +1008,72 @@ export default function Home() {
         body: JSON.stringify({ group_id: groupId, url: material.url, asset_name: material.name, asset_type: assetTypeOf(material.kind) })
       });
       const result = await response.json();
-      if (!response.ok || result.code !== 0 || !result.data?.asset_url) throw new Error(result.message || "登记外接资产失败");
+      if (!response.ok || result.code !== 0 || !result.data?.asset_url) throw new Error(result.message || "准备生成引用失败");
       setState(prev => ({ ...prev, materials: prev.materials.map(item => item.id === materialId ? { ...item, seedanceAssetUrl: result.data.asset_url } : item) }));
-      setMaterialMessage("素材已登记到外接资产，可用于后续视频生成。");
+      setMaterialMessage("素材已准备好，可用于后续视频生成。");
     } catch (error) {
-      setMaterialMessage(error instanceof Error ? `素材已加入漫镜，但上传外接资产失败：${error.message}` : "素材已加入漫镜，但上传外接资产失败");
+      setMaterialMessage(error instanceof Error ? `素材已加入当前项目，但暂时不能用于生成：${error.message}` : "素材已加入当前项目，但暂时不能用于生成");
     }
   }
 
-  function addLocalPreview(event: ChangeEvent<HTMLInputElement>) {
+  async function addLocalPreview(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    const kind: MaterialKind = file.type.startsWith("video") ? "video" : file.type.startsWith("audio") ? "audio" : "image";
+    const kind: MaterialKind = activeAssetTab === "video" ? "video" : activeAssetTab === "audio" ? "audio" : "image";
+    if (!file.type.startsWith(`${kind}/`)) {
+      setMaterialMessage(`当前是${kind === "image" ? "图片" : kind === "video" ? "视频" : "音频"}分类，请选择对应类型的文件。`);
+      event.target.value = "";
+      return;
+    }
     const role: MaterialRole = kind === "image" ? "reference_image" : kind === "video" ? "reference_video" : "reference_audio";
-    const material: MaterialAsset = { id: Date.now(), name: file.name, url: "", kind, role, previewUrl: URL.createObjectURL(file) };
-    setState(prev => ({ ...prev, materials: [material, ...prev.materials] }));
-    setMaterialMessage("本地文件已加入预览库。注意：真实生成仍需公网 URL，不能直接使用本地文件。");
-    event.target.value = "";
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("projectId", String(currentProjectId));
+    formData.append("kind", kind);
+    formData.append("name", materialName.trim() || file.name);
+
+    try {
+      setIsUploadingMaterial(true);
+      setMaterialMessage("正在上传素材...");
+      const response = await fetch("/api/assets/upload", { method: "POST", body: formData });
+      const result = await response.json();
+      if (!response.ok || result.code !== 0 || !result.data?.publicUrl) throw new Error(result.message || "上传素材失败");
+
+      const material: MaterialAsset = {
+        id: Date.now(),
+        name: String(result.data.name || file.name || "未命名素材"),
+        url: result.data.publicUrl,
+        kind,
+        role,
+        previewUrl: result.data.previewUrl || result.data.publicUrl,
+        storagePath: result.data.storagePath,
+        source: "upload",
+        status: "ready",
+        scope: shareUploadToTeam ? "team" : "project",
+        sourceProjectId: currentProjectId,
+        sourceProjectName: state.project.name,
+        createdBy: currentDisplayName
+      };
+      setState(prev => ({ ...prev, materials: [material, ...prev.materials] }));
+      setActiveAssetTab(kind);
+      setActiveAssetScope("project");
+      setMaterialMessage(shareUploadToTeam ? "素材已上传到当前项目，并加入团队共享。" : "素材已上传到当前项目，可作为参考素材使用。");
+    } catch (error) {
+      setMaterialMessage(error instanceof Error ? error.message : "上传素材失败");
+    } finally {
+      setIsUploadingMaterial(false);
+      event.target.value = "";
+    }
   }
 
   async function registerMaterialToSeedance(materialId: number) {
     const material = state.materials.find(item => item.id === materialId);
     if (!material?.url) {
-      alert("该素材没有公网 URL，无法登记为外接资产。");
+      alert("该素材还没有可生成链接，暂时只能预览。");
       return;
     }
     try {
-      setMaterialMessage("正在登记素材到外接资产...");
+      setMaterialMessage("正在准备生成引用...");
       const groupId = await ensureAssetGroup();
       const response = await fetch("/api/assets", {
         method: "POST",
@@ -1041,11 +1081,11 @@ export default function Home() {
         body: JSON.stringify({ group_id: groupId, url: material.url, asset_name: material.name, asset_type: assetTypeOf(material.kind) })
       });
       const result = await response.json();
-      if (!response.ok || result.code !== 0 || !result.data?.asset_url) throw new Error(result.message || "登记素材失败");
+      if (!response.ok || result.code !== 0 || !result.data?.asset_url) throw new Error(result.message || "准备生成引用失败");
       setState(prev => ({ ...prev, materials: prev.materials.map(item => item.id === materialId ? { ...item, seedanceAssetUrl: result.data.asset_url } : item) }));
-      setMaterialMessage("素材已登记到外接资产。");
+      setMaterialMessage("素材已准备好，可用于生成。");
     } catch (error) {
-      setMaterialMessage(error instanceof Error ? error.message : "登记素材失败");
+      setMaterialMessage(error instanceof Error ? error.message : "准备生成引用失败");
     }
   }
 
@@ -1065,6 +1105,23 @@ export default function Home() {
 
   function materialApiUrl(item: MaterialAsset) {
     return item.reviewedAssetUrl || item.seedanceAssetUrl || item.url;
+  }
+
+  function toggleTeamSharedMaterial(material: MaterialAsset) {
+    const existing = state.materials.find(item => item.id === material.id);
+    if (existing) {
+      toggleMaterial(existing.id);
+      return;
+    }
+    const importedMaterial: MaterialAsset = {
+      ...material,
+      scope: "team",
+      sourceProjectId: material.sourceProjectId || currentProjectId,
+      sourceProjectName: material.sourceProjectName || state.project.name
+    };
+    setState(prev => ({ ...prev, materials: [importedMaterial, ...prev.materials] }));
+    setSelectedMaterialIds(prev => prev.includes(importedMaterial.id) ? prev : [...prev, importedMaterial.id]);
+    setMaterialMessage("共享素材已加入当前项目，并选为参考。");
   }
 
   function buildMediaPayload() {
@@ -1091,7 +1148,7 @@ export default function Home() {
     const selectedExternalAssets = lizhenAssets.filter(item => selectedLizhenAssetIds.includes(item.id) && item.类型 === "图片");
     if (!selectedInternalAssets.length && !selectedExternalAssets.length) return shot;
     const internalLines = selectedInternalAssets.map(item => `- ${item.name}：严格参考素材 ${materialApiUrl(item)} 的人物/场景/道具外观，不要重新设计外貌。`);
-    const externalLines = selectedExternalAssets.map(item => `- ${item.asset_name}：严格参考外接资产 ${item.asset_url} 的人物/场景/道具外观，不要重新设计外貌。`);
+    const externalLines = selectedExternalAssets.map(item => `- ${item.asset_name}：严格参考共享素材的人物/场景/道具外观，不要重新设计外貌。`);
     return {
       ...shot,
       prompt: `${shot.prompt}\n\n真实参考素材绑定：\n${[...internalLines, ...externalLines].join("\n")}\n生成要求：画面中的同名角色、场景和道具必须优先保持与对应参考素材一致，尤其人物脸型、五官、发型、年龄感、服装气质要保持一致；禁止生成与参考素材不一致的新人物。`
@@ -1111,13 +1168,13 @@ export default function Home() {
     const localTaskId = `MV-${String(Date.now()).slice(-6)}`;
     const localOnlyMaterials = state.materials.filter(item => selectedMaterialIds.includes(item.id) && !materialApiUrl(item));
     if (localOnlyMaterials.length) {
-      setMaterialMessage(`已选择 ${localOnlyMaterials.length} 个仅本地预览素材，无法用于生成：${localOnlyMaterials.map(item => item.name).join("、")}。请改用公网 URL 或已登记素材。`);
-      alert("你 @ 的图片里有本地上传素材。本地文件不会随任务提交，请先填写公网 URL 或使用已登记素材。");
+      setMaterialMessage(`已选择 ${localOnlyMaterials.length} 个仅预览素材，无法用于生成：${localOnlyMaterials.map(item => item.name).join("、")}。请改用可生成素材。`);
+      alert("你选择的参考素材里有仅预览素材。请改用可生成素材后再提交。");
       return;
     }
 
     if (omniReferenceEnabled && !omniReferenceItems.length) {
-      alert("全能参考模式需要先 @ 选择至少 1 个可用参考素材，或在外接资产中勾选已登记素材。");
+      alert("全能参考模式需要先选择至少 1 个可生成参考素材。");
       return;
     }
 
@@ -1289,6 +1346,10 @@ export default function Home() {
   }
 
   const filteredMaterials = state.materials.filter(material => activeAssetTab === "sd2" ? material.kind === "sd2" : material.kind === activeAssetTab);
+  const activeAssetTabLabel = activeAssetTab === "image" ? "图片" : activeAssetTab === "video" ? "视频" : activeAssetTab === "audio" ? "音频" : "提示词";
+  const activeUploadAccept = activeAssetTab === "image" ? "image/*" : activeAssetTab === "video" ? "video/*" : "audio/*";
+  const activeRoleOptions = activeAssetTab === "image" ? [["reference_image", "参考图"], ["first_frame", "首帧图"], ["last_frame", "尾帧图"]] : activeAssetTab === "video" ? [["reference_video", "参考视频"]] : [["reference_audio", "参考音频"]];
+  const teamSharedMaterials = Object.values({ ...projectStates, [currentProjectId]: state }).flatMap(projectState => projectState.materials || []).filter((material, index, list) => material.scope === "team" && index === list.findIndex(item => item.id === material.id));
   const hiddenAssetCount = Math.max(filteredMaterials.length - 5, 0);
   const visibleAssets = showAllAssets ? filteredMaterials : filteredMaterials.slice(0, 5);
   const hiddenImageResultCount = Math.max(generatedImages.length - 5, 0);
@@ -1313,13 +1374,22 @@ export default function Home() {
     return { asset, taskId: asset?.providerTaskId || task?.providerTaskId };
   }
   const filteredLizhenAssets = lizhenAssets.filter(asset => {
-    const typeMatched = libraryFilter === "all" || (libraryFilter === "image" && asset.类型 === "图片") || (libraryFilter === "video" && asset.类型 === "视频") || (libraryFilter === "text" && asset.类型 === "音频");
+    const isPromptAsset = ["提示词", "文本", "Prompt", "prompt"].includes(asset.类型);
+    const typeMatched = libraryFilter === "all" || (libraryFilter === "image" && asset.类型 === "图片") || (libraryFilter === "video" && asset.类型 === "视频") || (libraryFilter === "audio" && asset.类型 === "音频") || (libraryFilter === "prompt" && isPromptAsset);
     const keyword = librarySearch.trim().toLowerCase();
     const keywordMatched = !keyword || `${asset.asset_name} ${asset.asset_url} ${asset.类型} ${asset.资产状态}`.toLowerCase().includes(keyword);
     return typeMatched && keywordMatched;
   });
-  const visibleLizhenAssets = showAllLizhenAssets ? filteredLizhenAssets : filteredLizhenAssets.slice(0, 5);
-  const hiddenLizhenAssetCount = Math.max(filteredLizhenAssets.length - 5, 0);
+  const filteredTeamSharedMaterials = teamSharedMaterials.filter(material => {
+    const typeMatched = libraryFilter === "all" || (libraryFilter === "image" && material.kind === "image") || (libraryFilter === "video" && material.kind === "video") || (libraryFilter === "audio" && material.kind === "audio") || (libraryFilter === "prompt" && material.kind === "sd2");
+    const keyword = librarySearch.trim().toLowerCase();
+    const keywordMatched = !keyword || `${material.name} ${material.sourceProjectName || ""} ${material.createdBy || ""}`.toLowerCase().includes(keyword);
+    return typeMatched && keywordMatched;
+  });
+  const visibleTeamSharedMaterials = showAllLizhenAssets ? filteredTeamSharedMaterials : filteredTeamSharedMaterials.slice(0, 5);
+  const remainingSharedAssetSlots = showAllLizhenAssets ? filteredLizhenAssets.length : Math.max(0, 5 - visibleTeamSharedMaterials.length);
+  const visibleLizhenAssets = showAllLizhenAssets ? filteredLizhenAssets : filteredLizhenAssets.slice(0, remainingSharedAssetSlots);
+  const hiddenLizhenAssetCount = Math.max(filteredTeamSharedMaterials.length + filteredLizhenAssets.length - 5, 0);
   const currentUserRecord = currentUser ? authUsers[currentUser] : null;
   const currentUserRole = currentUserRecord?.role || "user";
   const currentUserCanManageMembers = canManageMembers(currentUserRole);
@@ -1361,28 +1431,12 @@ export default function Home() {
     const text = promptDraft.trim();
     if (!text) return;
     setShotPrompt(text);
-    const material: MaterialAsset = { id: Date.now(), name: "生成 Prompt", url: text, kind: "sd2", role: "reference_image" };
+    const material: MaterialAsset = { id: Date.now(), name: "生成提示词", url: text, kind: "sd2", role: "reference_image", source: "prompt", status: "ready" };
     setState(prev => ({ ...prev, materials: [material, ...prev.materials] }));
     setActiveAssetTab("sd2");
     setPromptModalOpen(false);
-    setMaterialMessage("Prompt 已保存，并已同步到 SD2素材。注意：Prompt 会用于分镜提示词，不作为媒体 URL 传入。");
+    setMaterialMessage("提示词已保存到素材库。提示词会用于分镜内容，不作为媒体素材提交。");
   }
-
-  function openImageDialog() {
-    setImagePromptDraft(shotPrompt || "角色参考图，电影感，精致细节，适合短剧分镜");
-    setImageModalOpen(true);
-  }
-
-  function saveImagePlaceholder() {
-    const text = imagePromptDraft.trim();
-    if (!text) return;
-    const material: MaterialAsset = { id: Date.now(), name: "待生成图片素材", url: "", kind: "image", role: "reference_image", previewUrl: "" };
-    setState(prev => ({ ...prev, materials: [material, ...prev.materials] }));
-    setActiveAssetTab("image");
-    setImageModalOpen(false);
-    setMaterialMessage(`已创建图片生成占位：${text}。后续可接入真实图片生成接口，或填入公网图片 URL 后用于视频生成。`);
-  }
-
 
   function insertMention(material: MaterialAsset) {
     const token = `@${material.name}`;
@@ -1434,27 +1488,51 @@ export default function Home() {
     setImageHeight(height);
   }
 
-  function generateImages() {
+  async function generateImages() {
     if (!imageWorkbenchPrompt.trim()) {
       alert("请先填写生图提示词。");
       return;
     }
     setIsImageGenerating(true);
-    window.setTimeout(() => {
-      const images = Array.from({ length: imageCount }).map((_, index) => ({
+    setMaterialMessage("正在生成图片...");
+    try {
+      const response = await fetch("/api/images/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          profile_id: activeApiProfileId,
+          model: imageModel,
+          prompt: imageWorkbenchPrompt,
+          size: `${imageWidth}x${imageHeight}`,
+          n: imageCount,
+          projectId: currentProjectId
+        })
+      });
+      const result = await response.json();
+      if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "图片生成失败");
+      const images: MaterialAsset[] = result.data.map((item: { name?: string; publicUrl: string; previewUrl?: string; storagePath?: string }, index: number) => ({
         id: Date.now() + index,
-        name: `生图结果 ${index + 1}`,
-        url: "",
+        name: item.name || `生图结果 ${index + 1}`,
+        url: item.publicUrl,
         kind: "image" as MaterialKind,
         role: "reference_image" as MaterialRole,
-        previewUrl: ""
+        previewUrl: item.previewUrl || item.publicUrl,
+        storagePath: item.storagePath,
+        source: "generated",
+        status: "ready",
+        prompt: imageWorkbenchPrompt
       }));
       setGeneratedImages(images);
       setState(prev => ({ ...prev, materials: [...images, ...prev.materials] }));
       setActiveAssetTab("image");
+      setActiveAssetScope("project");
+      setMaterialMessage(`已生成 ${images.length} 张图片，并保存到当前项目素材库。`);
+    } catch (error) {
+      setGeneratedImages([]);
+      setMaterialMessage(error instanceof Error ? error.message : "图片生成失败");
+    } finally {
       setIsImageGenerating(false);
-      setMaterialMessage(`已生成 ${imageCount} 张图片占位。当前未接入真实生图 API，后续可将图片生成接口接到这里。`);
-    }, 900);
+    }
   }
 
   async function submitAuth() {
@@ -1555,7 +1633,7 @@ export default function Home() {
       />
 
       <main>
-        <div className="topbar"><div className="crumb">漫镜视频 / AI 短剧生产平台</div><div className="actions"><button className="btn-secondary" onClick={refreshAllTaskStatuses}>同步生成记录</button><div className="user-menu-wrap"><button className="user-chip" onClick={() => setUserMenuOpen(open => !open)}><strong>{currentDisplayName}</strong><span>{roleLabel(currentUserRole)}</span></button>{userMenuOpen && <div className="user-menu"><strong>{currentDisplayName}</strong><small>{currentUserRecord?.account || "-"}</small><small>{roleLabel(currentUserRole)}</small><button onClick={() => { setActiveSection("profile"); setProfileSection("basic"); setMemberNameDraft(currentDisplayName); setUserMenuOpen(false); }}>个人中心</button><button onClick={() => { setActiveSection("assets"); setUserMenuOpen(false); }}>我的资产</button><button onClick={switchLanguage}>语言 · {languageLabel}</button><button onClick={logout} className="danger">退出登录</button></div>}</div></div></div>
+        <div className="topbar"><div className="crumb">漫镜视频 / AI 短剧生产平台</div><div className="actions"><div className="user-menu-wrap"><button className="user-chip" onClick={() => setUserMenuOpen(open => !open)}><strong>{currentDisplayName}</strong><span>{roleLabel(currentUserRole)}</span></button>{userMenuOpen && <div className="user-menu"><strong>{currentDisplayName}</strong><small>{currentUserRecord?.account || "-"}</small><small>{roleLabel(currentUserRole)}</small><button onClick={() => { setActiveSection("profile"); setProfileSection("basic"); setMemberNameDraft(currentDisplayName); setUserMenuOpen(false); }}>个人中心</button><button onClick={() => { setActiveSection("material-assets"); setActiveAssetScope("project"); setUserMenuOpen(false); }}>素材库</button><button onClick={switchLanguage}>语言 · {languageLabel}</button><button onClick={logout} className="danger">退出登录</button></div>}</div></div></div>
         {userActionMessage && <div className="action-toast">{userActionMessage}</div>}
         <ProjectListSection
           currentProjectId={currentProjectId}
@@ -1634,8 +1712,8 @@ export default function Home() {
               <button className="video-add-ref" onClick={() => setMentionMenuOpen(open => !open)}>+</button>
             </div>
             <textarea className="video-prompt-editor" value={shotPrompt} onChange={event => setShotPrompt(event.target.value)} placeholder="描述视频内容，可点击 @ 选择素材库图片并插入人物名称，例如：@林凡 在教室门口回头，镜头缓慢推进。" />
-            {omniReferenceEnabled && <div className="omni-reference-panel"><div className="omni-reference-head"><span className="live-dot" /><strong>全能参考模式已开启</strong><em>{omniReferenceItems.length ? `${omniReferenceItems.length} 个参考素材将随任务提交` : "等待绑定参考素材"}</em></div><div className="omni-reference-strip">{omniReferenceItems.length ? omniReferenceItems.map((item, index) => <div className="omni-ref-chip" key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={item.name} /> : <span>{String(item.kind).slice(0, 2)}</span>}<b>参考{index + 1}</b><small>{item.name}</small></div>) : <div className="omni-empty">请点击 @ 选择公网素材，或到外接资产中勾选已登记素材。</div>}</div>{localOnlyReferences.length > 0 && <p className="omni-warning">已忽略 {localOnlyReferences.length} 个本地预览素材；本地文件无法随任务提交。</p>}</div>}
-            {mentionMenuOpen && <div className="video-mention-popover"><div className="mention-panel-head"><strong>可能@的内容</strong><span>点击素材插入到提示词；仅公网 URL 或 asset:// 会真实传给 API</span></div><div className="mention-panel-list">{mentionMaterials.length ? mentionMaterials.map(material => { const usable = Boolean(material.reviewedAssetUrl || material.seedanceAssetUrl || material.url); const selected = selectedMaterialIds.includes(material.id); return <div key={material.id} className={`mention-item ${selected ? "selected" : ""}`}><button onClick={() => insertMention(material)}><div className="mention-thumb">{material.previewUrl ? <img src={material.previewUrl} alt={material.name} /> : <span>@</span>}</div><div className="mention-meta"><strong>{material.name}</strong><span>{usable ? "可用于真实生成" : "仅本地预览，真实生成不会使用"}</span></div></button><button className="btn-ghost btn-small" onClick={() => toggleMaterial(material.id)}>{selected ? "取消@" : "选择"}</button><button className="btn-danger btn-small" onClick={() => deleteMaterial(material.id)}>删除</button></div>; }) : <div className="mention-empty">素材库里还没有图片素材，请先上传图片。</div>}</div></div>}
+            {omniReferenceEnabled && <div className="omni-reference-panel"><div className="omni-reference-head"><span className="live-dot" /><strong>全能参考模式已开启</strong><em>{omniReferenceItems.length ? `${omniReferenceItems.length} 个参考素材将随任务提交` : "等待绑定参考素材"}</em></div><div className="omni-reference-strip">{omniReferenceItems.length ? omniReferenceItems.map((item, index) => <div className="omni-ref-chip" key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={item.name} /> : <span>{String(item.kind).slice(0, 2)}</span>}<b>参考{index + 1}</b><small>{item.name}</small></div>) : <div className="omni-empty">请先在素材库选择可生成素材。</div>}</div>{localOnlyReferences.length > 0 && <p className="omni-warning">已忽略 {localOnlyReferences.length} 个仅预览素材；这类素材暂时不能随任务提交。</p>}</div>}
+            {mentionMenuOpen && <div className="video-mention-popover"><div className="mention-panel-head"><strong>可选参考素材</strong><span>点击素材插入到提示词；只有“可生成”素材会随任务提交</span></div><div className="mention-panel-list">{mentionMaterials.length ? mentionMaterials.map(material => { const usable = Boolean(material.reviewedAssetUrl || material.seedanceAssetUrl || material.url); const selected = selectedMaterialIds.includes(material.id); return <div key={material.id} className={`mention-item ${selected ? "selected" : ""}`}><button onClick={() => insertMention(material)}><div className="mention-thumb">{material.previewUrl ? <img src={material.previewUrl} alt={material.name} /> : <span>@</span>}</div><div className="mention-meta"><strong>{material.name}</strong><span>{usable ? "可生成" : "仅预览"}</span></div></button><button className="btn-ghost btn-small" onClick={() => toggleMaterial(material.id)}>{selected ? "取消参考" : "选为参考"}</button><button className="btn-danger btn-small" onClick={() => deleteMaterial(material.id)}>删除</button></div>; }) : <div className="mention-empty">素材库里还没有图片素材，请先上传图片。</div>}</div></div>}
             <div className="video-composer-toolbar">
               <button className={`tool-chip primary ${omniReferenceEnabled ? "active" : ""}`} onClick={() => setOmniReferenceEnabled(enabled => !enabled)}>✦ 全能参考{omniReferenceEnabled ? "已开" : ""}</button>
               <label className="tool-select">模型<select value={selectedVideoModel} onChange={event => setSelectedVideoModel(event.target.value)}>{activeVideoModels.map(model => <option key={model} value={model}>{model}</option>)}</select></label>
@@ -1663,67 +1741,108 @@ export default function Home() {
           <div className="image-form-block"><label>宽高比</label><div className="ratio-grid">{(["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16", "auto"] as AspectRatio[]).map(item => <button key={item} className={imageRatio === item ? "active" : ""} onClick={() => updateImageRatio(item)}><span className="ratio-icon">▭</span>{item}</button>)}</div></div>
           <div className="image-form-block"><label>生成张数</label><div className="count-grid">{[1,2,3,4,5,6,7,8,9,10].map(count => <button key={count} className={imageCount === count ? "active" : ""} onClick={() => setImageCount(count)}>{count} 张</button>)}</div></div>
           <button className="btn-primary image-generate" disabled={isImageGenerating} onClick={generateImages}>{isImageGenerating ? "生成中..." : "开始生成"}</button>
-          <div className="image-results"><h2>生成结果</h2>{visibleImageResults.length ? <div className="material-grid">{visibleImageResults.map(item => <div className="material-card" key={item.id}><div className="material-preview"><span>图片占位</span></div><strong>{item.name}</strong><p className="muted">{imageModel} / {imageQuality} / {imageRatio}</p></div>)}</div> : <div className="empty-result"><div className="empty-ico">▧</div><strong>还没有生成图片</strong><p className="muted">填写提示词并点击“开始生成”后，结果会展示在这里。</p></div>}{hiddenImageResultCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllImageResults(prev => !prev)}>{showAllImageResults ? "收起" : `展开全部 ${hiddenImageResultCount}`}</button>}</div>
+          <div className="image-results"><h2>生成结果</h2>{visibleImageResults.length ? <div className="material-grid">{visibleImageResults.map(item => <div className="material-card" key={item.id}><div className="material-preview">{item.previewUrl ? <img src={item.previewUrl} alt={item.name} /> : <span>图片</span>}</div><strong>{item.name}</strong><p className="muted">{imageModel} / {imageQuality} / {imageRatio}</p><span className="reviewed-badge">已入素材库</span></div>)}</div> : <div className="empty-result"><div className="empty-ico">▧</div><strong>还没有生成图片</strong><p className="muted">填写提示词并点击“开始生成”，成功后会自动保存到素材库。</p></div>}{hiddenImageResultCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllImageResults(prev => !prev)}>{showAllImageResults ? "收起" : `展开全部 ${hiddenImageResultCount}`}</button>}</div>
         </section>
 
         <div style={sectionStyle("material-assets")}>
-        <div className="lizhen-select-tip">
-          <div><strong>要使用外接资产生成视频？</strong><p>项目素材用于管理当前项目内的 Prompt、本地预览和公网素材；外接资产用于管理已登记、可复用的素材。</p></div>
-          <button className="btn-primary" onClick={() => { setActiveSection("assets"); window.setTimeout(() => document.getElementById("assets")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0); }}>去勾选外接资产</button>
-        </div>
         <section className="card asset-dynamic-workspace">
-          <div className="asset-workspace-head"><div><h2>项目素材</h2><p className="muted">管理当前项目内的 Prompt、本地预览素材和可登记的公网素材；默认展示最近 5 个，展开后查看全部。</p></div><span className="source-pill internal">项目内素材</span></div>
+          <div className="asset-workspace-head"><div><h2>素材库</h2><p className="muted">当前项目素材跟随项目切换；共享素材适合汽车、场景、道具、背景音乐等多个项目复用的内容。</p></div><span className="source-pill internal">{activeAssetScope === "project" ? "当前项目" : "团队共享"}</span></div>
           <div className="asset-tabs">
+            {([
+              ["project", "当前项目"],
+              ["shared", "共享素材"]
+            ] as const).map(([key, label]) => (
+              <button key={key} className={activeAssetScope === key ? "active" : ""} onClick={() => setActiveAssetScope(key)}>{label}</button>
+            ))}
+          </div>
+          {activeAssetScope === "project" && <div className="asset-tabs">
             {([
               ["image", "图片"],
               ["video", "视频"],
               ["audio", "音频"],
-              ["sd2", "SD2素材"]
+              ["sd2", "提示词"]
             ] as const).map(([key, label]) => (
-              <button key={key} className={activeAssetTab === key ? "active" : ""} onClick={() => setActiveAssetTab(key)}>{label}</button>
+              <button key={key} className={activeAssetTab === key ? "active" : ""} onClick={() => { setActiveAssetTab(key); if (key !== "sd2") { setMaterialKind(key); setMaterialRole(key === "image" ? "reference_image" : key === "video" ? "reference_video" : "reference_audio"); } }}>{label}</button>
             ))}
-          </div>
-          <div className="asset-filterbar">
-            <button className="btn-ghost btn-small" onClick={openPromptDialog}>生成 Prompt</button>
-            <button className="btn-ghost btn-small" onClick={openImageDialog}>生成图片</button>
-            <select onChange={event => alert(`已切换到：${event.target.value}`)}><option>全部集数</option><option>第 1 集</option><option>第 2 集</option></select>
-            <select onChange={event => alert(`筛选：${event.target.value}`)}><option>全部</option><option>已选中</option><option>已登记 asset</option></select>
-            <input placeholder="搜索资产名称..." onChange={event => setMaterialMessage(event.target.value ? `正在搜索：${event.target.value}` : "")} />
+          </div>}
+          {activeAssetScope === "project" && <div className="asset-filterbar">
+            {activeAssetTab === "sd2" && <button className="btn-ghost btn-small" onClick={openPromptDialog}>生成提示词</button>}
+            {activeAssetTab === "image" && <button className="btn-ghost btn-small" onClick={() => setActiveSection("image-workbench")}>去生图工作台</button>}
+            <input placeholder="搜索素材名称..." onChange={event => setMaterialMessage(event.target.value ? `正在搜索：${event.target.value}` : "")} />
             <span className="muted" style={{ marginLeft: "auto" }}>排序</span>
             <select onChange={event => alert(`排序方式：${event.target.value}`)}><option>类型</option><option>名称</option><option>创建时间</option></select>
-          </div>
-          <div className="material-grid">
-            {visibleAssets.length ? visibleAssets.map(material => (
+          </div>}
+          {activeAssetScope === "shared" && <div className="asset-filterbar">
+            <button className="btn-ghost btn-small" onClick={loadLizhenAssets}>{isLoadingLizhenAssets ? "同步中..." : "刷新共享素材"}</button>
+            <div className="library-filter"><span>类型</span>{([["all", "全部"], ["image", "图片"], ["video", "视频"], ["audio", "音频"], ["prompt", "提示词"]] as [LibraryFilter, string][]).map(([key, label]) => <button key={key} className={libraryFilter === key ? "active" : ""} onClick={() => setLibraryFilter(key)}>{label}</button>)}</div>
+            <input value={librarySearch} onChange={event => setLibrarySearch(event.target.value)} placeholder="搜索共享素材名称..." />
+          </div>}
+          {activeAssetScope === "project" && <div className="material-grid">
+            {visibleAssets.length ? visibleAssets.map(material => {
+              const usable = Boolean(material.reviewedAssetUrl || material.seedanceAssetUrl || material.url);
+              return (
               <div className={`material-card ${selectedMaterialIds.includes(material.id) ? "selected" : ""}`} key={material.id} onClick={() => toggleMaterial(material.id)}>
                 <div className="material-preview">
-                  {material.kind === "image" && material.previewUrl ? <img src={material.previewUrl} alt={material.name} /> : material.kind === "video" && material.previewUrl ? <video src={material.previewUrl} controls /> : <span>{material.kind === "sd2" ? "Prompt" : material.kind}</span>}
+                  {material.kind === "image" && material.previewUrl ? <img src={material.previewUrl} alt={material.name} /> : material.kind === "video" && material.previewUrl ? <video src={material.previewUrl} controls /> : <span>{material.kind === "sd2" ? "提示词" : material.kind}</span>}
                 </div>
                 <strong>{material.name}</strong>
-                <p className="muted">{material.kind} / {material.role}</p>
-                <p className="muted">{material.reviewedAssetUrl || material.seedanceAssetUrl || material.url || "仅本地预览，真实生成不会使用"}</p>
-                {material.seedanceAssetUrl && <span className="reviewed-badge">已登记外接素材</span>}
-                {material.reviewedAssetUrl && <span className="reviewed-badge">已绑定外接素材</span>}
-                {!material.reviewedAssetUrl && !material.seedanceAssetUrl && !material.url && <span className="local-only-badge">仅本地预览</span>}
-                <div className="actions"><button className="btn-ghost btn-small" onClick={event => { event.stopPropagation(); toggleMaterial(material.id); }}>{selectedMaterialIds.includes(material.id) ? "取消@" : "用于@"}</button>{!material.seedanceAssetUrl && !material.reviewedAssetUrl && material.url && <button className="btn-ghost btn-small" onClick={event => { event.stopPropagation(); registerMaterialToSeedance(material.id); }}>重新登记外接资产</button>}<button className="btn-danger btn-small" onClick={event => { event.stopPropagation(); deleteMaterial(material.id); }}>删除</button></div>
+                <p className="muted">{material.kind === "sd2" ? "提示词" : material.kind === "image" ? "图片" : material.kind === "video" ? "视频" : "音频"}{material.source === "generated" ? " / 生图" : material.source === "upload" ? " / 上传" : ""}{material.scope === "team" ? " / 团队共享" : " / 项目独享"}</p>
+                <span className={usable ? "reviewed-badge" : "local-only-badge"}>{usable ? "可用" : material.kind === "sd2" ? "提示词" : "处理中"}</span>
+                <div className="actions"><button className="btn-ghost btn-small" onClick={event => { event.stopPropagation(); toggleMaterial(material.id); }}>{selectedMaterialIds.includes(material.id) ? "取消参考" : "选为参考"}</button><button className="btn-danger btn-small" onClick={event => { event.stopPropagation(); deleteMaterial(material.id); }}>删除</button></div>
               </div>
-            )) : <div className="empty">当前 {activeAssetTab === "image" ? "图片" : activeAssetTab === "video" ? "视频" : activeAssetTab === "audio" ? "音频" : "SD2素材"} 分类暂无素材，请点击“生成 Prompt”“生成图片”或在右侧添加公网素材。</div>}
-          </div>
-          {hiddenAssetCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllAssets(prev => !prev)}>{showAllAssets ? "收起" : `展开全部 ${hiddenAssetCount}`}</button>}
+            ); }) : <div className="empty">当前 {activeAssetTab === "image" ? "图片分类暂无素材。可以上传本地图片，或到生图工作台生成图片。" : activeAssetTab === "video" ? "视频分类暂无素材。可以上传本地视频。" : activeAssetTab === "audio" ? "音频分类暂无素材。可以上传本地音频。" : "提示词分类暂无内容。可以生成提示词并保存到素材库。"}</div>}
+          </div>}
+          {activeAssetScope === "shared" && <div className="material-grid">
+            {visibleTeamSharedMaterials.map(material => {
+              const imported = state.materials.some(item => item.id === material.id);
+              const selected = selectedMaterialIds.includes(material.id);
+              return (
+              <div className={`material-card ${selected ? "selected" : ""}`} key={`team-${material.id}`} onClick={() => toggleTeamSharedMaterial(material)}>
+                <div className="material-preview">
+                  {material.kind === "image" && material.previewUrl ? <img src={material.previewUrl} alt={material.name} /> : material.kind === "video" && material.previewUrl ? <video src={material.previewUrl} controls /> : <span>{material.kind === "sd2" ? "提示词" : material.kind === "audio" ? "音频" : "素材"}</span>}
+                </div>
+                <strong>{material.name}</strong>
+                <p className="muted">{material.kind === "image" ? "图片" : material.kind === "video" ? "视频" : material.kind === "audio" ? "音频" : "提示词"} / 团队共享</p>
+                <span className="reviewed-badge">{imported ? "已在当前项目" : "可复用"}</span>
+                <p className="muted">来自 {material.sourceProjectName || "项目"} · {material.createdBy || "团队成员"}</p>
+                <div className="actions"><button className="btn-ghost btn-small" onClick={event => { event.stopPropagation(); toggleTeamSharedMaterial(material); }}>{selected ? "取消参考" : imported ? "选为参考" : "加入并参考"}</button></div>
+              </div>
+            ); })}
+            {visibleLizhenAssets.length ? visibleLizhenAssets.map(asset => (
+              <div className={`material-card ${selectedLizhenAssetIds.includes(asset.id) ? "selected" : ""}`} key={asset.id} onClick={() => toggleLizhenAsset(asset.id)}>
+                <div className="material-preview">
+                  {asset.类型 === "图片" && asset.原始URL ? <img src={asset.原始URL} alt={asset.asset_name} /> : asset.类型 === "视频" && asset.原始URL ? <video src={asset.原始URL} controls /> : <span>{asset.类型}</span>}
+                </div>
+                <strong>{asset.asset_name}</strong>
+                <p className="muted">{asset.类型} / 团队共享</p>
+                <span className="reviewed-badge">可生成</span>
+                <div className="actions"><button className="btn-ghost btn-small" onClick={event => { event.stopPropagation(); toggleLizhenAsset(asset.id); }}>{selectedLizhenAssetIds.includes(asset.id) ? "取消参考" : "选为参考"}</button></div>
+              </div>
+            )) : null}
+            {!visibleTeamSharedMaterials.length && !visibleLizhenAssets.length && <div className="empty">暂无共享素材。上传素材时勾选“同时加入团队共享”，角色、车辆、场景、道具、音乐等内容就可以在多个项目复用。</div>}
+          </div>}
+          {activeAssetScope === "project" && hiddenAssetCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllAssets(prev => !prev)}>{showAllAssets ? "收起" : `展开全部 ${hiddenAssetCount}`}</button>}
+          {activeAssetScope === "shared" && hiddenLizhenAssetCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllLizhenAssets(prev => !prev)}>{showAllLizhenAssets ? "收起" : `展开全部 ${hiddenLizhenAssetCount}`}</button>}
         </section>
 
-        <section className="card" style={{ marginTop: 18 }}>
-          <h2 style={{ marginTop: 0 }}>添加素材</h2>
+        {activeAssetScope === "project" && activeAssetTab !== "sd2" && <section className="card" style={{ marginTop: 18 }}>
+          <h2 style={{ marginTop: 0 }}>上传到当前项目</h2>
           <div className="form">
             <div><label>素材名称</label><input value={materialName} onChange={event => setMaterialName(event.target.value)} /></div>
-            <div><label>公网素材 URL</label><input value={materialUrl} onChange={event => setMaterialUrl(event.target.value)} placeholder="https://example.com/reference.png，添加后可登记到外接素材库" /></div>
-            <div><label>已有外接 asset ID（可选）</label><input value={reviewedAssetInput} onChange={event => setReviewedAssetInput(event.target.value)} placeholder="已有资产时填 1818... 或 asset://1818...；一般不用填" /></div>
-            <div><label>素材类型</label><select value={materialKind} onChange={event => { const next = event.target.value as MaterialKind; setMaterialKind(next); setActiveAssetTab(next); setMaterialRole(next === "image" || next === "sd2" ? "reference_image" : next === "video" ? "reference_video" : "reference_audio"); }}><option value="image">图片</option><option value="video">视频</option><option value="audio">音频</option><option value="sd2">SD2素材</option></select></div>
-            <div><label>素材角色</label><select value={materialRole} onChange={event => setMaterialRole(event.target.value as MaterialRole)}><option value="reference_image">参考图</option><option value="first_frame">首帧图</option><option value="last_frame">尾帧图</option><option value="reference_video">参考视频</option><option value="reference_audio">参考音频</option></select></div>
-            <button className="btn-primary" onClick={addMaterialFromUrl}>添加并登记外接资产</button>
-            <div><label>本地上传预览（仅用于页面查看）</label><input type="file" accept="image/*,video/*,audio/*" onChange={addLocalPreview} /></div>
-            <p className="muted">{materialMessage || "提示：视频生成只能使用公网 URL 或已登记素材；本地上传文件仅用于页面预览。"}</p>
+            <div><label>素材类型</label><input value={activeAssetTabLabel} readOnly /></div>
+            <div><label>素材角色</label><select value={materialRole} onChange={event => setMaterialRole(event.target.value as MaterialRole)}>{activeRoleOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
+            <div><label>选择文件</label><input type="file" accept={activeUploadAccept} onChange={addLocalPreview} disabled={isUploadingMaterial} /></div>
+            <label className="checkbox-line"><input type="checkbox" checked={shareUploadToTeam} onChange={event => setShareUploadToTeam(event.target.checked)} /> 同时加入团队共享</label>
+            <p className="muted">{materialMessage || (shareUploadToTeam ? "上传后会保存到当前项目，也会进入团队共享，供其他项目复用。" : "上传后系统会自动生成素材地址并保存到当前项目，默认项目独享。")}</p>
           </div>
-        </section>
+        </section>}
+        {activeAssetScope === "project" && activeAssetTab === "sd2" && <section className="card" style={{ marginTop: 18 }}>
+          <h2 style={{ marginTop: 0 }}>提示词素材</h2>
+          <div className="form">
+            <p className="muted">{materialMessage || "提示词用于整理分镜和生成描述，不需要上传文件。"}</p>
+            <button className="btn-primary" onClick={openPromptDialog}>生成提示词</button>
+          </div>
+        </section>}
         </div>
 
         <div style={sectionStyle("tasks")}>
@@ -1736,29 +1855,6 @@ export default function Home() {
           </section>
         </div>
 
-        <div style={sectionStyle("assets")}>
-          <section id="assets" className="library-section lizhen-section">
-            <div className="external-library-title"><div><h1>外接资产</h1><p>统一管理已登记、可复用的外部素材。默认展示最近 5 个，展开后查看全部；勾选后可用于视频生成。</p></div><span className="source-pill external">外部素材</span></div>
-            <div className="library-search">
-              <span>⌕</span>
-              <input value={librarySearch} onChange={event => setLibrarySearch(event.target.value)} placeholder="搜索资产名称、类型或 asset://id" />
-              <button onClick={loadLizhenAssets}>{isLoadingLizhenAssets ? "同步中" : "刷新"}</button>
-            </div>
-            <div className="library-toolbar">
-            <div className="library-filter"><span>类型</span>{([["all", "全部"], ["image", "图片"], ["video", "视频"], ["text", "音频"]] as [LibraryFilter, string][]).map(([key, label]) => <button key={key} className={libraryFilter === key ? "active" : ""} onClick={() => setLibraryFilter(key)}>{label}</button>)}</div>
-            <div className="library-actions"><button className="btn-ghost" onClick={loadLizhenAssets}>刷新外接资产</button><button className="btn-primary" onClick={() => document.getElementById("material-assets")?.scrollIntoView({ behavior: "smooth" })}>上传新资产</button></div>
-          </div>
-          <p className="muted">{lizhenAssetMessage || "外接资产数据来自 /api/assets。"} 已选择 {selectedLizhenAssetIds.length} 个外接资产用于生成视频。</p>
-          <div className="table-wrap lizhen-table-wrap">
-            <table className="table lizhen-table">
-              <thead><tr><th>选择</th><th>资产名称</th><th>asset://</th><th>类型</th><th>同步状态</th><th>失败原因</th><th>资产状态</th><th>所属组</th><th>创建时间</th><th>操作</th></tr></thead>
-              <tbody>{visibleLizhenAssets.map(asset => <tr key={asset.id} className={selectedLizhenAssetIds.includes(asset.id) ? "selected-row" : ""}><td><input type="checkbox" checked={selectedLizhenAssetIds.includes(asset.id)} onChange={() => toggleLizhenAsset(asset.id)} /></td><td><strong>{asset.asset_name}</strong><br /><span className="muted">ID: {asset.id}</span></td><td><code>{asset.asset_url}</code></td><td>{asset.类型}</td><td><span className="sync-badge success">{asset.同步状态}</span></td><td>{asset.失败原因}</td><td><span className="sync-badge reviewed">{asset.资产状态}</span></td><td>{asset.所属组}</td><td>{asset.创建时间}</td><td><div className="table-actions"><button onClick={() => alert(JSON.stringify(asset, null, 2))}>详情</button><button onClick={() => toggleLizhenAsset(asset.id)}>{selectedLizhenAssetIds.includes(asset.id) ? "取消使用" : "用于生成"}</button><button className="danger" onClick={() => alert("删除功能下一步接入 /api/assets delete")}>删除</button></div></td></tr>)}</tbody>
-            </table>
-            {!filteredLizhenAssets.length && <div className="library-empty"><div className="empty-ico">▱</div><strong>暂无外接资产</strong><p>请先上传资产，或点击刷新同步外接资产。</p></div>}
-            {hiddenLizhenAssetCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllLizhenAssets(prev => !prev)}>{showAllLizhenAssets ? "收起" : `展开全部 ${hiddenLizhenAssetCount}`}</button>}
-          </div>
-        </section>
-        </div>
       </main>
 
       <div className={`modal ${passwordModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setPasswordModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>修改密码</h2><button className="btn-ghost btn-small" onClick={() => setPasswordModalOpen(false)}>关闭</button></div><div className="form"><div><label>手机号</label><input value={securityPhone} onChange={event => setSecurityPhone(event.target.value)} placeholder="请输入绑定手机号" /></div><div><label>验证码</label><div className="code-row"><input value={securityCode} onChange={event => setSecurityCode(event.target.value)} placeholder="请输入 6 位验证码" /><button className="btn-primary" onClick={() => alert(`验证码已发送至 ${securityPhone}`)}>发送验证码</button></div></div><div><label>新密码</label><input type="password" value={newPassword} onChange={event => setNewPassword(event.target.value)} placeholder="请输入新密码（至少 6 个字符）" /></div><div><label>确认新密码</label><input type="password" value={confirmNewPassword} onChange={event => setConfirmNewPassword(event.target.value)} placeholder="请再次输入新密码" /></div><div className="actions"><button className="btn-ghost" onClick={() => setPasswordModalOpen(false)}>取消</button><button className="btn-primary" onClick={() => { if (!securityCode || !newPassword || newPassword !== confirmNewPassword) return alert("请确认验证码和两次密码输入一致。"); setPasswordModalOpen(false); alert("演示环境已完成密码修改流程。") }}>确认修改</button></div></div></div></div>
@@ -1766,8 +1862,7 @@ export default function Home() {
       <div className={`modal ${deleteProjectTarget ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setDeleteProjectTarget(null)}><div className="modal-card"><div className="modal-head"><h2>删除项目</h2><button className="btn-ghost btn-small" onClick={() => setDeleteProjectTarget(null)}>关闭</button></div><div className="form"><div className="danger-note"><strong>此操作会删除当前浏览器中该项目的剧本、分镜、素材和生成记录。</strong><span>请输入项目名称确认删除：{deleteProjectTarget?.name}</span></div><div><label>确认项目名称</label><input value={deleteProjectName} onChange={event => setDeleteProjectName(event.target.value)} placeholder={deleteProjectTarget?.name || ""} /></div><div className="actions"><button className="btn-ghost" onClick={() => setDeleteProjectTarget(null)}>取消</button><button className="btn-danger" onClick={deleteProject} disabled={!deleteProjectTarget || deleteProjectName.trim() !== deleteProjectTarget.name}>确认删除</button></div></div></div></div>
       <div className={`modal ${scriptModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setScriptModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>导入剧本</h2><button className="btn-ghost btn-small" onClick={() => setScriptModalOpen(false)}>关闭</button></div><div className="form"><div><label>剧本内容</label><textarea style={{ minHeight: 180 }} value={scriptInput} onChange={event => setScriptInput(event.target.value)} /></div><button className="btn-primary" onClick={saveScript}>保存剧本</button><div className="script-box">{scriptPreview || "暂无剧本内容"}</div>{scriptTooLong && <button className="collapse-toggle" onClick={() => setShowFullScript(prev => !prev)}>{showFullScript ? "收起" : "展开全部剧本"}</button>}</div></div></div>
       <div className={`modal ${batchModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setBatchModalOpen(false)}><div className="modal-card modal-card-wide"><div className="modal-head"><h2>提示词拆分分镜</h2><button className="btn-ghost btn-small" onClick={() => setBatchModalOpen(false)}>关闭</button></div><div className="form"><div><label>目标总时长</label><select value={batchTargetDuration} onChange={event => setBatchTargetDuration(Number(event.target.value))}><option value="6">6s</option><option value="9">9s</option><option value="12">12s</option></select></div><div><label>完整视频提示词</label><textarea className="batch-prompt" value={batchPromptInput} onChange={event => setBatchPromptInput(event.target.value)} placeholder="粘贴一整段视频提示词。系统会自动拆成 2-7 个镜头，并保存为分镜列表；不可拆分时会按上方目标总时长生成一条完整分镜。" /></div><div className="batch-preview"><strong>拆分结果会进入分镜列表</strong><p>镜头01就是拆分后的第一段，不会把整段提示词原样保留。支持 0-3秒 时间轴，也支持无时间轴长文本自动拆分。不可拆分时按 6s/9s/12s 完整生成一条分镜。</p></div><button className="btn-primary" onClick={importBatchShots}>生成分镜</button></div></div></div>
-      <div className={`modal ${promptModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setPromptModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>生成 Prompt</h2><button className="btn-ghost btn-small" onClick={() => setPromptModalOpen(false)}>关闭</button></div><div className="form"><div><label>Prompt 内容</label><textarea style={{ minHeight: 180 }} value={promptDraft} onChange={event => setPromptDraft(event.target.value)} /></div><button className="btn-primary" onClick={saveGeneratedPrompt}>保存到分镜与 SD2素材</button><p className="muted">这里先提供可编辑 Prompt 生成对话框，保存后会写入当前分镜提示词，并出现在 SD2素材分类。</p></div></div></div>
-      <div className={`modal ${imageModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setImageModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>生成图片</h2><button className="btn-ghost btn-small" onClick={() => setImageModalOpen(false)}>关闭</button></div><div className="form"><div><label>图片生成描述</label><textarea style={{ minHeight: 160 }} value={imagePromptDraft} onChange={event => setImagePromptDraft(event.target.value)} /></div><button className="btn-primary" onClick={saveImagePlaceholder}>创建图片素材占位</button><p className="muted">当前先创建可管理的图片素材占位。拿到公网图片 URL 后，可在“添加素材”中用于视频生成。</p></div></div></div>
+      <div className={`modal ${promptModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setPromptModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>生成提示词</h2><button className="btn-ghost btn-small" onClick={() => setPromptModalOpen(false)}>关闭</button></div><div className="form"><div><label>提示词内容</label><textarea style={{ minHeight: 180 }} value={promptDraft} onChange={event => setPromptDraft(event.target.value)} /></div><button className="btn-primary" onClick={saveGeneratedPrompt}>保存到分镜与素材库</button><p className="muted">保存后会写入当前分镜提示词，并出现在素材库的提示词分类。</p></div></div></div>
     </div>
   );
 }

@@ -28,8 +28,7 @@ const workspaceNav: [WorkspaceSection, string][] = [
 ];
 
 const assetNav: [WorkspaceSection, string][] = [
-  ["material-assets", "◈ 项目素材"],
-  ["assets", "◫ 外接资产"]
+  ["material-assets", "◈ 素材库"]
 ];
 
 export function Sidebar({

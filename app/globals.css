@@ -184,10 +184,14 @@ h2 { margin: 28px 0 8px; font-size: 22px; }
 label { font-size: 13px; color: #536174; font-weight: 750; display: block; margin-bottom: 7px; }
 input, textarea, select { width: 100%; border: 1px solid var(--line); border-radius: 13px; padding: 13px 14px; font: inherit; outline: none; background: #fbfdff; }
 textarea { min-height: 108px; resize: vertical; }
+.checkbox-line { display: flex; align-items: center; gap: 9px; margin: 0; color: #334155; }
+.checkbox-line input { width: 16px; height: 16px; padding: 0; accent-color: var(--primary); }
 
 .assets { grid-template-columns: repeat(3, 1fr); margin-top: 18px; }
 .asset-dynamic-workspace { padding: 0; overflow: hidden; }
-.asset-tabs { display: flex; gap: 28px; padding: 0 20px; border-bottom: 1px solid var(--line); }
+.asset-dynamic-workspace .asset-workspace-head { padding: 24px 28px 0; margin-bottom: 18px; }
+.asset-dynamic-workspace .source-pill { margin-top: 2px; }
+.asset-tabs { display: flex; gap: 28px; padding: 0 28px; border-bottom: 1px solid var(--line); }
 .asset-tabs button { background: transparent; color: #526071; border-radius: 0; padding: 16px 0; box-shadow: none; border-bottom: 2px solid transparent; }
 .asset-tabs button.active { color: var(--primary); border-bottom-color: var(--primary); }
 .asset-filterbar { display: flex; align-items: center; gap: 10px; padding: 14px 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }

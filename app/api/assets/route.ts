@@ -40,7 +40,7 @@ function getApiKey() {
 }
 
 function assetTypeLabel(value: number) {
-  return ({ 1: "图片", 2: "视频", 3: "音频" } as Record<number, string>)[value] || String(value);
+  return ({ 1: "图片", 2: "视频", 3: "音频", 4: "提示词", 5: "提示词" } as Record<number, string>)[value] || String(value);
 }
 
 function syncStatusLabel(value: number) {
