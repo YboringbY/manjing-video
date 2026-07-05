@@ -96,6 +96,20 @@ function assetTypeOf(kind: MaterialKind) {
   return kind === "image" || kind === "sd2" ? 1 : kind === "video" ? 2 : 3;
 }
 
+function materialKey(material: MaterialAsset) {
+  return material.dbId ? `db:${material.dbId}` : material.storagePath ? `storage:${material.storagePath}` : `url:${material.url}`;
+}
+
+function mergeMaterials(current: MaterialAsset[], incoming: MaterialAsset[]) {
+  const seen = new Set<string>();
+  return [...incoming, ...current].filter(material => {
+    const key = materialKey(material);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function normalizeAssetUrl(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return "";
@@ -356,6 +370,27 @@ export default function Home() {
     if (!authReady || !currentUser) return;
     fetchUsers().catch(() => undefined);
   }, [authReady, currentUser]);
+
+  useEffect(() => {
+    if (!authReady || !currentUser || !storageReady) return;
+    let cancelled = false;
+    async function loadProjectMaterials() {
+      try {
+        const response = await fetch(`/api/materials?projectId=${currentProjectId}`);
+        const result = await response.json();
+        if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "加载素材失败");
+        if (cancelled) return;
+        const serverMaterials = result.data as MaterialAsset[];
+        setState(prev => ({ ...prev, materials: mergeMaterials(prev.materials, serverMaterials) }));
+      } catch {
+        if (!cancelled) setMaterialMessage(prev => prev || "素材库暂时无法同步数据库记录。");
+      }
+    }
+    loadProjectMaterials();
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, currentUser, storageReady, currentProjectId]);
 
   useEffect(() => {
     const role = currentUser ? authUsers[currentUser]?.role || "user" : "user";
@@ -1039,7 +1074,7 @@ export default function Home() {
       const result = await response.json();
       if (!response.ok || result.code !== 0 || !result.data?.publicUrl) throw new Error(result.message || "上传素材失败");
 
-      const material: MaterialAsset = {
+      const materialDraft: MaterialAsset = {
         id: Date.now(),
         name: String(result.data.name || file.name || "未命名素材"),
         url: result.data.publicUrl,
@@ -1054,6 +1089,17 @@ export default function Home() {
         sourceProjectName: state.project.name,
         createdBy: currentDisplayName
       };
+      let material = materialDraft;
+      if (currentUser) {
+        const saveResponse = await fetch("/api/materials", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...materialDraft, projectId: currentProjectId })
+        });
+        const saveResult = await saveResponse.json();
+        if (!saveResponse.ok || saveResult.code !== 0 || !saveResult.data) throw new Error(saveResult.message || "素材文件已上传，但素材记录保存失败。");
+        material = saveResult.data as MaterialAsset;
+      }
       setState(prev => ({ ...prev, materials: [material, ...prev.materials] }));
       setActiveAssetTab(kind);
       setActiveAssetScope("project");
@@ -1089,9 +1135,21 @@ export default function Home() {
     }
   }
 
-  function deleteMaterial(materialId: number) {
+  async function deleteMaterial(materialId: number) {
+    const material = state.materials.find(item => item.id === materialId);
     setSelectedMaterialIds(prev => prev.filter(id => id !== materialId));
     setState(prev => ({ ...prev, materials: prev.materials.filter(material => material.id !== materialId) }));
+    if (material?.dbId) {
+      try {
+        const response = await fetch(`/api/materials?id=${material.dbId}`, { method: "DELETE" });
+        const result = await response.json();
+        if (!response.ok || result.code !== 0) throw new Error(result.message || "删除素材失败");
+        setMaterialMessage("素材记录已删除，并已从 @ 引用中移除。");
+      } catch (error) {
+        setMaterialMessage(error instanceof Error ? `本地已移除，数据库删除失败：${error.message}` : "本地已移除，数据库删除失败。");
+      }
+      return;
+    }
     setMaterialMessage("素材已删除，并已从 @ 引用中移除。");
   }
 

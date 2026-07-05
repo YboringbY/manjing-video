@@ -25,6 +25,7 @@ model Tenant {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   memberships Membership[]
+  materials   Material[]
 }
 
 model User {
@@ -37,6 +38,7 @@ model User {
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
   memberships  Membership[]
+  materials    Material[]
 }
 
 model Membership {
@@ -52,4 +54,34 @@ model Membership {
 
   @@unique([tenantId, userId])
   @@index([userId])
+}
+
+model Material {
+  id                Int      @id @default(autoincrement())
+  tenantId          String
+  projectId         Int
+  name              String
+  kind              String
+  role              String
+  url               String
+  previewUrl        String?
+  storagePath       String?
+  seedanceAssetUrl  String?
+  reviewedAssetUrl  String?
+  source            String   @default("upload")
+  status            String   @default("ready")
+  scope             String   @default("project")
+  prompt            String?
+  sourceProjectId   Int?
+  sourceProjectName String?
+  createdById       String?
+  createdByName     String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy         User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, projectId, createdAt])
+  @@index([tenantId, scope, createdAt])
+  @@index([createdById])
 }
