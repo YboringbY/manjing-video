@@ -1785,8 +1785,7 @@ export default function Home() {
               </div>
               <div className="video-submit-row">
                 <button className="tool-chip" onClick={() => setMentionMenuOpen(open => !open)}>@ 素材</button>
-                <span className="tool-count">{shotPrompt.length} 字</span>
-                <button className="video-generate-button" onClick={() => addShot()}><span>开始生成</span><b>↑</b></button>
+                <button className="video-generate-button" onClick={() => addShot()}>开始生成</button>
               </div>
             </div>
           </div>
