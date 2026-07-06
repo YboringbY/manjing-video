@@ -1765,22 +1765,29 @@ export default function Home() {
               </div>
               <button className="btn-ghost btn-small" onClick={() => setBatchModalOpen(true)}>提示词拆分分镜</button>
             </div>
-            <div className="video-selected-assets">
-              {state.materials.filter(material => selectedMaterialIds.includes(material.id) && material.kind === "image").slice(0, 5).map(material => <div key={material.id} className="video-selected-thumb"><button className="selected-thumb-remove" onClick={() => toggleMaterial(material.id)}>×</button>{material.previewUrl ? <img src={material.previewUrl} alt={material.name} /> : <span>{material.name.slice(0, 1)}</span>}</div>)}
-              <button className="video-add-ref" onClick={() => setMentionMenuOpen(open => !open)}>+</button>
+            <div className="video-reference-bar">
+              <div className="video-reference-title"><strong>参考素材</strong><span>{selectedProjectReferences.length ? `已选择 ${selectedProjectReferences.length} 个` : "未选择"}</span></div>
+              <div className="video-selected-assets">
+                {state.materials.filter(material => selectedMaterialIds.includes(material.id) && material.kind === "image").slice(0, 5).map(material => <div key={material.id} className="video-selected-thumb"><button className="selected-thumb-remove" onClick={() => toggleMaterial(material.id)}>×</button>{material.previewUrl ? <img src={material.previewUrl} alt={material.name} /> : <span>{material.name.slice(0, 1)}</span>}</div>)}
+                <button className="video-add-ref" onClick={() => setMentionMenuOpen(open => !open)}>+</button>
+              </div>
             </div>
             <textarea className="video-prompt-editor" value={shotPrompt} onChange={event => setShotPrompt(event.target.value)} placeholder="描述视频内容，可点击 @ 选择素材库图片并插入人物名称，例如：@林凡 在教室门口回头，镜头缓慢推进。" />
             {omniReferenceEnabled && <div className="omni-reference-panel"><div className="omni-reference-head"><span className="live-dot" /><strong>全能参考模式已开启</strong><em>{omniReferenceItems.length ? `${omniReferenceItems.length} 个参考素材将随任务提交` : "等待绑定参考素材"}</em></div><div className="omni-reference-strip">{omniReferenceItems.length ? omniReferenceItems.map((item, index) => <div className="omni-ref-chip" key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={item.name} /> : <span>{String(item.kind).slice(0, 2)}</span>}<b>参考{index + 1}</b><small>{item.name}</small></div>) : <div className="omni-empty">请先在素材库选择可生成素材。</div>}</div>{localOnlyReferences.length > 0 && <p className="omni-warning">已忽略 {localOnlyReferences.length} 个仅预览素材；这类素材暂时不能随任务提交。</p>}</div>}
             {mentionMenuOpen && <div className="video-mention-popover"><div className="mention-panel-head"><strong>可选参考素材</strong><span>点击素材插入到提示词；只有“可生成”素材会随任务提交</span></div><div className="mention-panel-list">{mentionMaterials.length ? mentionMaterials.map(material => { const usable = Boolean(material.reviewedAssetUrl || material.seedanceAssetUrl || material.url); const selected = selectedMaterialIds.includes(material.id); return <div key={material.id} className={`mention-item ${selected ? "selected" : ""}`}><button onClick={() => insertMention(material)}><div className="mention-thumb">{material.previewUrl ? <img src={material.previewUrl} alt={material.name} /> : <span>@</span>}</div><div className="mention-meta"><strong>{material.name}</strong><span>{usable ? "可生成" : "仅预览"}</span></div></button><button className="btn-ghost btn-small" onClick={() => toggleMaterial(material.id)}>{selected ? "取消参考" : "选为参考"}</button><button className="btn-danger btn-small" onClick={() => deleteMaterial(material.id)}>删除</button></div>; }) : <div className="mention-empty">素材库里还没有图片素材，请先上传图片。</div>}</div></div>}
             <div className="video-composer-toolbar">
-              <button className={`tool-chip primary ${omniReferenceEnabled ? "active" : ""}`} onClick={() => setOmniReferenceEnabled(enabled => !enabled)}>✦ 全能参考{omniReferenceEnabled ? "已开" : ""}</button>
-              <label className="tool-select">模型<select value={selectedVideoModel} onChange={event => setSelectedVideoModel(event.target.value)}>{activeVideoModels.map(model => <option key={model} value={model}>{model}</option>)}</select></label>
-              <label className="tool-select">▯<select value={shotRatio} onChange={event => setShotRatio(event.target.value)}><option>9:16 竖屏短剧</option><option>16:9 横屏</option><option>1:1 方屏</option><option>4:3 宽屏</option><option>3:4 长图</option><option>adaptive 智能比例</option></select></label>
-              <label className="tool-select">清晰度<select value={shotResolution} onChange={event => setShotResolution(event.target.value as Shot["resolution"])}><option value="480p">480P</option><option value="720p">720P</option><option value="1080p">1080P</option></select></label>
-              <label className="tool-select">◷<select value={shotDuration} onChange={event => setShotDuration(Number(event.target.value))}><option value="4">4s</option><option value="5">5s</option><option value="6">6s</option><option value="8">8s</option><option value="10">10s</option><option value="12">12s</option><option value="15">15s</option></select></label>
-              <button className="tool-chip" onClick={() => setMentionMenuOpen(open => !open)}>@</button>
-              <span className="tool-count">✦ {shotPrompt.length}</span>
-              <button className="video-generate-arrow" onClick={() => addShot()}>↑</button>
+              <div className="video-settings-grid">
+                <button className={`tool-chip primary ${omniReferenceEnabled ? "active" : ""}`} onClick={() => setOmniReferenceEnabled(enabled => !enabled)}>全能参考{omniReferenceEnabled ? "已开" : ""}</button>
+                <label className="tool-select wide"><span>模型</span><select value={selectedVideoModel} onChange={event => setSelectedVideoModel(event.target.value)}>{activeVideoModels.map(model => <option key={model} value={model}>{model}</option>)}</select></label>
+                <label className="tool-select"><span>比例</span><select value={shotRatio} onChange={event => setShotRatio(event.target.value)}><option>9:16 竖屏短剧</option><option>16:9 横屏</option><option>1:1 方屏</option><option>4:3 宽屏</option><option>3:4 长图</option><option>adaptive 智能比例</option></select></label>
+                <label className="tool-select"><span>清晰度</span><select value={shotResolution} onChange={event => setShotResolution(event.target.value as Shot["resolution"])}><option value="480p">480P</option><option value="720p">720P</option><option value="1080p">1080P</option></select></label>
+                <label className="tool-select"><span>时长</span><select value={shotDuration} onChange={event => setShotDuration(Number(event.target.value))}><option value="4">4s</option><option value="5">5s</option><option value="6">6s</option><option value="8">8s</option><option value="10">10s</option><option value="12">12s</option><option value="15">15s</option></select></label>
+              </div>
+              <div className="video-submit-row">
+                <button className="tool-chip" onClick={() => setMentionMenuOpen(open => !open)}>@ 素材</button>
+                <span className="tool-count">{shotPrompt.length} 字</span>
+                <button className="video-generate-arrow" onClick={() => addShot()}>↑</button>
+              </div>
             </div>
           </div>
 
