@@ -634,6 +634,17 @@ export default function Home() {
     }));
   }
 
+  async function saveWorkspaceSnapshot(nextState: AppState) {
+    if (!currentUser) return;
+    const response = await fetch("/api/workspaces", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: nextState.project.id, name: nextState.project.name, state: nextState })
+    });
+    const result = await response.json();
+    if (!response.ok || result.code !== 0) throw new Error(result.message || "保存项目工作区失败");
+  }
+
   function createBlankProject(name: string, type: string): AppState {
     return {
       project: { id: Date.now(), name: name.trim() || "未命名项目", type, script: "" },
@@ -658,6 +669,7 @@ export default function Home() {
     setSelectedLizhenAssetIds([]);
     setGeneratedImages([]);
     setProjectModalOpen(false);
+    saveWorkspaceSnapshot(newProjectState).then(() => setWorkspaceSyncMessage("新项目已同步。")).catch(error => setWorkspaceSyncMessage(error instanceof Error ? error.message : "新项目同步失败。"));
   }
 
   function openDeleteProject(project: Project) {
@@ -691,6 +703,15 @@ export default function Home() {
     setDeleteProjectTarget(null);
     setDeleteProjectName("");
     persistWorkspace(nextState, nextProjectStates, nextProjects, nextCurrentProject.id);
+    if (currentUser) {
+      fetch(`/api/workspaces?projectId=${deleteProjectTarget.id}`, { method: "DELETE" })
+        .then(async response => {
+          const result = await response.json();
+          if (!response.ok || result.code !== 0) throw new Error(result.message || "删除项目云端快照失败");
+          setWorkspaceSyncMessage("项目云端快照已删除。");
+        })
+        .catch(error => setWorkspaceSyncMessage(error instanceof Error ? error.message : "项目云端快照删除失败。"));
+    }
     setUserActionMessage(`项目“${deleteProjectTarget.name}”已删除。`);
   }
 

@@ -72,3 +72,15 @@ export async function POST(request: Request) {
 
   return NextResponse.json({ code: 0, data: publicWorkspace(workspace) });
 }
+
+export async function DELETE(request: Request) {
+  const membership = await getCurrentMembership();
+  if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
+
+  const { searchParams } = new URL(request.url);
+  const projectId = cleanNumber(searchParams.get("projectId"), 0);
+  if (!projectId) return NextResponse.json({ code: 400, message: "缺少项目 ID。" }, { status: 400 });
+
+  await prisma.projectWorkspace.deleteMany({ where: { tenantId: membership.tenantId, projectId } });
+  return NextResponse.json({ code: 0 });
+}
