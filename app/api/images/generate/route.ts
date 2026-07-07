@@ -2,10 +2,9 @@ import { randomUUID } from "crypto";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import { NextResponse } from "next/server";
-import { readServerApiProfiles } from "../../api-profiles/store";
+import { resolveModelRoute } from "../../api-profiles/store";
 
 type ImageGeneratePayload = {
-  profile_id?: string;
   model?: string;
   prompt?: string;
   size?: string;
@@ -94,15 +93,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ code: 400, message: "请先填写生图提示词。" }, { status: 400 });
   }
 
-  const profiles = body.profile_id ? await readServerApiProfiles() : [];
-  const profile = body.profile_id ? profiles.find(item => item.id === body.profile_id) : profiles.find(item => item.active) || profiles[0];
-  if (body.profile_id && !profile) {
-    return NextResponse.json({ code: 404, message: "当前选中的模型渠道不存在，请重新选择后再生成。" }, { status: 404 });
+  const route = await resolveModelRoute("image", body.model);
+  if (body.model && !route) {
+    return NextResponse.json({ code: 400, message: "当前没有启用的渠道支持所选生图模型，请在模型渠道管理中补充后重试。" }, { status: 400 });
   }
+  const profile = route?.profile;
 
   const apiKey = profile?.apiKey || process.env.IMAGE_API_KEY || process.env.OPENAI_API_KEY || "";
   const baseUrl = normalizeBaseUrl(profile?.baseUrl);
-  const model = body.model || profile?.imageModels?.[0] || DEFAULT_MODEL;
+  const model = body.model || route?.model || DEFAULT_MODEL;
 
   if (!apiKey) {
     return NextResponse.json({ code: 500, message: "缺少图片生成访问凭证，请先在模型渠道中配置图片模型。" }, { status: 500 });

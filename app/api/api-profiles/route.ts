@@ -7,25 +7,31 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const body = await request.json() as Partial<ServerApiProfile> & { videoModels?: string[] | string; imageModels?: string[] | string; active?: boolean };
+  const body = await request.json() as Partial<ServerApiProfile> & { textModels?: string[] | string; scriptModels?: string[] | string; videoModels?: string[] | string; imageModels?: string[] | string; active?: boolean; enabled?: boolean };
   const name = body.name?.trim() || "";
   const baseUrl = normalizeBaseUrl(body.baseUrl || "");
   const apiKey = body.apiKey?.trim() || "";
+  const textModels = Array.from(new Set((Array.isArray(body.textModels) ? body.textModels : Array.isArray(body.scriptModels) ? body.scriptModels : String(body.textModels || body.scriptModels || "").split(/\r?\n|,/)).map(item => item.trim()).filter(Boolean)));
   const videoModels = Array.from(new Set((Array.isArray(body.videoModels) ? body.videoModels : String(body.videoModels || body.model || "").split(/\r?\n|,/)).map(item => item.trim()).filter(Boolean)));
   const imageModels = Array.from(new Set((Array.isArray(body.imageModels) ? body.imageModels : String(body.imageModels || "").split(/\r?\n|,/)).map(item => item.trim()).filter(Boolean)));
   const concurrencyLimit = Math.max(1, Math.min(50, Number(body.concurrencyLimit || 1)));
 
   const profiles = await readServerApiProfiles();
   const existing = profiles.find(profile => profile.id === body.id || (profile.name.trim() === name && normalizeBaseUrl(profile.baseUrl) === baseUrl));
-  if (!name || !baseUrl || (!apiKey && !existing?.apiKey) || (!videoModels.length && !imageModels.length)) return NextResponse.json({ code: 400, message: "请完整填写服务名称、Base URL、API Key，并至少配置一个视频或图片模型 ID。编辑已有配置时 API Key 可留空。" }, { status: 400 });
+  const priority = Math.max(1, Math.min(999, Number(body.priority || existing?.priority || 100)));
+  if (!name || !baseUrl || (!apiKey && !existing?.apiKey) || (!textModels.length && !videoModels.length && !imageModels.length)) return NextResponse.json({ code: 400, message: "请完整填写服务名称、Base URL、API Key，并至少配置一个文字处理、生图或视频模型 ID。编辑已有配置时 API Key 可留空。" }, { status: 400 });
   const nextProfile: ServerApiProfile = {
     id: existing?.id || `profile-${Date.now()}`,
     name,
     baseUrl,
     apiKey: apiKey || existing?.apiKey || "",
     model: videoModels[0] || existing?.model || "",
+    textModels,
+    scriptModels: textModels,
     videoModels,
     imageModels,
+    priority,
+    enabled: body.enabled ?? existing?.enabled ?? true,
     concurrencyLimit,
     active: body.active ?? existing?.active ?? profiles.length === 0,
     createdAt: existing?.createdAt || Date.now(),

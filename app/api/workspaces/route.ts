@@ -2,9 +2,11 @@ import { NextResponse } from "next/server";
 import { getCurrentMembership } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
+const MAX_DATABASE_INT = 2147483647;
+
 function cleanNumber(value: unknown, fallback = 0) {
   const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
+  return Number.isInteger(number) && number > 0 && number <= MAX_DATABASE_INT ? number : fallback;
 }
 
 function cleanText(value: unknown, fallback = "") {

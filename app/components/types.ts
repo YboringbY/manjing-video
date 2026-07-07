@@ -8,7 +8,7 @@ export type LibraryFilter = "all" | "image" | "video" | "audio" | "prompt";
 
 export type Project = { id: number; name: string; type: string; script: string };
 export type Shot = { id: number; title: string; prompt: string; ratio: string; duration: number; status: ShotStatus; resolution?: "480p" | "720p" | "1080p"; width?: number; height?: number };
-export type VideoTask = { id: string; shotId: number; shotTitle: string; provider: string; status: TaskStatus; result: string; providerTaskId?: string };
+export type VideoTask = { id: string; shotId: number; shotTitle: string; provider: string; status: TaskStatus; result: string; providerTaskId?: string; apiProfile?: ApiProfile };
 export type VideoAsset = { id: number; shotId: number; title: string; meta: string; gradient: string; videoUrl?: string; providerTaskId?: string };
 export type MaterialStatus = "ready" | "processing" | "failed";
 export type MaterialSource = "upload" | "generated" | "prompt" | "link";
@@ -20,7 +20,7 @@ export type ProjectStates = Record<number, AppState>;
 export type MemberRole = "super_admin" | "tenant_admin" | "user";
 export type ProfileSection = "basic" | "security";
 export type WorkspaceSection = "project-home" | "overview" | "script" | "shots" | "image-workbench" | "material-assets" | "tasks" | "members" | "channel-management" | "profile";
-export type ApiProfile = { id: string; name: string; baseUrl: string; apiKey?: string; model?: string; videoModels: string[]; imageModels: string[]; concurrencyLimit?: number; active: boolean; createdAt: number; hasApiKey?: boolean };
+export type ApiProfile = { id: string; name: string; baseUrl: string; apiKey?: string; model?: string; textModels?: string[]; scriptModels?: string[]; videoModels: string[]; imageModels: string[]; priority?: number; enabled?: boolean; concurrencyLimit?: number; active: boolean; createdAt: number; hasApiKey?: boolean };
 export type VisualAsset = {
   id: string;
   asset_url: string;

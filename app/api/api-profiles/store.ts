@@ -7,8 +7,12 @@ export type ServerApiProfile = {
   baseUrl: string;
   apiKey: string;
   model?: string;
+  textModels?: string[];
+  scriptModels?: string[];
   videoModels: string[];
   imageModels: string[];
+  priority?: number;
+  enabled?: boolean;
   concurrencyLimit?: number;
   active: boolean;
   createdAt: number;
@@ -42,13 +46,23 @@ export function toPublicProfile(profile: ServerApiProfile): PublicApiProfile {
   return { ...rest, hasApiKey: Boolean(apiKey) };
 }
 
+export type ModelCapability = "text" | "image" | "video";
+
+function modelsForCapability(profile: ServerApiProfile, capability: ModelCapability) {
+  if (capability === "text") return normalizeModelList(profile.textModels || profile.scriptModels);
+  if (capability === "image") return normalizeModelList(profile.imageModels);
+  return normalizeModelList(profile.videoModels, profile.model);
+}
+
 export function normalizeProfiles(profiles: ServerApiProfile[]) {
   const merged = [...defaultProfiles];
   profiles.forEach(profile => {
     const videoModels = normalizeModelList(profile.videoModels, profile.model);
+    const textModels = normalizeModelList(profile.textModels || profile.scriptModels);
     const imageModels = normalizeModelList(profile.imageModels);
+    const priority = Math.max(1, Math.min(999, Number(profile.priority || 100)));
     const concurrencyLimit = Math.max(1, Math.min(50, Number(profile.concurrencyLimit || 1)));
-    const normalized = { ...profile, baseUrl: normalizeBaseUrl(profile.baseUrl), model: videoModels[0] || "", videoModels, imageModels, concurrencyLimit };
+    const normalized = { ...profile, baseUrl: normalizeBaseUrl(profile.baseUrl), model: videoModels[0] || "", textModels, scriptModels: textModels, videoModels, imageModels, priority, enabled: profile.enabled ?? true, concurrencyLimit };
     const sameIdIndex = merged.findIndex(item => item.id === normalized.id);
     if (sameIdIndex >= 0) merged[sameIdIndex] = normalized;
     else merged.push(normalized);
@@ -78,4 +92,31 @@ export async function writeServerApiProfiles(profiles: ServerApiProfile[]) {
 export async function findServerApiProfile(id?: string) {
   const profiles = await readServerApiProfiles();
   return profiles.find(profile => profile.id === id) || profiles.find(profile => profile.active) || profiles[0];
+}
+
+export async function listPublicModels(capability: ModelCapability) {
+  const profiles = await readServerApiProfiles();
+  const byModel = new Map<string, { modelId: string; displayName: string; routeCount: number; bestPriority: number }>();
+  profiles.filter(profile => profile.enabled !== false).forEach(profile => {
+    modelsForCapability(profile, capability).forEach(modelId => {
+      const existing = byModel.get(modelId);
+      const priority = profile.priority || 100;
+      if (existing) byModel.set(modelId, { ...existing, routeCount: existing.routeCount + 1, bestPriority: Math.min(existing.bestPriority, priority) });
+      else byModel.set(modelId, { modelId, displayName: modelId, routeCount: 1, bestPriority: priority });
+    });
+  });
+  return Array.from(byModel.values()).sort((a, b) => a.bestPriority - b.bestPriority || a.displayName.localeCompare(b.displayName));
+}
+
+export async function resolveModelRoute(capability: ModelCapability, modelId?: string) {
+  const profiles = await readServerApiProfiles();
+  const enabledProfiles = profiles.filter(profile => profile.enabled !== false);
+  const requestedModel = modelId?.trim();
+  const candidates = enabledProfiles.flatMap(profile => {
+    const models = modelsForCapability(profile, capability);
+    return models.map(model => ({ profile, model }));
+  }).filter(item => !requestedModel || item.model === requestedModel);
+  const [selected] = candidates.sort((a, b) => (a.profile.priority || 100) - (b.profile.priority || 100) || (a.profile.updatedAt || 0) - (b.profile.updatedAt || 0));
+  if (!selected) return undefined;
+  return { profile: selected.profile, model: selected.model };
 }

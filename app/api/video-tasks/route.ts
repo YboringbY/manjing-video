@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { readServerApiProfiles } from "../api-profiles/store";
+import { resolveModelRoute, toPublicProfile } from "../api-profiles/store";
 
 type MediaInput = {
   url: string;
@@ -181,17 +181,12 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const body = await request.json() as GenerateVideoPayload;
-  const profiles = body.profile_id ? await readServerApiProfiles() : [];
-  const serverProfile = body.profile_id ? profiles.find(profile => profile.id === body.profile_id) : undefined;
-  if (body.profile_id && !serverProfile) return NextResponse.json({ code: 404, message: "当前选中的 API Profile 不存在，请重新选择后再生成。" }, { status: 404 });
-  const { apiKey, baseUrl, model, name, videoModels } = resolveApiProfile(serverProfile || body.api_profile);
-  const requestedModel = body.model_id?.trim() || model;
-  if (videoModels.length && !videoModels.includes(requestedModel)) {
-    return NextResponse.json(
-      { code: 400, message: "当前模型渠道不支持所选视频模型，请在模型渠道管理中补充后重试。" },
-      { status: 400 }
-    );
+  const route = await resolveModelRoute("video", body.model_id);
+  if (body.model_id && !route) {
+    return NextResponse.json({ code: 400, message: "当前没有启用的渠道支持所选视频模型，请在模型渠道管理中补充后重试。" }, { status: 400 });
   }
+  const { apiKey, baseUrl, model, name } = resolveApiProfile(route?.profile || body.api_profile);
+  const requestedModel = body.model_id?.trim() || route?.model || model;
 
   if (!apiKey) {
     return NextResponse.json(
@@ -279,6 +274,7 @@ export async function POST(request: Request) {
     data: {
       task_id: taskId,
       provider: name,
+      api_profile: route?.profile ? toPublicProfile(route.profile) : undefined,
       base_url: baseUrl,
       model: requestedModel,
       status: result.status || result.data?.status || "pending",

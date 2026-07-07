@@ -28,6 +28,7 @@ const ACTIVE_API_PROFILE_STORAGE_KEY = "manjing-video-active-api-profile";
 const DEFAULT_ASSET_GROUP_ID = "181862014778343444";
 const defaultApiProfiles: ApiProfile[] = [];
 const PROJECT_TYPES = ["AI 漫剧", "AI 真人剧"] as const;
+const MAX_DATABASE_INT = 2147483647;
 
 const seedState: AppState = {
   project: { id: 1, name: "短剧团队 Demo", type: "AI 真人剧", script: "女主带着关键合同来到男主公司，两人在会议室正面对峙，揭开三年前误会的真相。" },
@@ -55,10 +56,21 @@ const defaultProjectStates: ProjectStates = {
 
 const defaultProjects = [seedState.project, demo2State.project];
 
+function safeProjectId(value: unknown, fallback = seedState.project.id) {
+  const id = Number(value);
+  if (Number.isInteger(id) && id > 0 && id <= MAX_DATABASE_INT) return id;
+  if (Number.isFinite(id) && id > MAX_DATABASE_INT) return 1000000000 + (Math.abs(Math.trunc(id)) % 1000000000);
+  return fallback;
+}
+
+function createProjectId() {
+  return 1000000000 + (Date.now() % 1000000000);
+}
+
 function normalizeAppState(value: Partial<AppState> | undefined, fallback: AppState = seedState): AppState {
   return {
     project: {
-      id: value?.project?.id || fallback.project.id,
+      id: safeProjectId(value?.project?.id, fallback.project.id),
       name: value?.project?.name || fallback.project.name,
       type: value?.project?.type || fallback.project.type,
       script: value?.project?.script || ""
@@ -111,7 +123,11 @@ function mergeMaterials(current: MaterialAsset[], incoming: MaterialAsset[]) {
 }
 
 function projectStatesFromWorkspaces(workspaces: { projectId: number; state: Partial<AppState> }[]) {
-  return Object.fromEntries(workspaces.map(item => [item.projectId, normalizeAppState(item.state)])) as ProjectStates;
+  return Object.fromEntries(workspaces.map(item => {
+    const normalizedState = normalizeAppState(item.state);
+    const projectId = safeProjectId(normalizedState.project.id || item.projectId);
+    return [projectId, { ...normalizedState, project: { ...normalizedState.project, id: projectId } }];
+  })) as ProjectStates;
 }
 
 function normalizeAssetUrl(value: string) {
@@ -169,10 +185,12 @@ function normalizeApiProfiles(saved: ApiProfile[]) {
   const merged = [...defaultApiProfiles];
   saved.forEach(profile => {
     const legacyModel = profile.model === "doubao-seedance-2.0-fast" ? "doubao-seedance-2-0-fast-260128" : profile.model;
+    const textModels = Array.from(new Set((profile.textModels || profile.scriptModels || []).map(item => item.trim()).filter(Boolean)));
     const videoModels = Array.from(new Set([legacyModel, ...(profile.videoModels || [])].map(item => item?.trim()).filter(Boolean) as string[]));
     const imageModels = Array.from(new Set((profile.imageModels || []).map(item => item.trim()).filter(Boolean)));
+    const priority = Math.max(1, Math.min(999, Number(profile.priority || 100)));
     const concurrencyLimit = Math.max(1, Math.min(50, Number(profile.concurrencyLimit || 1)));
-    const normalizedProfile = { ...profile, model: videoModels[0] || "", videoModels, imageModels, concurrencyLimit };
+    const normalizedProfile = { ...profile, model: videoModels[0] || "", textModels, scriptModels: textModels, videoModels, imageModels, priority, enabled: profile.enabled ?? true, concurrencyLimit };
     const index = merged.findIndex(item => item.id === normalizedProfile.id);
     if (index >= 0) merged[index] = normalizedProfile;
     else merged.push(normalizedProfile);
@@ -202,7 +220,33 @@ function writeApiProfiles(profiles: ApiProfile[]) {
 
 function publicApiProfile(profile?: ApiProfile) {
   if (!profile) return undefined;
-  return { id: profile.id, name: profile.name, baseUrl: profile.baseUrl, model: profile.model, videoModels: profile.videoModels, imageModels: profile.imageModels, concurrencyLimit: profile.concurrencyLimit };
+  return { id: profile.id, name: profile.name, baseUrl: profile.baseUrl, model: profile.model, textModels: profile.textModels, scriptModels: profile.textModels || profile.scriptModels, videoModels: profile.videoModels, imageModels: profile.imageModels, priority: profile.priority, enabled: profile.enabled, concurrencyLimit: profile.concurrencyLimit };
+}
+
+function modelsByPriority(profiles: ApiProfile[], capability: "text" | "image" | "video") {
+  const seen = new Set<string>();
+  return profiles
+    .filter(profile => profile.enabled !== false)
+    .sort((a, b) => (a.priority || 100) - (b.priority || 100))
+    .flatMap(profile => capability === "text" ? profile.textModels || profile.scriptModels || [] : capability === "image" ? profile.imageModels || [] : profile.videoModels || [])
+    .filter(model => {
+      const value = model.trim();
+      if (!value || seen.has(value)) return false;
+      seen.add(value);
+      return true;
+    });
+}
+
+async function readApiJson(response: Response, fallbackMessage: string) {
+  const text = await response.text();
+  if (!text.trim()) {
+    return { code: response.ok ? 0 : response.status, message: response.ok ? "" : fallbackMessage };
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { code: response.status || 500, message: `${fallbackMessage}：接口返回了非 JSON 内容。` };
+  }
 }
 
 export default function Home() {
@@ -216,7 +260,6 @@ export default function Home() {
   const [deleteProjectTarget, setDeleteProjectTarget] = useState<Project | null>(null);
   const [deleteProjectName, setDeleteProjectName] = useState("");
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
-  const [scriptModalOpen, setScriptModalOpen] = useState(false);
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [batchPromptInput, setBatchPromptInput] = useState("");
   const [projectName, setProjectName] = useState(seedState.project.name);
@@ -260,8 +303,7 @@ export default function Home() {
   const [showFullScript, setShowFullScript] = useState(false);
   const [scriptTheme, setScriptTheme] = useState("");
   const [scriptCharacters, setScriptCharacters] = useState("");
-  const [scriptStyle, setScriptStyle] = useState("都市情感");
-  const [scriptEpisodeCount, setScriptEpisodeCount] = useState(12);
+  const [scriptEpisodeCount, setScriptEpisodeCount] = useState("12");
   const [scriptOutline, setScriptOutline] = useState("");
   const [scriptEpisodeSplit, setScriptEpisodeSplit] = useState("");
   const [scriptOptimizationNote, setScriptOptimizationNote] = useState("");
@@ -292,9 +334,13 @@ export default function Home() {
   const [apiProfileName, setApiProfileName] = useState("");
   const [apiProfileBaseUrl, setApiProfileBaseUrl] = useState("");
   const [apiProfileKey, setApiProfileKey] = useState("");
+  const [apiProfileTextModels, setApiProfileTextModels] = useState("");
   const [apiProfileVideoModels, setApiProfileVideoModels] = useState("");
   const [apiProfileImageModels, setApiProfileImageModels] = useState("");
+  const [apiProfilePriority, setApiProfilePriority] = useState(100);
+  const [apiProfileEnabled, setApiProfileEnabled] = useState(true);
   const [apiProfileConcurrencyLimit, setApiProfileConcurrencyLimit] = useState(1);
+  const [selectedTextModel, setSelectedTextModel] = useState("");
   const [selectedVideoModel, setSelectedVideoModel] = useState("doubao-seedance-2-0-fast-260128");
   const [addingApiProfile, setAddingApiProfile] = useState(false);
   const [apiProfileEditorOpen, setApiProfileEditorOpen] = useState(false);
@@ -318,8 +364,11 @@ export default function Home() {
     setApiProfileName(profile?.name || "");
     setApiProfileBaseUrl(profile?.baseUrl || "");
     setApiProfileKey("");
+    setApiProfileTextModels((profile?.textModels || profile?.scriptModels || []).join("\n"));
     setApiProfileVideoModels((profile?.videoModels || []).join("\n"));
     setApiProfileImageModels((profile?.imageModels || []).join("\n"));
+    setApiProfilePriority(Math.max(1, Math.min(999, Number(profile?.priority || 100))));
+    setApiProfileEnabled(profile?.enabled ?? true);
     setApiProfileConcurrencyLimit(Math.max(1, Math.min(50, Number(profile?.concurrencyLimit || 1))));
   }
 
@@ -337,7 +386,7 @@ export default function Home() {
       loadApiProfileDraft(profiles.find(item => item.id === nextActiveProfileId));
       if (nextActiveProfileId) window.localStorage.setItem(ACTIVE_API_PROFILE_STORAGE_KEY, nextActiveProfileId);
       else window.localStorage.removeItem(ACTIVE_API_PROFILE_STORAGE_KEY);
-      fetch("/api/api-profiles").then(response => response.json()).then(result => {
+      fetch("/api/api-profiles").then(response => readApiJson(response, "加载模型渠道失败")).then(result => {
         if (result.code !== 0 || !Array.isArray(result.data)) return;
         const serverProfiles = normalizeApiProfiles(result.data as ApiProfile[]);
         setApiProfiles(serverProfiles);
@@ -349,7 +398,7 @@ export default function Home() {
         else window.localStorage.removeItem(ACTIVE_API_PROFILE_STORAGE_KEY);
       }).catch(() => undefined);
       fetch("/api/auth/me").then(async response => {
-        const result = await response.json();
+        const result = await readApiJson(response, "登录状态已失效");
         if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "未登录");
         setAuthUsers(prev => ({ ...prev, [result.data.account]: result.data as AuthUser }));
         setCurrentUser(result.data.account);
@@ -367,7 +416,7 @@ export default function Home() {
 
   async function fetchUsers() {
     const response = await fetch("/api/users");
-    const result = await response.json();
+    const result = await readApiJson(response, "加载成员失败");
     if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "加载成员失败");
     setAuthUsers(usersToMap(result.data as AuthUser[]));
   }
@@ -383,7 +432,7 @@ export default function Home() {
     async function loadWorkspaces() {
       try {
         const response = await fetch("/api/workspaces");
-        const result = await response.json();
+        const result = await readApiJson(response, "加载项目工作区失败");
         if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "加载项目工作区失败");
         if (cancelled) return;
         const workspaces = result.data as { projectId: number; state: Partial<AppState> }[];
@@ -418,7 +467,7 @@ export default function Home() {
     async function loadProjectMaterials() {
       try {
         const response = await fetch(`/api/materials?projectId=${currentProjectId}`);
-        const result = await response.json();
+        const result = await readApiJson(response, "加载素材失败");
         if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "加载素材失败");
         if (cancelled) return;
         const serverMaterials = result.data as MaterialAsset[];
@@ -439,7 +488,7 @@ export default function Home() {
     async function loadTeamMaterials() {
       try {
         const response = await fetch("/api/materials?scope=team");
-        const result = await response.json();
+        const result = await readApiJson(response, "加载团队共享素材失败");
         if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "加载团队共享素材失败");
         if (!cancelled) setServerTeamMaterials(result.data as MaterialAsset[]);
       } catch {
@@ -478,12 +527,16 @@ export default function Home() {
       const nextState = normalizeAppState(parsed.state || parsed);
       const savedProjectStates = parsed.projectStates || { [nextState.project.id]: nextState };
       const nextProjectStates: ProjectStates = Object.fromEntries(
-        Object.entries({ ...defaultProjectStates, ...savedProjectStates }).map(([id, item]) => [id, normalizeAppState(item as Partial<AppState>)])
+        Object.values({ ...defaultProjectStates, ...savedProjectStates }).map(item => {
+          const normalizedState = normalizeAppState(item as Partial<AppState>);
+          return [normalizedState.project.id, normalizedState];
+        })
       );
       const savedProjects: Project[] = Array.isArray(parsed.projects) ? parsed.projects : Object.values(savedProjectStates).map((item: unknown) => normalizeAppState(item as Partial<AppState>).project);
-      const savedProjectIds = new Set(savedProjects.map(project => project.id));
-      const nextProjects = [...savedProjects, ...defaultProjects.filter(project => !savedProjectIds.has(project.id))];
-      const nextCurrentProjectId = parsed.currentProjectId || nextState.project.id;
+      const normalizedSavedProjects = savedProjects.map(project => ({ ...project, id: safeProjectId(project.id) }));
+      const savedProjectIds = new Set(normalizedSavedProjects.map(project => project.id));
+      const nextProjects = [...normalizedSavedProjects, ...defaultProjects.filter(project => !savedProjectIds.has(project.id))].filter((project, index, list) => index === list.findIndex(item => item.id === project.id));
+      const nextCurrentProjectId = safeProjectId(parsed.currentProjectId || nextState.project.id, nextState.project.id);
       const currentState = nextProjectStates[nextCurrentProjectId] || nextState;
       setState(currentState);
       setProjectStates(nextProjectStates);
@@ -521,7 +574,7 @@ export default function Home() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ projectId: currentProjectId, name: state.project.name, state })
         });
-        const result = await response.json();
+        const result = await readApiJson(response, "保存项目工作区失败");
         if (!response.ok || result.code !== 0) throw new Error(result.message || "保存项目工作区失败");
         setWorkspaceSyncMessage("项目工作区已同步。");
       } catch (error) {
@@ -548,7 +601,7 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
     });
-    const result = await response.json();
+    const result = await readApiJson(response, "保存成员失败");
     if (!response.ok || result.code !== 0) return alert(result.message || "保存成员失败。");
     await fetchUsers();
     closeMemberEditor();
@@ -592,7 +645,7 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status })
     });
-    const result = await response.json();
+    const result = await readApiJson(response, "调整成员状态失败");
     if (!response.ok || result.code !== 0) return alert(result.message || "调整成员状态失败。");
     await fetchUsers();
     setUserActionMessage(status === "active" ? "成员已启用。" : "成员已停用。");
@@ -639,13 +692,13 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ projectId: nextState.project.id, name: nextState.project.name, state: nextState })
     });
-    const result = await response.json();
+    const result = await readApiJson(response, "保存项目工作区失败");
     if (!response.ok || result.code !== 0) throw new Error(result.message || "保存项目工作区失败");
   }
 
   function createBlankProject(name: string, type: string): AppState {
     return {
-      project: { id: Date.now(), name: name.trim() || "未命名项目", type, script: "" },
+      project: { id: createProjectId(), name: name.trim() || "未命名项目", type, script: "" },
       shots: [],
       tasks: [],
       assets: [],
@@ -704,7 +757,7 @@ export default function Home() {
     if (currentUser) {
       fetch(`/api/workspaces?projectId=${deleteProjectTarget.id}`, { method: "DELETE" })
         .then(async response => {
-          const result = await response.json();
+          const result = await readApiJson(response, "删除项目云端快照失败");
           if (!response.ok || result.code !== 0) throw new Error(result.message || "删除项目云端快照失败");
           setWorkspaceSyncMessage("项目云端快照已删除。");
         })
@@ -747,19 +800,19 @@ export default function Home() {
         action,
         theme: scriptTheme,
         characters: scriptCharacters,
-        style: scriptStyle,
-        episodeCount: scriptEpisodeCount,
-        script: scriptInput
+        episodeCount: scriptEpisodeCount.trim() ? Number(scriptEpisodeCount) : undefined,
+        script: scriptInput,
+        model: activeTextModels.length ? selectedTextModel : undefined
       })
     });
-    const result = await response.json();
+    const result = await readApiJson(response, "AI 剧本生成失败");
     if (!response.ok || result.code !== 0) throw new Error(result.message || "AI 剧本生成失败");
     return result.data?.content as string;
   }
 
   async function generateScriptDraft() {
-    if (!scriptTheme.trim() || !scriptCharacters.trim()) {
-      alert("请先填写主题和角色设定。");
+    if (!scriptTheme.trim()) {
+      alert("请先填写故事想法。");
       return;
     }
     try {
@@ -775,7 +828,7 @@ export default function Home() {
 
   async function optimizeScriptFlow() {
     if (!scriptInput.trim()) {
-      alert("请先输入剧本内容。");
+      alert("请先在当前剧本正文中输入、导入或生成内容。");
       return;
     }
     try {
@@ -792,7 +845,7 @@ export default function Home() {
   async function splitScriptToOutlineAndEpisodes() {
     const text = scriptInput.trim();
     if (!text) {
-      alert("请先上传或粘贴大段剧本内容。");
+      alert("请先在当前剧本正文中输入、导入或生成内容。");
       return;
     }
     try {
@@ -951,7 +1004,7 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ displayName: memberNameDraft.trim() || current.displayName || current.account })
     });
-    const result = await response.json();
+    const result = await readApiJson(response, "个人信息更新失败");
     if (!response.ok || result.code !== 0) return alert(result.message || "个人信息更新失败。");
     await fetchUsers();
     setUserActionMessage("个人信息已更新。");
@@ -960,10 +1013,10 @@ export default function Home() {
   function inferApiProfileDraft(baseUrlValue: string, apiKeyValue: string) {
     const normalizedUrl = baseUrlValue.trim().toLowerCase();
     const normalizedKey = apiKeyValue.trim().toLowerCase();
-    if (normalizedUrl.includes("/api/v3") || normalizedUrl.includes("43.159.135.17") || normalizedKey.startsWith("arkr_")) return { name: "Ark v3 测试平台", videoModels: "doubao-seedance-2-0-fast-260128\ndoubao-seedance-2-0-260128", imageModels: "doubao-seedream-3-0-t2i-250415" };
-    if (normalizedUrl.includes("aifastgate")) return { name: "AIfastgate", videoModels: "doubao-seedance-2-0-fast-260128", imageModels: "" };
+    if (normalizedUrl.includes("/api/v3") || normalizedUrl.includes("43.159.135.17") || normalizedKey.startsWith("arkr_")) return { name: "Ark v3 测试平台", textModels: "doubao-seed-1-6-250615", videoModels: "doubao-seedance-2-0-fast-260128\ndoubao-seedance-2-0-260128", imageModels: "doubao-seedream-3-0-t2i-250415" };
+    if (normalizedUrl.includes("aifastgate")) return { name: "AIfastgate", textModels: "", videoModels: "doubao-seedance-2-0-fast-260128", imageModels: "" };
     const host = (() => { try { return new URL(baseUrlValue).hostname.replace(/^api\./, ""); } catch { return "第三方 API"; } })();
-    return { name: host || "第三方 API", videoModels: "doubao-seedance-2-0-fast-260128", imageModels: "" };
+    return { name: host || "第三方 API", textModels: "", videoModels: "doubao-seedance-2-0-fast-260128", imageModels: "" };
   }
 
   function updateApiProfileDraft(field: "baseUrl" | "apiKey", value: string) {
@@ -974,6 +1027,7 @@ export default function Home() {
     if (!nextBaseUrl.trim()) return;
     const inferred = inferApiProfileDraft(nextBaseUrl, nextApiKey);
     if (!apiProfileName.trim() || ["Ark v3 测试平台", "AIfastgate", "第三方 API"].includes(apiProfileName.trim())) setApiProfileName(inferred.name);
+    if (!apiProfileTextModels.trim()) setApiProfileTextModels(inferred.textModels);
     if (!apiProfileVideoModels.trim()) setApiProfileVideoModels(inferred.videoModels);
     if (!apiProfileImageModels.trim()) setApiProfileImageModels(inferred.imageModels);
   }
@@ -985,8 +1039,11 @@ export default function Home() {
     setApiProfileName("");
     setApiProfileBaseUrl("");
     setApiProfileKey("");
+    setApiProfileTextModels("");
     setApiProfileVideoModels("");
     setApiProfileImageModels("");
+    setApiProfilePriority(100);
+    setApiProfileEnabled(true);
     setApiProfileConcurrencyLimit(1);
     setUserActionMessage("");
   }
@@ -1010,14 +1067,16 @@ export default function Home() {
     const name = apiProfileName.trim();
     const baseUrl = apiProfileBaseUrl.trim().replace(/\/$/, "");
     const apiKey = apiProfileKey.trim();
+    const textModels = Array.from(new Set(apiProfileTextModels.split(/\r?\n|,/).map(item => item.trim()).filter(Boolean)));
     const videoModels = Array.from(new Set(apiProfileVideoModels.split(/\r?\n|,/).map(item => item.trim()).filter(Boolean)));
     const imageModels = Array.from(new Set(apiProfileImageModels.split(/\r?\n|,/).map(item => item.trim()).filter(Boolean)));
+    const priority = Math.max(1, Math.min(999, Number(apiProfilePriority || 100)));
     const concurrencyLimit = Math.max(1, Math.min(50, Number(apiProfileConcurrencyLimit || 1)));
     const editingProfile = !addingApiProfile ? apiProfiles.find(profile => profile.id === editingApiProfileId) : undefined;
-    if (!name || !baseUrl || (!apiKey && !editingProfile?.hasApiKey) || (!videoModels.length && !imageModels.length)) return alert("请完整填写服务名称、Base URL、访问凭证，并至少配置一个视频或图片模型 ID。编辑已有配置时访问凭证可留空。");
+    if (!name || !baseUrl || (!apiKey && !editingProfile?.hasApiKey) || (!textModels.length && !videoModels.length && !imageModels.length)) return alert("请完整填写服务名称、Base URL、访问凭证，并至少配置一个文字处理、生图或视频模型 ID。编辑已有配置时访问凭证可留空。");
     try {
-      const response = await fetch("/api/api-profiles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: editingProfile?.id, name, baseUrl, apiKey, videoModels, imageModels, concurrencyLimit, active: editingProfile?.active ?? apiProfiles.length === 0 }) });
-      const result = await response.json();
+      const response = await fetch("/api/api-profiles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: editingProfile?.id, name, baseUrl, apiKey, textModels, videoModels, imageModels, priority, enabled: apiProfileEnabled, concurrencyLimit, active: editingProfile?.active ?? apiProfiles.length === 0 }) });
+      const result = await readApiJson(response, "保存模型渠道失败");
       if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "保存模型渠道失败");
       const savedProfile = result.data as ApiProfile;
       const next = normalizeApiProfiles([savedProfile, ...apiProfiles.filter(profile => profile.id !== savedProfile.id)]);
@@ -1029,6 +1088,7 @@ export default function Home() {
       setEditingApiProfileId("");
       const nextActiveId = next.find(profile => profile.active)?.id || "";
       setActiveApiProfileId(nextActiveId);
+      setSelectedTextModel(textModels[0] || selectedTextModel);
       setSelectedVideoModel(videoModels[0] || selectedVideoModel);
       setImageModel(imageModels[0] || imageModel);
       if (nextActiveId) window.localStorage.setItem(ACTIVE_API_PROFILE_STORAGE_KEY, nextActiveId);
@@ -1043,12 +1103,13 @@ export default function Home() {
     if (!target) return alert("未找到这个模型渠道，请刷新后重试。");
     try {
       const response = await fetch("/api/api-profiles", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
-      const result = await response.json();
+      const result = await readApiJson(response, "设置当前模型渠道失败");
       if (!response.ok || result.code !== 0) throw new Error(result.message || "设置当前模型渠道失败");
       const next = apiProfiles.map(item => ({ ...item, active: item.id === id }));
       setApiProfiles(next);
       setActiveApiProfileId(id);
       loadApiProfileDraft(target);
+      setSelectedTextModel(target.textModels?.[0] || target.scriptModels?.[0] || selectedTextModel);
       setSelectedVideoModel(target.videoModels[0] || selectedVideoModel);
       setImageModel(target.imageModels[0] || imageModel);
       writeApiProfiles(next);
@@ -1062,7 +1123,7 @@ export default function Home() {
   async function deleteApiProfile(id: string) {
     try {
       const response = await fetch(`/api/api-profiles?id=${encodeURIComponent(id)}`, { method: "DELETE" });
-      const result = await response.json();
+      const result = await readApiJson(response, "删除模型渠道失败");
       if (!response.ok || result.code !== 0) throw new Error(result.message || "删除模型渠道失败");
       const remainingProfiles = apiProfiles.filter(item => item.id !== id);
       const nextActiveId = activeApiProfileId === id ? remainingProfiles[0]?.id || "" : activeApiProfileId;
@@ -1093,7 +1154,7 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...materialDraft, projectId })
     });
-    const result = await response.json();
+    const result = await readApiJson(response, "素材记录保存失败");
     if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "素材记录保存失败。");
     return result.data as MaterialAsset;
   }
@@ -1133,7 +1194,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ group_id: groupId, url: material.url, asset_name: material.name, asset_type: assetTypeOf(material.kind) })
       });
-      const result = await response.json();
+      const result = await readApiJson(response, "准备生成引用失败");
       if (!response.ok || result.code !== 0 || !result.data?.asset_url) throw new Error(result.message || "准备生成引用失败");
       setState(prev => ({ ...prev, materials: prev.materials.map(item => item.id === materialId ? { ...item, seedanceAssetUrl: result.data.asset_url } : item) }));
       setMaterialMessage("素材已准备好，可用于后续视频生成。");
@@ -1162,7 +1223,7 @@ export default function Home() {
       setIsUploadingMaterial(true);
       setMaterialMessage("正在上传素材...");
       const response = await fetch("/api/assets/upload", { method: "POST", body: formData });
-      const result = await response.json();
+      const result = await readApiJson(response, "上传素材失败");
       if (!response.ok || result.code !== 0 || !result.data?.publicUrl) throw new Error(result.message || "上传素材失败");
 
       const materialDraft: MaterialAsset = {
@@ -1208,7 +1269,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ group_id: groupId, url: material.url, asset_name: material.name, asset_type: assetTypeOf(material.kind) })
       });
-      const result = await response.json();
+      const result = await readApiJson(response, "准备生成引用失败");
       if (!response.ok || result.code !== 0 || !result.data?.asset_url) throw new Error(result.message || "准备生成引用失败");
       setState(prev => ({ ...prev, materials: prev.materials.map(item => item.id === materialId ? { ...item, seedanceAssetUrl: result.data.asset_url } : item) }));
       setMaterialMessage("素材已准备好，可用于生成。");
@@ -1225,7 +1286,7 @@ export default function Home() {
     if (material?.dbId) {
       try {
         const response = await fetch(`/api/materials?id=${material.dbId}`, { method: "DELETE" });
-        const result = await response.json();
+        const result = await readApiJson(response, "删除素材失败");
         if (!response.ok || result.code !== 0) throw new Error(result.message || "删除素材失败");
         setMaterialMessage("素材记录已删除，并已从 @ 引用中移除。");
       } catch (error) {
@@ -1327,7 +1388,6 @@ export default function Home() {
     }
 
     const selectedAssetCount = state.materials.filter(item => selectedMaterialIds.includes(item.id) && materialApiUrl(item)).length + selectedLizhenAssetIds.length;
-    const taskApiProfile = publicApiProfile(activeApiProfile);
     const modelForGeneration = selectedVideoModel || activeApiProfile?.videoModels[0] || activeApiProfile?.model || "";
     const task: VideoTask = { id: localTaskId, shotId: shot.id, shotTitle: shot.title, provider: "视频生成", status: "running", result: selectedAssetCount ? `任务已提交，${omniReferenceEnabled ? "全能参考模式已启用，" : ""}正在使用 ${selectedAssetCount} 个参考素材生成视频。` : "任务已提交，正在生成视频。" };
 
@@ -1343,24 +1403,25 @@ export default function Home() {
       const response = await fetch("/api/video-tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shot: omniReferenceEnabled ? { ...shotForGeneration, prompt: `${shotForGeneration.prompt}\n\n全能参考模式：已启用。请综合所有提交的图片、视频、音频参考素材，保持人物外貌、服装、场景、道具、动作节奏和画面风格一致。优先遵循 reference inputs，不要自行替换角色或背景。` } : shotForGeneration, provider: "seedance-2.0", model_id: modelForGeneration, resolution: shot.resolution || "720p", input_type: inferInputType(), omni_reference: omniReferenceEnabled, profile_id: activeApiProfile?.id, api_profile: taskApiProfile, ...buildMediaPayload() })
+        body: JSON.stringify({ shot: omniReferenceEnabled ? { ...shotForGeneration, prompt: `${shotForGeneration.prompt}\n\n全能参考模式：已启用。请综合所有提交的图片、视频、音频参考素材，保持人物外貌、服装、场景、道具、动作节奏和画面风格一致。优先遵循 reference inputs，不要自行替换角色或背景。` } : shotForGeneration, provider: "seedance-2.0", model_id: modelForGeneration, resolution: shot.resolution || "720p", input_type: inferInputType(), omni_reference: omniReferenceEnabled, ...buildMediaPayload() })
       });
-      const result = await response.json();
+      const result = await readApiJson(response, "创建视频任务失败");
       if (!response.ok || result.code !== 0 || !result.data?.task_id) throw new Error(result.message || "创建视频任务失败");
       const providerTaskId = result.data.task_id as string;
+      const resolvedApiProfile = result.data.api_profile as ApiProfile | undefined;
       const selectedLizhenNames = lizhenAssets.filter(item => selectedLizhenAssetIds.includes(item.id)).map(item => item.asset_name).join("、");
-      setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, provider: "视频生成", providerTaskId, result: `任务已提交：${providerTaskId}${selectedLizhenNames ? `｜参考素材：${selectedLizhenNames}` : ""}` } : item) }));
-      pollGenerationStatus(shotId, localTaskId, providerTaskId, activeApiProfile?.id, taskApiProfile);
+      setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, provider: "视频生成", providerTaskId, apiProfile: resolvedApiProfile, result: `任务已提交：${providerTaskId}${selectedLizhenNames ? `｜参考素材：${selectedLizhenNames}` : ""}` } : item) }));
+      pollGenerationStatus(shotId, localTaskId, providerTaskId, resolvedApiProfile?.id, undefined);
     } catch (error) {
       markGenerationFailed(shotId, localTaskId, error instanceof Error ? error.message : "创建视频任务失败");
     }
   }
 
-  function pollGenerationStatus(shotId: number, localTaskId: string, providerTaskId: string, profileId = activeApiProfile?.id, apiProfile = publicApiProfile(activeApiProfile)) {
+  function pollGenerationStatus(shotId: number, localTaskId: string, providerTaskId: string, profileId?: string, apiProfile?: ApiProfile) {
     window.setTimeout(async () => {
       try {
         const response = await fetch("/api/video-tasks/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task_id: providerTaskId, profile_id: profileId, api_profile: apiProfile }) });
-        const result = await response.json();
+        const result = await readApiJson(response, "查询视频任务失败");
         if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "查询视频任务失败");
         const data = result.data as { status: string; video_url?: string; duration?: number; error?: string };
         if (["pending", "submitted", "queued", "running", "processing"].includes(data.status)) {
@@ -1411,8 +1472,8 @@ export default function Home() {
     }
     try {
       setUserActionMessage(`正在同步后台任务：${task.providerTaskId}`);
-      const response = await fetch("/api/video-tasks/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task_id: task.providerTaskId, profile_id: activeApiProfile?.id, api_profile: publicApiProfile(activeApiProfile) }) });
-      const result = await response.json();
+      const response = await fetch("/api/video-tasks/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task_id: task.providerTaskId, profile_id: task.apiProfile?.id }) });
+      const result = await readApiJson(response, "同步任务状态失败");
       if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "同步任务状态失败");
       const data = result.data as { status: string; video_url?: string; duration?: number; error?: string };
       if (data.status === "succeeded" && data.video_url) {
@@ -1534,17 +1595,25 @@ export default function Home() {
   const currentUserCanManageApiProfiles = canManageApiProfiles(currentUserRole);
   const memberRoleOptions = assignableRoles(currentUserRole);
   const activeApiProfile = apiProfiles.find(item => item.id === activeApiProfileId) || apiProfiles.find(item => item.active) || apiProfiles[0];
-  const activeVideoModels = useMemo(() => activeApiProfile?.videoModels?.length ? activeApiProfile.videoModels : [activeApiProfile?.model || "doubao-seedance-2-0-fast-260128"].filter(Boolean), [activeApiProfile]);
-  const activeImageModels = useMemo(() => activeApiProfile?.imageModels?.length ? activeApiProfile.imageModels : ["gpt-image-2", "seedream-3.0", "stable-image-ultra", "flux-pro"], [activeApiProfile]);
+  const activeTextModels = useMemo(() => modelsByPriority(apiProfiles, "text"), [apiProfiles]);
+  const activeVideoModels = useMemo(() => {
+    const models = modelsByPriority(apiProfiles, "video");
+    return models.length ? models : ["doubao-seedance-2-0-fast-260128"];
+  }, [apiProfiles]);
+  const activeImageModels = useMemo(() => {
+    const models = modelsByPriority(apiProfiles, "image");
+    return models.length ? models : ["gpt-image-2", "seedream-3.0", "stable-image-ultra", "flux-pro"];
+  }, [apiProfiles]);
   const currentDisplayName = currentUserRecord?.displayName || currentUser || "访客";
   const avatarLabel = currentDisplayName.slice(0, 2).toUpperCase();
   const scriptTooLong = state.project.script.length > 220;
   const scriptPreview = showFullScript || !scriptTooLong ? state.project.script : `${state.project.script.slice(0, 220)}...`;
 
   useEffect(() => {
+    if (activeTextModels.length && !activeTextModels.includes(selectedTextModel)) setSelectedTextModel(activeTextModels[0]);
     if (activeVideoModels.length && !activeVideoModels.includes(selectedVideoModel)) setSelectedVideoModel(activeVideoModels[0]);
     if (activeImageModels.length && !activeImageModels.includes(imageModel)) setImageModel(activeImageModels[0]);
-  }, [activeApiProfileId, apiProfiles, activeVideoModels, activeImageModels, selectedVideoModel, imageModel]);
+  }, [activeApiProfileId, apiProfiles, activeTextModels, activeVideoModels, activeImageModels, selectedTextModel, selectedVideoModel, imageModel]);
 
   function resetDemo() {
     if (!confirm("确定重置为初始演示数据吗？")) return;
@@ -1656,7 +1725,6 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          profile_id: activeApiProfileId,
           model: imageModel,
           prompt: imageWorkbenchPrompt,
           size: `${imageWidth}x${imageHeight}`,
@@ -1664,7 +1732,7 @@ export default function Home() {
           projectId: currentProjectId
         })
       });
-      const result = await response.json();
+      const result = await readApiJson(response, "图片生成失败");
       if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "图片生成失败");
       const images: MaterialAsset[] = result.data.map((item: { name?: string; publicUrl: string; previewUrl?: string; storagePath?: string }, index: number) => ({
         id: Date.now() + index,
@@ -1712,7 +1780,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ account, password })
       });
-      const result = await response.json();
+      const result = await readApiJson(response, "登录失败");
       if (!response.ok || result.code !== 0 || !result.data) {
         setAuthMessage(result.message || "登录失败。");
         return;
@@ -1828,13 +1896,13 @@ export default function Home() {
         </section>
 
         <section className="card" style={sectionStyle("channel-management")}>
-          <div className="asset-workspace-head"><div><h2>模型渠道管理</h2><p className="muted">管理第三方中转或官方接口的调用渠道、模型 ID 和并发限制。</p></div><button className="btn-primary" onClick={openNewApiProfileEditor}>新增渠道</button></div>
+          <div className="asset-workspace-head"><div><h2>模型渠道管理</h2><p className="muted">工作台只选择模型；同一模型可由多个渠道提供，系统按启用状态和手动优先级选择调用渠道。</p></div><button className="btn-primary" onClick={openNewApiProfileEditor}>新增渠道</button></div>
           {userActionMessage && <div className="api-active-banner">{userActionMessage}</div>}
-          <div className="table-wrap" style={{ marginTop: 14 }}><table className="table"><thead><tr><th>状态</th><th>渠道</th><th>Base URL</th><th>视频模型</th><th>图片模型</th><th>并发</th><th>操作</th></tr></thead><tbody>{apiProfiles.length ? apiProfiles.map(profile => <tr key={profile.id}><td>{profile.id === activeApiProfileId ? <span className="tag done">当前使用</span> : <span className="tag pending">备用</span>}</td><td>{profile.name}</td><td><code>{profile.baseUrl}</code></td><td>{profile.videoModels.length}</td><td>{profile.imageModels.length}</td><td>{profile.concurrencyLimit || 1}</td><td><div className="table-actions"><button onClick={() => openEditApiProfileEditor(profile)}>编辑</button>{profile.id !== activeApiProfileId && <button onClick={() => switchApiProfile(profile.id)}>设为当前</button>}<button className="danger" onClick={() => deleteApiProfile(profile.id)}>删除</button></div></td></tr>) : <tr><td colSpan={7}><div className="empty">暂无模型渠道，请新增渠道后再进行视频或图片生成。</div></td></tr>}</tbody></table></div>
+          <div className="table-wrap" style={{ marginTop: 14 }}><table className="table"><thead><tr><th>状态</th><th>优先级</th><th>渠道</th><th>Base URL</th><th>文字</th><th>生图</th><th>视频</th><th>并发</th><th>操作</th></tr></thead><tbody>{apiProfiles.length ? apiProfiles.map(profile => <tr key={profile.id}><td>{profile.enabled !== false ? <span className="tag done">启用</span> : <span className="tag pending">停用</span>}</td><td>{profile.priority || 100}</td><td>{profile.name}</td><td><code>{profile.baseUrl}</code></td><td>{profile.textModels?.length || profile.scriptModels?.length || 0}</td><td>{profile.imageModels.length}</td><td>{profile.videoModels.length}</td><td>{profile.concurrencyLimit || 1}</td><td><div className="table-actions"><button onClick={() => openEditApiProfileEditor(profile)}>编辑</button><button className="danger" onClick={() => deleteApiProfile(profile.id)}>删除</button></div></td></tr>) : <tr><td colSpan={9}><div className="empty">暂无模型渠道，请新增渠道后再进行文字处理、生图或视频生成。</div></td></tr>}</tbody></table></div>
           {apiProfileEditorOpen && <div className="api-profile-panel">
-            <div className="asset-workspace-head"><div><h2>{addingApiProfile ? "新增渠道" : "编辑渠道"}</h2><p className="muted">访问凭证留空时会保留原配置；视频和图片模型 ID 一行一个。</p></div><button className="btn-ghost btn-small" onClick={closeApiProfileEditor}>取消</button></div>
-            <div className="script-core-grid"><div><label>渠道名称</label><input value={apiProfileName} onChange={event => setApiProfileName(event.target.value)} /></div><div><label>API Base URL</label><input value={apiProfileBaseUrl} onChange={event => updateApiProfileDraft("baseUrl", event.target.value)} /></div><div><label>访问凭证</label><input type="password" autoComplete="new-password" value={apiProfileKey} onChange={event => updateApiProfileDraft("apiKey", event.target.value)} placeholder="保存后不会明文展示" /></div><div><label>并发数</label><input type="number" min={1} max={50} value={apiProfileConcurrencyLimit} onChange={event => setApiProfileConcurrencyLimit(Math.max(1, Math.min(50, Number(event.target.value) || 1)))} /></div></div>
-            <div className="script-core-grid"><div><label>视频模型 ID</label><textarea value={apiProfileVideoModels} onChange={event => setApiProfileVideoModels(event.target.value)} /></div><div><label>图片模型 ID</label><textarea value={apiProfileImageModels} onChange={event => setApiProfileImageModels(event.target.value)} /></div></div>
+            <div className="asset-workspace-head"><div><h2>{addingApiProfile ? "新增渠道" : "编辑渠道"}</h2><p className="muted">访问凭证留空时会保留原配置；不同用途的模型 ID 分开填写，一行一个。</p></div><button className="btn-ghost btn-small" onClick={closeApiProfileEditor}>取消</button></div>
+            <div className="script-core-grid"><div><label>渠道名称</label><input value={apiProfileName} onChange={event => setApiProfileName(event.target.value)} /></div><div><label>API Base URL</label><input value={apiProfileBaseUrl} onChange={event => updateApiProfileDraft("baseUrl", event.target.value)} /></div><div><label>访问凭证</label><input type="password" autoComplete="new-password" value={apiProfileKey} onChange={event => updateApiProfileDraft("apiKey", event.target.value)} placeholder="保存后不会明文展示" /></div><div><label>优先级</label><input type="number" min={1} max={999} value={apiProfilePriority} onChange={event => setApiProfilePriority(Math.max(1, Math.min(999, Number(event.target.value) || 100)))} /></div><div><label>并发数</label><input type="number" min={1} max={50} value={apiProfileConcurrencyLimit} onChange={event => setApiProfileConcurrencyLimit(Math.max(1, Math.min(50, Number(event.target.value) || 1)))} /></div><label className="checkbox-line"><input type="checkbox" checked={apiProfileEnabled} onChange={event => setApiProfileEnabled(event.target.checked)} /> 启用此渠道</label></div>
+            <div className="script-core-grid"><div><label>文字处理模型 ID</label><textarea value={apiProfileTextModels} onChange={event => setApiProfileTextModels(event.target.value)} placeholder="用于剧本、提示词生成、文本优化" /></div><div><label>生图模型 ID</label><textarea value={apiProfileImageModels} onChange={event => setApiProfileImageModels(event.target.value)} placeholder="用于生图工作台" /></div><div><label>视频模型 ID</label><textarea value={apiProfileVideoModels} onChange={event => setApiProfileVideoModels(event.target.value)} placeholder="用于视频工作台" /></div></div>
             <div className="actions"><button className="btn-primary" onClick={saveApiProfile}>保存渠道</button><button className="btn-ghost" onClick={closeApiProfileEditor}>取消</button></div>
           </div>}
         </section>
@@ -1845,17 +1913,14 @@ export default function Home() {
         </section>
 
         <section id="script" className="card script-workbench" style={sectionStyle("script")}>
-          <div className="asset-workspace-head"><div><h2>剧本工作台</h2><p className="muted">围绕核心要素生成初稿，优化对话逻辑与情节连贯性，并对长剧本输出大纲和单集拆分。</p></div><span className="source-pill internal">剧本策划</span></div>
+          <div className="asset-workspace-head"><div><h2>剧本工作台</h2><p className="muted">先输入故事想法生成初稿；当前剧本正文可以手动编辑、导入文件、保存到项目，并继续优化或拆分。</p></div><span className="source-pill internal">文字处理</span></div>
           <div className="form">
-            <div className="script-core-grid"><div><label>主题</label><input value={scriptTheme} onChange={event => setScriptTheme(event.target.value)} placeholder="例如：豪门复仇、都市逆袭、校园暗恋" /></div><div><label>角色</label><input value={scriptCharacters} onChange={event => setScriptCharacters(event.target.value)} placeholder="例如：女主、男主、反派、关键配角" /></div><div><label>风格</label><select value={scriptStyle} onChange={event => setScriptStyle(event.target.value)}><option>都市情感</option><option>悬疑反转</option><option>轻喜甜宠</option><option>豪门复仇</option><option>现实主义</option></select></div><div><label>集数</label><input type="number" min={1} value={scriptEpisodeCount} onChange={event => setScriptEpisodeCount(Number(event.target.value) || 1)} /></div></div>
-            <div className="actions"><button className="btn-primary" onClick={generateScriptDraft}>生成初稿</button><button className="btn-ghost" onClick={optimizeScriptFlow}>优化对话逻辑 / 情节连贯性</button><button className="btn-ghost" onClick={splitScriptToOutlineAndEpisodes}>生成大纲 / 单集拆分</button></div>
-            <div><label>上传剧本文件</label><input type="file" accept=".txt,.md,.doc,.docx" onChange={event => { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = loadEvent => setScriptInput(String(loadEvent.target?.result || "")); reader.readAsText(file); }} /></div>
-            <div><label>剧本内容</label><textarea className="batch-prompt" value={scriptInput} onChange={event => setScriptInput(event.target.value)} placeholder="可先通过上方核心要素生成初稿，也可以直接上传/粘贴大段剧本内容。" /></div>
-            <div className="actions"><button className="btn-primary" onClick={saveScript}>保存剧本</button></div>
+            <section className="api-profile-panel"><div className="card-title-row"><div><h2 style={{ marginTop: 0 }}>生成输入</h2><p className="muted">用于生成初稿；不会自动保存为项目剧本。</p></div></div><div className="script-core-grid"><div><label>故事想法</label><textarea value={scriptTheme} onChange={event => setScriptTheme(event.target.value)} placeholder="例如：被替嫁的女主重回豪门，发现男主一直在暗中保护她。" /></div><div><label>主要人物</label><textarea value={scriptCharacters} onChange={event => setScriptCharacters(event.target.value)} placeholder="可选。写清主要人物、关系和反差；不填时系统会根据故事想法补全。" /></div><div><label>目标集数</label><input inputMode="numeric" value={scriptEpisodeCount} onChange={event => setScriptEpisodeCount(event.target.value.replace(/[^\d]/g, ""))} placeholder="可选" /></div>{activeTextModels.length > 0 && <div><label>文字处理模型</label><select value={selectedTextModel} onChange={event => setSelectedTextModel(event.target.value)}>{activeTextModels.map(model => <option key={model} value={model}>{model}</option>)}</select></div>}</div><div className="actions"><button className="btn-primary" onClick={generateScriptDraft}>生成初稿</button></div></section>
+            <section className="api-profile-panel"><div className="card-title-row"><div><h2 style={{ marginTop: 0 }}>当前剧本正文</h2><p className="muted">生成初稿、导入文件或手动编辑都会更新这里；点击保存后写入当前项目。</p></div><input type="file" accept=".txt,.md,.doc,.docx" onChange={event => { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = loadEvent => setScriptInput(String(loadEvent.target?.result || "")); reader.readAsText(file); event.currentTarget.value = ""; }} /></div><div><textarea className="batch-prompt" value={scriptInput} onChange={event => setScriptInput(event.target.value)} placeholder="这里是当前项目的剧本正文。可以直接粘贴完整剧本，也可以先在上方生成初稿。" /></div><div className="actions"><button className="btn-primary" onClick={saveScript}>保存到项目</button><button className="btn-ghost" onClick={optimizeScriptFlow}>优化当前正文</button><button className="btn-ghost" onClick={splitScriptToOutlineAndEpisodes}>生成大纲 / 单集拆分</button><button className="btn-ghost" onClick={() => setScriptInput("")}>清空正文</button></div></section>
             {!!scriptOptimizationNote && <div className="batch-preview"><strong>处理结果</strong><p>{scriptOptimizationNote}</p></div>}
             {!!scriptOutline && <div className="script-box">{scriptOutline}</div>}
             {!!scriptEpisodeSplit && <div className="script-box">{scriptEpisodeSplit}</div>}
-            <div className="script-box">{scriptPreview || "暂无剧本内容"}</div>
+            <div className="script-box">{scriptPreview || "当前项目还没有保存剧本。"}</div>
             {scriptTooLong && <button className="collapse-toggle" onClick={() => setShowFullScript(prev => !prev)}>{showFullScript ? "收起" : "展开全部剧本"}</button>}
           </div>
         </section>
@@ -2016,7 +2081,6 @@ export default function Home() {
       <div className={`modal ${passwordModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setPasswordModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>修改密码</h2><button className="btn-ghost btn-small" onClick={() => setPasswordModalOpen(false)}>关闭</button></div><div className="form"><div><label>手机号</label><input value={securityPhone} onChange={event => setSecurityPhone(event.target.value)} placeholder="请输入绑定手机号" /></div><div><label>验证码</label><div className="code-row"><input value={securityCode} onChange={event => setSecurityCode(event.target.value)} placeholder="请输入 6 位验证码" /><button className="btn-primary" onClick={() => alert(`验证码已发送至 ${securityPhone}`)}>发送验证码</button></div></div><div><label>新密码</label><input type="password" value={newPassword} onChange={event => setNewPassword(event.target.value)} placeholder="请输入新密码（至少 6 个字符）" /></div><div><label>确认新密码</label><input type="password" value={confirmNewPassword} onChange={event => setConfirmNewPassword(event.target.value)} placeholder="请再次输入新密码" /></div><div className="actions"><button className="btn-ghost" onClick={() => setPasswordModalOpen(false)}>取消</button><button className="btn-primary" onClick={() => { if (!securityCode || !newPassword || newPassword !== confirmNewPassword) return alert("请确认验证码和两次密码输入一致。"); setPasswordModalOpen(false); alert("演示环境已完成密码修改流程。") }}>确认修改</button></div></div></div></div>
       <div className={`modal ${projectModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setProjectModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>新建项目</h2><button className="btn-ghost btn-small" onClick={() => setProjectModalOpen(false)}>关闭</button></div><div className="form"><div><label>项目名称</label><input value={projectName} onChange={event => setProjectName(event.target.value)} /></div><div><label>项目类型</label><select value={projectType} onChange={event => setProjectType(event.target.value)}>{PROJECT_TYPES.map(type => <option key={type}>{type}</option>)}</select></div><button className="btn-primary" onClick={saveProject}>创建项目</button></div></div></div>
       <div className={`modal ${deleteProjectTarget ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setDeleteProjectTarget(null)}><div className="modal-card"><div className="modal-head"><h2>删除项目</h2><button className="btn-ghost btn-small" onClick={() => setDeleteProjectTarget(null)}>关闭</button></div><div className="form"><div className="danger-note"><strong>此操作会删除当前浏览器中该项目的剧本、分镜、素材和生成记录。</strong><span>请输入项目名称确认删除：{deleteProjectTarget?.name}</span></div><div><label>确认项目名称</label><input value={deleteProjectName} onChange={event => setDeleteProjectName(event.target.value)} placeholder={deleteProjectTarget?.name || ""} /></div><div className="actions"><button className="btn-ghost" onClick={() => setDeleteProjectTarget(null)}>取消</button><button className="btn-danger" onClick={deleteProject} disabled={!deleteProjectTarget || deleteProjectName.trim() !== deleteProjectTarget.name}>确认删除</button></div></div></div></div>
-      <div className={`modal ${scriptModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setScriptModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>导入剧本</h2><button className="btn-ghost btn-small" onClick={() => setScriptModalOpen(false)}>关闭</button></div><div className="form"><div><label>剧本内容</label><textarea style={{ minHeight: 180 }} value={scriptInput} onChange={event => setScriptInput(event.target.value)} /></div><button className="btn-primary" onClick={saveScript}>保存剧本</button><div className="script-box">{scriptPreview || "暂无剧本内容"}</div>{scriptTooLong && <button className="collapse-toggle" onClick={() => setShowFullScript(prev => !prev)}>{showFullScript ? "收起" : "展开全部剧本"}</button>}</div></div></div>
       <div className={`modal ${batchModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setBatchModalOpen(false)}><div className="modal-card modal-card-wide"><div className="modal-head"><h2>提示词拆分分镜</h2><button className="btn-ghost btn-small" onClick={() => setBatchModalOpen(false)}>关闭</button></div><div className="form"><div><label>目标总时长</label><select value={batchTargetDuration} onChange={event => setBatchTargetDuration(Number(event.target.value))}><option value="6">6s</option><option value="9">9s</option><option value="12">12s</option></select></div><div><label>完整视频提示词</label><textarea className="batch-prompt" value={batchPromptInput} onChange={event => setBatchPromptInput(event.target.value)} placeholder="粘贴一整段视频提示词。系统会自动拆成 2-7 个镜头，并保存为分镜列表；不可拆分时会按上方目标总时长生成一条完整分镜。" /></div><div className="batch-preview"><strong>拆分结果会进入分镜列表</strong><p>镜头01就是拆分后的第一段，不会把整段提示词原样保留。支持 0-3秒 时间轴，也支持无时间轴长文本自动拆分。不可拆分时按 6s/9s/12s 完整生成一条分镜。</p></div><button className="btn-primary" onClick={importBatchShots}>生成分镜</button></div></div></div>
       <div className={`modal ${promptModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setPromptModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>生成提示词</h2><button className="btn-ghost btn-small" onClick={() => setPromptModalOpen(false)}>关闭</button></div><div className="form"><div><label>提示词内容</label><textarea style={{ minHeight: 180 }} value={promptDraft} onChange={event => setPromptDraft(event.target.value)} /></div><button className="btn-primary" onClick={saveGeneratedPrompt}>保存到分镜与素材库</button><p className="muted">保存后会写入当前分镜提示词，并出现在素材库的提示词分类。</p></div></div></div>
     </div>

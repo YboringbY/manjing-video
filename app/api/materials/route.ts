@@ -7,6 +7,7 @@ const ROLES = new Set(["reference_image", "first_frame", "last_frame", "referenc
 const SOURCES = new Set(["upload", "generated", "prompt", "link"]);
 const STATUSES = new Set(["ready", "processing", "failed"]);
 const SCOPES = new Set(["project", "team"]);
+const MAX_DATABASE_INT = 2147483647;
 
 function cleanText(value: unknown, fallback = "") {
   const text = String(value || "").trim();
@@ -20,7 +21,7 @@ function cleanOptionalText(value: unknown) {
 
 function cleanNumber(value: unknown, fallback = 0) {
   const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
+  return Number.isInteger(number) && number > 0 && number <= MAX_DATABASE_INT ? number : fallback;
 }
 
 function publicMaterial(material: {
