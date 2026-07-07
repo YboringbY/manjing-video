@@ -327,6 +327,23 @@ npx prisma migrate deploy
   - 直连 IP 并指定 `Host: console.manjingstudio.com` 返回 empty reply，符合 Nginx `444` 预期。
 - 备案完成前不要恢复域名 server block 代理；生产测试只使用 `http://118.196.44.191`。
 
+2026-07-07 素材库数据库链路与生产更新：
+
+- 已提交并部署 `f00de1a Persist generated materials in library` 到生产服务器 `/opt/manjing-video`。
+- 本次更新包含：
+  - 上传素材、生图结果、提示词素材统一通过 `/api/materials` 保存 PostgreSQL 记录。
+  - 生图结果只在真实 URL 返回后进入素材库，不再创建空占位。
+  - 团队共享素材从 `/api/materials?scope=team` 读取，支持同租户跨项目复用。
+  - 素材库移除旧外部共享素材刷新入口，当前保留“当前项目 / 团队共享”的主流程。
+  - 项目素材搜索改为真实过滤。
+  - 项目工作区快照同步已部署到生产，并应用 migration `20260707043000_add_project_workspaces`。
+- 生产部署验证：
+  - `npm run build` 通过。
+  - `npx prisma migrate deploy` 已成功应用 `ProjectWorkspace` migration。
+  - PM2 `manjing-video` 已重启并在线。
+  - `http://118.196.44.191/` 返回 `200 OK`。
+  - 直连服务器并指定 `Host: console.manjingstudio.com` 返回 empty reply，域名入口仍保持备案前禁用。
+
 ## 已完成的重要修复
 
 - 登录与本地 PostgreSQL/Prisma 账号体系已接入。
