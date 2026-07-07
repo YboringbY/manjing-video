@@ -314,6 +314,19 @@ set -a && source .env && set +a
 npx prisma migrate deploy
 ```
 
+2026-07-07 未备案域名访问已禁用：
+
+- 用户明确要求：备案完成前，生产环境不能通过 `console.manjingstudio.com` 访问。
+- 已修改服务器 Nginx：
+  - `server_name 118.196.44.191` 继续代理生产应用，作为备案期间唯一测试入口。
+  - `server_name console.manjingstudio.com` 的 HTTP 和 HTTPS 均 `return 444`，不再代理到 Next 应用。
+- 已验证：
+  - `http://118.196.44.191/` 返回 `200 OK`。
+  - 公网访问 `http://console.manjingstudio.com/` 被云厂商导向 `webblock.volcengine.com`，没有进入应用。
+  - 公网访问 `https://console.manjingstudio.com/` TLS reset。
+  - 直连 IP 并指定 `Host: console.manjingstudio.com` 返回 empty reply，符合 Nginx `444` 预期。
+- 备案完成前不要恢复域名 server block 代理；生产测试只使用 `http://118.196.44.191`。
+
 ## 已完成的重要修复
 
 - 登录与本地 PostgreSQL/Prisma 账号体系已接入。
