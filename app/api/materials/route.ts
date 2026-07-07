@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentMembership } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 import { prisma } from "@/lib/prisma";
 
 const KINDS = new Set(["image", "video", "audio", "sd2"]);
@@ -152,9 +153,11 @@ export async function DELETE(request: Request) {
   const isOwner = material.createdById === membership.userId;
   const isLegacyProjectMaterial = !material.createdById && material.scope === "project";
   if (!isAdmin && !isOwner && !isLegacyProjectMaterial) {
+    await logAudit({ request, actor: membership, action: "material.delete", targetType: "material", targetId: material.id, result: "blocked", metadata: { name: material.name, scope: material.scope, createdById: material.createdById } });
     return NextResponse.json({ code: 403, message: "只能删除自己上传的素材，团队共享素材请联系管理员处理。" }, { status: 403 });
   }
 
   await prisma.material.delete({ where: { id: material.id } });
+  await logAudit({ request, actor: membership, action: "material.delete", targetType: "material", targetId: material.id, metadata: { name: material.name, kind: material.kind, scope: material.scope, projectId: material.projectId } });
   return NextResponse.json({ code: 0 });
 }

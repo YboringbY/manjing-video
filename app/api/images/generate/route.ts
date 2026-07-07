@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import { NextResponse } from "next/server";
 import { getCurrentMembership } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 import { fetchWithTimeout, readLimitedResponseBuffer } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { resolveModelRoute } from "../../api-profiles/store";
@@ -122,51 +123,74 @@ export async function POST(request: Request) {
     return NextResponse.json({ code: 500, message: "缺少图片生成访问凭证，请先在模型渠道中配置图片模型。" }, { status: 500 });
   }
 
-  const response = await fetchWithTimeout(appendPath(baseUrl, "/v1/images/generations"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model,
-      prompt,
-      size: body.size || "1024x1024",
-      n: Math.max(1, Math.min(10, Number(body.n || 1))),
-      response_format: "url"
-    })
-  }, 180000);
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(appendPath(baseUrl, "/v1/images/generations"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        prompt,
+        size: body.size || "1024x1024",
+        n: Math.max(1, Math.min(10, Number(body.n || 1))),
+        response_format: "url"
+      })
+    }, 180000);
+  } catch (error) {
+    await logAudit({ request, actor: membership, action: "image.generate", targetType: "image", targetId: projectId, result: "failure", metadata: { stage: "upstream_request", model, promptLength: prompt.length, message: error instanceof Error ? error.message : "生图上游请求失败" } });
+    return NextResponse.json({ code: 504, message: error instanceof Error ? error.message : "生图上游请求失败。" }, { status: 504 });
+  }
 
   const text = await response.text();
   let result: ProviderResponse = {};
   try { result = text ? JSON.parse(text) as ProviderResponse : {}; } catch { result = { message: text }; }
 
   if (!response.ok) {
+    await logAudit({ request, actor: membership, action: "image.generate", targetType: "image", targetId: projectId, result: "failure", metadata: { stage: "upstream_response", status: response.status, model, promptLength: prompt.length, message: extractError(result) } });
     return NextResponse.json({ code: response.status, message: extractError(result), raw: result }, { status: response.status });
   }
 
   const items = result.data || result.images || [];
-  const images = await Promise.all(items.map(async (item, index) => {
-    if (item.url) {
-      const saved = await saveRemoteImage(item.url, projectId);
-      return {
-        name: `生图结果 ${index + 1}`,
-        ...saved
-      };
-    }
-    if (item.b64_json) {
-      return {
-        name: `生图结果 ${index + 1}`,
-        ...(await saveBase64Image(item.b64_json, projectId))
-      };
-    }
-    return null;
-  }));
+  let images: Array<({ name: string } & Awaited<ReturnType<typeof saveImageBuffer>>) | null> = [];
+  try {
+    images = await Promise.all(items.map(async (item, index) => {
+      if (item.url) {
+        const saved = await saveRemoteImage(item.url, projectId);
+        return {
+          name: `生图结果 ${index + 1}`,
+          ...saved
+        };
+      }
+      if (item.b64_json) {
+        return {
+          name: `生图结果 ${index + 1}`,
+          ...(await saveBase64Image(item.b64_json, projectId))
+        };
+      }
+      return null;
+    }));
+  } catch (error) {
+    await logAudit({ request, actor: membership, action: "image.generate", targetType: "image", targetId: projectId, result: "failure", metadata: { stage: "save_image", model, promptLength: prompt.length, message: error instanceof Error ? error.message : "保存生成图片失败" } });
+    return NextResponse.json({ code: 502, message: error instanceof Error ? error.message : "保存生成图片失败。" }, { status: 502 });
+  }
 
   const readyImages = images.filter(Boolean);
   if (!readyImages.length) {
+    await logAudit({ request, actor: membership, action: "image.generate", targetType: "image", targetId: projectId, result: "failure", metadata: { stage: "empty_result", model, promptLength: prompt.length } });
     return NextResponse.json({ code: 400, message: "图片生成接口没有返回可用图片 URL。" }, { status: 400 });
   }
+
+  await logAudit({
+    request,
+    actor: membership,
+    action: "image.generate",
+    targetType: "image",
+    targetId: projectId,
+    metadata: { model, size: body.size || "1024x1024", count: readyImages.length, promptLength: prompt.length }
+  });
 
   return NextResponse.json({ code: 0, data: readyImages });
 }

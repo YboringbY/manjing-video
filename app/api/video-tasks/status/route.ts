@@ -135,16 +135,20 @@ export async function POST(request: Request) {
 
   let response: Response | null = null;
   let text = "";
-  for (const endpoint of endpoints) {
-    response = await fetchWithTimeout(endpoint, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        Accept: "application/json"
-      }
-    }, 30000);
-    text = await response.text();
-    if (response.ok || response.status !== 404) break;
+  try {
+    for (const endpoint of endpoints) {
+      response = await fetchWithTimeout(endpoint, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          Accept: "application/json"
+        }
+      }, 30000);
+      text = await response.text();
+      if (response.ok || response.status !== 404) break;
+    }
+  } catch (error) {
+    return NextResponse.json({ code: 504, message: error instanceof Error ? error.message : "查询视频任务状态失败。" }, { status: 504 });
   }
 
   const finalResponse = response;

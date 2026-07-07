@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentMembership } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 import { fetchWithTimeout } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { resolveModelRoute, toPublicProfile } from "../api-profiles/store";
@@ -266,15 +267,28 @@ export async function POST(request: Request) {
 
   const endpoint = baseUrl.includes("/api/v3") ? `${baseUrl}/contents/generations/tasks` : isZJProvider(baseUrl) ? appendPath(baseUrl, "/v1/videos/generations") : `${baseUrl}/v1/video/generations`;
 
-  const response = await fetchWithTimeout(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify(payload)
-  }, 60000);
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(payload)
+    }, 60000);
+  } catch (error) {
+    await logAudit({
+      request,
+      actor: membership,
+      action: "video_task.create",
+      targetType: "video_task",
+      result: "failure",
+      metadata: { model: requestedModel, provider: name, message: error instanceof Error ? error.message : "视频生成上游请求失败。" }
+    });
+    return NextResponse.json({ code: 504, message: error instanceof Error ? error.message : "视频生成上游请求失败。" }, { status: 504 });
+  }
 
   const text = await response.text();
   let result: FastGateTaskResponse = {};
@@ -282,6 +296,14 @@ export async function POST(request: Request) {
   const taskId = extractTaskId(result);
 
   if (!response.ok || !taskId) {
+    await logAudit({
+      request,
+      actor: membership,
+      action: "video_task.create",
+      targetType: "video_task",
+      result: "failure",
+      metadata: { model: requestedModel, provider: name, status: response.status, message: extractError(result) }
+    });
     return NextResponse.json(
       {
         code: response.status,
@@ -291,6 +313,24 @@ export async function POST(request: Request) {
       { status: response.ok ? 400 : response.status }
     );
   }
+
+  await logAudit({
+    request,
+    actor: membership,
+    action: "video_task.create",
+    targetType: "video_task",
+    targetId: taskId,
+    metadata: {
+      model: requestedModel,
+      provider: name,
+      profileId: route?.profile.id,
+      resolution: body.resolution || "720p",
+      inputType,
+      imageCount: imageUrls.length,
+      videoCount: videoUrls.length,
+      audioCount: audioUrls.length
+    }
+  });
 
   return NextResponse.json({
     code: 0,

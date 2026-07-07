@@ -478,6 +478,17 @@ npx prisma migrate deploy
 - 上游生成视频保持上游 URL，不做服务器端视频转存；当前要求是能预览和下载即可。
 - 生图工作台已接入生成结果入素材库，但仍需继续打磨参数、历史记录和失败重试体验。
 - 服务器部署现在已验证可用；涉及 Prisma migration 的部署必须显式加载服务器 `.env`。
+- 2026-07-08 安全加固继续推进：
+  - 新增 `AuditLog` Prisma 模型、迁移和 `lib/audit.ts` 审计 helper。
+  - 审计写入失败不会阻断主业务；metadata 会截断并按 `key/secret/token/password/authorization` 等敏感字段名脱敏。
+  - 已接入登录成功/失败/拦截、模型渠道新增/编辑/启停/删除、视频任务创建、素材删除等审计。
+  - 已新增管理员可访问的 `/api/audit-logs` 查询接口和左侧“审计日志”入口，普通用户不可见。
+  - 已扩展审计覆盖：成员创建/更新/停用、项目删除、素材上传、图片生成、剧本生成。
+  - 已验证：`npx prisma generate`、`npx tsc --noEmit`、`npm run build` 通过；未登录访问 `/api/audit-logs` 返回 JSON 401；失败登录会写入审计；管理员登录后可读取最近审计记录。
+  - `npm run lint` 当前不能作为自动校验使用，因为项目尚未配置 ESLint，Next 会进入交互式初始化流程。
+- JSON 错误兜底已增强：
+  - `fetchWithTimeout` 会把上游超时转换为明确中文错误。
+  - 生图、视频创建、视频状态查询、视频文件代理等接口对上游失败/空响应/非 JSON 响应做 JSON 化返回，减少前端 `Unexpected end of JSON input`。
 
 ## 建议下一步
 

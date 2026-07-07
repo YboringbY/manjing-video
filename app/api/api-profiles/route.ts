@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentMembership, requireAdmin } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 import { normalizeBaseUrl, readServerApiProfiles, ServerApiProfile, toPublicProfile, writeServerApiProfiles } from "./store";
 
 export async function GET() {
@@ -51,6 +52,23 @@ export async function POST(request: Request) {
   };
   const next = existing ? profiles.map(profile => profile.id === existing.id ? nextProfile : profile) : [nextProfile, ...profiles];
   await writeServerApiProfiles(next);
+  await logAudit({
+    request,
+    actor: auth.membership,
+    action: existing ? "api_profile.update" : "api_profile.create",
+    targetType: "api_profile",
+    targetId: nextProfile.id,
+    metadata: {
+      name,
+      baseUrl,
+      textModelCount: textModels.length,
+      imageModelCount: imageModels.length,
+      videoModelCount: videoModels.length,
+      priority,
+      enabled: nextProfile.enabled,
+      concurrencyLimit
+    }
+  });
   return NextResponse.json({ code: 0, data: toPublicProfile(nextProfile), updated: Boolean(existing) });
 }
 
@@ -64,6 +82,7 @@ export async function PATCH(request: Request) {
   if (!target) return NextResponse.json({ code: 404, message: "未找到这个 API Profile。" }, { status: 404 });
   const next = profiles.map(profile => ({ ...profile, active: profile.id === body.id }));
   await writeServerApiProfiles(next);
+  await logAudit({ request, actor: auth.membership, action: "api_profile.activate", targetType: "api_profile", targetId: body.id, metadata: { name: target.name } });
   return NextResponse.json({ code: 0, data: toPublicProfile({ ...target, active: true }) });
 }
 
@@ -73,7 +92,9 @@ export async function DELETE(request: Request) {
   const id = new URL(request.url).searchParams.get("id");
   if (!id) return NextResponse.json({ code: 400, message: "缺少 Profile ID。" }, { status: 400 });
   const profiles = await readServerApiProfiles();
+  const target = profiles.find(profile => profile.id === id);
   const next = profiles.filter(profile => profile.id !== id);
   await writeServerApiProfiles(next);
+  await logAudit({ request, actor: auth.membership, action: "api_profile.delete", targetType: "api_profile", targetId: id, metadata: { name: target?.name, existed: Boolean(target) } });
   return NextResponse.json({ code: 0 });
 }

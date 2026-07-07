@@ -19,7 +19,7 @@ export type ProjectStates = Record<number, AppState>;
 
 export type MemberRole = "super_admin" | "tenant_admin" | "user";
 export type ProfileSection = "basic" | "security";
-export type WorkspaceSection = "project-home" | "overview" | "script" | "shots" | "image-workbench" | "material-assets" | "tasks" | "members" | "channel-management" | "profile";
+export type WorkspaceSection = "project-home" | "overview" | "script" | "shots" | "image-workbench" | "material-assets" | "tasks" | "members" | "audit-logs" | "channel-management" | "profile";
 export type ApiProfile = { id: string; name: string; baseUrl: string; apiKey?: string; model?: string; textModels?: string[]; scriptModels?: string[]; videoModels: string[]; imageModels: string[]; priority?: number; enabled?: boolean; concurrencyLimit?: number; active: boolean; createdAt: number; hasApiKey?: boolean };
 export type VisualAsset = {
   id: string;

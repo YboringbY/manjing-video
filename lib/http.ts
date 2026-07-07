@@ -3,6 +3,11 @@ export async function fetchWithTimeout(input: RequestInfo | URL, init: RequestIn
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("上游请求超时，请稍后重试。");
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
   }

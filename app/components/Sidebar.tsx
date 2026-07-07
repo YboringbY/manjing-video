@@ -45,6 +45,7 @@ export function Sidebar({
 }: SidebarProps) {
   const managementNav: [WorkspaceSection, string][] = [
     ...(canManageMembers ? [["members", "▤ 人员管理"] as [WorkspaceSection, string]] : []),
+    ...(canManageMembers ? [["audit-logs", "◷ 审计日志"] as [WorkspaceSection, string]] : []),
     ...(canManageApiProfiles ? [["channel-management", "◎ 模型渠道管理"] as [WorkspaceSection, string]] : [])
   ];
 

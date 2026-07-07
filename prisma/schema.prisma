@@ -27,6 +27,7 @@ model Tenant {
   memberships Membership[]
   materials   Material[]
   workspaces  ProjectWorkspace[]
+  auditLogs   AuditLog[]
 }
 
 model User {
@@ -41,6 +42,7 @@ model User {
   memberships  Membership[]
   materials    Material[]
   workspaces   ProjectWorkspace[]
+  auditLogs    AuditLog[]
 }
 
 model Membership {
@@ -104,4 +106,26 @@ model ProjectWorkspace {
   @@unique([tenantId, projectId])
   @@index([tenantId, updatedAt])
   @@index([updatedById])
+}
+
+model AuditLog {
+  id           Int      @id @default(autoincrement())
+  tenantId     String?
+  userId       String?
+  actorAccount String?
+  action       String
+  targetType   String
+  targetId     String?
+  result       String   @default("success")
+  ip           String?
+  userAgent    String?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+  tenant       Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@index([targetType, targetId])
 }

@@ -112,7 +112,12 @@ export async function GET(request: Request) {
   const taskId = searchParams.get("task_id") || "";
   const download = searchParams.get("download") === "1";
 
-  const latestUrl = taskId ? await latestVideoUrl(taskId, apiKey, baseUrl) : "";
+  let latestUrl = "";
+  try {
+    latestUrl = taskId ? await latestVideoUrl(taskId, apiKey, baseUrl) : "";
+  } catch (error) {
+    return NextResponse.json({ code: 504, message: error instanceof Error ? error.message : "查询最新视频地址失败。" }, { status: 504 });
+  }
   const resolvedUrl = latestUrl || rawUrl;
   const allowTrustedHttps = Boolean(latestUrl && taskId && profileId);
   if (!resolvedUrl) {
@@ -122,8 +127,9 @@ export async function GET(request: Request) {
   let result: Awaited<ReturnType<typeof fetchVideo>>;
   try {
     result = await fetchVideo(resolvedUrl, apiKey, allowTrustedHttps);
-  } catch {
-    return NextResponse.json({ code: 400, message: "视频地址格式不正确。" }, { status: 400 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "视频地址格式不正确。";
+    return NextResponse.json({ code: message.includes("超时") ? 504 : 400, message }, { status: message.includes("超时") ? 504 : 400 });
   }
 
   if (!result) {
@@ -132,7 +138,7 @@ export async function GET(request: Request) {
 
   let { response, targetUrl } = result;
   if ((!response.ok || !response.body) && taskId && rawUrl && rawUrl !== resolvedUrl) {
-    const fallback = await fetchVideo(rawUrl, apiKey);
+    const fallback = await fetchVideo(rawUrl, apiKey).catch(() => null);
     if (fallback) ({ response, targetUrl } = fallback);
   }
 

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentMembership } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 import { fetchWithTimeout } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { resolveModelRoute } from "../api-profiles/store";
@@ -96,13 +97,15 @@ async function callOpenAICompatible(prompt: string, model: string, apiConfig = g
 }
 
 export async function POST(request: Request) {
+  let membership: Awaited<ReturnType<typeof getCurrentMembership>> = null;
+  let body: ScriptRequestBody | undefined;
   try {
-    const membership = await getCurrentMembership();
+    membership = await getCurrentMembership();
     if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
     const limited = rateLimit(request, { keyPrefix: `scripts:${membership.userId}`, limit: 20, windowMs: 10 * 60 * 1000 });
     if (limited) return limited;
 
-    const body = await request.json() as ScriptRequestBody;
+    body = await request.json() as ScriptRequestBody;
     const action = body.action;
     if (!action || !["draft", "optimize", "outline"].includes(action)) {
       return NextResponse.json({ code: 400, message: "缺少或无效的 action。" }, { status: 400 });
@@ -125,8 +128,40 @@ export async function POST(request: Request) {
     const prompt = buildPrompt({ ...body, action });
     const content = await callOpenAICompatible(prompt, model, apiConfig);
 
+    await logAudit({
+      request,
+      actor: membership,
+      action: "script.generate",
+      targetType: "script",
+      result: "success",
+      metadata: {
+        action,
+        model,
+        themeLength: textLength(body.theme),
+        charactersLength: textLength(body.characters),
+        scriptLength: textLength(body.script),
+        outputLength: content.length
+      }
+    });
+
     return NextResponse.json({ code: 0, data: { content, model, action } });
   } catch (error) {
+    if (membership) {
+      await logAudit({
+        request,
+        actor: membership,
+        action: "script.generate",
+        targetType: "script",
+        result: "failure",
+        metadata: {
+          action: body?.action,
+          model: body?.model,
+          themeLength: textLength(body?.theme),
+          scriptLength: textLength(body?.script),
+          message: error instanceof Error ? error.message : "AI 剧本生成失败"
+        }
+      });
+    }
     return NextResponse.json(
       { code: 500, message: error instanceof Error ? error.message : "AI 剧本生成失败" },
       { status: 500 }

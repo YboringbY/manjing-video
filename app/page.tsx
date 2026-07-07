@@ -20,6 +20,17 @@ type AuthUser = {
 };
 type AuthUsers = Record<string, AuthUser>;
 type WorkspaceRecord = { projectId: number; state: Partial<AppState>; updatedAt?: string };
+type AuditLogEntry = {
+  id: number;
+  action: string;
+  targetType: string;
+  targetId?: string | null;
+  result: "success" | "failure" | "blocked" | string;
+  actorAccount?: string | null;
+  ip?: string | null;
+  metadata?: Record<string, unknown> | null;
+  createdAt: string;
+};
 
 const STORAGE_KEY = "manjing-video-mvp";
 const AUTH_STORAGE_KEY = "manjing-video-auth";
@@ -160,6 +171,39 @@ function roleScope(role: MemberRole) {
   if (role === "super_admin") return "平台配置、租户管理与全部功能";
   if (role === "tenant_admin") return "本租户成员管理与生产功能";
   return "项目生产功能";
+}
+
+function auditActionLabel(action: string) {
+  const map: Record<string, string> = {
+    "auth.login": "登录",
+    "api_profile.create": "新增渠道",
+    "api_profile.update": "编辑渠道",
+    "api_profile.activate": "切换渠道",
+    "api_profile.delete": "删除渠道",
+    "user.create": "新增成员",
+    "user.update": "更新成员",
+    "user.disable": "停用成员",
+    "project.delete": "删除项目",
+    "asset.upload": "上传素材",
+    "image.generate": "生成图片",
+    "script.generate": "生成剧本",
+    "material.delete": "删除素材",
+    "video_task.create": "创建视频任务"
+  };
+  return map[action] || action;
+}
+
+function auditResultTag(result: string) {
+  if (result === "success") return <span className="tag done">成功</span>;
+  if (result === "blocked") return <span className="tag pending">拦截</span>;
+  return <span className="tag pending">失败</span>;
+}
+
+function compactAuditMetadata(metadata?: Record<string, unknown> | null) {
+  if (!metadata) return "-";
+  const entries = Object.entries(metadata).filter(([, value]) => value !== undefined && value !== null && value !== "");
+  if (!entries.length) return "-";
+  return entries.slice(0, 4).map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`).join(" · ");
 }
 
 function canManageMembers(role: MemberRole) {
@@ -331,6 +375,11 @@ export default function Home() {
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
   const [languageLabel, setLanguageLabel] = useState("简体中文");
   const [userActionMessage, setUserActionMessage] = useState("");
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [auditLogMessage, setAuditLogMessage] = useState("");
+  const [auditLogFilter, setAuditLogFilter] = useState("");
+  const [auditLogResultFilter, setAuditLogResultFilter] = useState("");
+  const [isAuditLogsLoading, setIsAuditLogsLoading] = useState(false);
   const [apiProfiles, setApiProfiles] = useState<ApiProfile[]>(defaultApiProfiles);
   const [activeApiProfileId, setActiveApiProfileId] = useState("");
   const [apiProfileName, setApiProfileName] = useState("");
@@ -423,6 +472,26 @@ export default function Home() {
     setAuthUsers(usersToMap(result.data as AuthUser[]));
   }
 
+  async function fetchAuditLogs() {
+    const role = currentUser ? authUsers[currentUser]?.role || "user" : "user";
+    if (!canManageMembers(role)) return;
+    setIsAuditLogsLoading(true);
+    try {
+      const params = new URLSearchParams({ limit: "120" });
+      if (auditLogFilter.trim()) params.set("actor", auditLogFilter.trim());
+      if (auditLogResultFilter) params.set("result", auditLogResultFilter);
+      const response = await fetch(`/api/audit-logs?${params.toString()}`);
+      const result = await readApiJson(response, "加载审计日志失败");
+      if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "加载审计日志失败");
+      setAuditLogs(result.data as AuditLogEntry[]);
+      setAuditLogMessage(`已加载 ${result.data.length} 条审计记录。`);
+    } catch (error) {
+      setAuditLogMessage(error instanceof Error ? error.message : "加载审计日志失败。");
+    } finally {
+      setIsAuditLogsLoading(false);
+    }
+  }
+
   useEffect(() => {
     if (!authReady || !currentUser) return;
     fetchUsers().catch(() => undefined);
@@ -510,8 +579,14 @@ export default function Home() {
   useEffect(() => {
     const role = currentUser ? authUsers[currentUser]?.role || "user" : "user";
     if (!canManageMembers(role) && activeSection === "members") setActiveSection("project-home");
+    if (!canManageMembers(role) && activeSection === "audit-logs") setActiveSection("project-home");
     if (!canManageApiProfiles(role) && activeSection === "channel-management") setActiveSection("project-home");
   }, [authUsers, currentUser, activeSection]);
+
+  useEffect(() => {
+    if (!authReady || !currentUser || activeSection !== "audit-logs") return;
+    fetchAuditLogs().catch(() => undefined);
+  }, [authReady, currentUser, activeSection]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1908,6 +1983,17 @@ export default function Home() {
             <div className="script-core-grid"><div><label>成员账号</label><input value={memberAccountDraft} disabled={Boolean(editingMemberAccount)} onChange={event => setMemberAccountDraft(event.target.value)} placeholder="例如 zhangsan" /></div><div><label>显示名称</label><input value={memberNameDraft} onChange={event => setMemberNameDraft(event.target.value)} placeholder="输入显示名称" /></div><div><label>初始/重置密码</label><input type="password" value={memberPasswordDraft} onChange={event => setMemberPasswordDraft(event.target.value)} placeholder="新成员必填；编辑成员可留空" /></div><div><label>成员角色</label><select value={memberRoleDraft} onChange={event => setMemberRoleDraft(event.target.value as MemberRole)}>{memberRoleOptions.map(role => <option key={role} value={role}>{roleLabel(role)}</option>)}</select></div></div>
             <div className="actions"><button className="btn-primary" onClick={upsertMember} disabled={!currentUserCanManageMembers}>保存人员</button><button className="btn-ghost" onClick={closeMemberEditor}>取消</button></div>
           </div>}
+        </section>
+
+        <section className="card" style={sectionStyle("audit-logs")}>
+          <div className="asset-workspace-head"><div><h2>审计日志</h2><p className="muted">记录登录、成员、渠道、项目、素材和生成调用等关键操作。</p></div><button className="btn-primary" onClick={fetchAuditLogs} disabled={isAuditLogsLoading}>{isAuditLogsLoading ? "刷新中..." : "刷新"}</button></div>
+          <div className="script-core-grid" style={{ marginTop: 12 }}>
+            <div><label>操作者账号</label><input value={auditLogFilter} onChange={event => setAuditLogFilter(event.target.value)} placeholder="可选，输入账号筛选" /></div>
+            <div><label>结果</label><select value={auditLogResultFilter} onChange={event => setAuditLogResultFilter(event.target.value)}><option value="">全部</option><option value="success">成功</option><option value="failure">失败</option><option value="blocked">拦截</option></select></div>
+            <div className="actions" style={{ alignItems: "end" }}><button className="btn-ghost" onClick={fetchAuditLogs} disabled={isAuditLogsLoading}>应用筛选</button></div>
+          </div>
+          {auditLogMessage && <div className="api-active-banner">{auditLogMessage}</div>}
+          <div className="table-wrap" style={{ marginTop: 14 }}><table className="table"><thead><tr><th>时间</th><th>操作者</th><th>操作</th><th>对象</th><th>结果</th><th>IP</th><th>摘要</th></tr></thead><tbody>{auditLogs.length ? auditLogs.map(log => <tr key={log.id}><td>{new Date(log.createdAt).toLocaleString()}</td><td>{log.actorAccount || "-"}</td><td>{auditActionLabel(log.action)}</td><td>{log.targetType}{log.targetId ? ` · ${log.targetId}` : ""}</td><td>{auditResultTag(log.result)}</td><td>{log.ip || "-"}</td><td className="muted">{compactAuditMetadata(log.metadata)}</td></tr>) : <tr><td colSpan={7}><div className="empty">暂无审计记录。</div></td></tr>}</tbody></table></div>
         </section>
 
         <section className="card" style={sectionStyle("channel-management")}>

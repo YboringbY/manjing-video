@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentMembership } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 import { prisma } from "@/lib/prisma";
 
 const MAX_DATABASE_INT = 2147483647;
@@ -122,6 +123,17 @@ export async function DELETE(request: Request) {
   const projectId = cleanNumber(searchParams.get("projectId"), 0);
   if (!projectId) return NextResponse.json({ code: 400, message: "缺少项目 ID。" }, { status: 400 });
 
-  await prisma.projectWorkspace.deleteMany({ where: { tenantId: membership.tenantId, projectId } });
+  const workspace = await prisma.projectWorkspace.findUnique({
+    where: { tenantId_projectId: { tenantId: membership.tenantId, projectId } }
+  });
+  const deleted = await prisma.projectWorkspace.deleteMany({ where: { tenantId: membership.tenantId, projectId } });
+  await logAudit({
+    request,
+    actor: membership,
+    action: "project.delete",
+    targetType: "project",
+    targetId: projectId,
+    metadata: { name: workspace?.name, deletedCount: deleted.count }
+  });
   return NextResponse.json({ code: 0 });
 }

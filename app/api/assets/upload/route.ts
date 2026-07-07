@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import { NextResponse } from "next/server";
 import { getCurrentMembership } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 import { rateLimit } from "@/lib/rate-limit";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
@@ -73,6 +74,22 @@ export async function POST(request: Request) {
 
   await mkdir(targetDir, { recursive: true });
   await writeFile(storagePath, Buffer.from(await uploadFile.arrayBuffer()));
+
+  await logAudit({
+    request,
+    actor: membership,
+    action: "asset.upload",
+    targetType: "asset",
+    targetId: relativePath,
+    metadata: {
+      projectId,
+      kind,
+      name: String(formData.get("name") || uploadFile.name || "未命名素材"),
+      mimeType: uploadFile.type,
+      size: uploadFile.size,
+      publicUrlConfigured: Boolean(process.env.ASSET_PUBLIC_BASE_URL || process.env.PUBLIC_ASSET_BASE_URL)
+    }
+  });
 
   return NextResponse.json({
     code: 0,
