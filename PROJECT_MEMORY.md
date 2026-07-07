@@ -282,6 +282,38 @@ zjljzn.ltd
   - `AUTH_COOKIE_SECURE=true` 或删除该环境变量
   - 让正式入口使用 `https://console.manjingstudio.com`
 
+2026-07-07 生产更新与当前验证状态：
+
+- 已将生产服务器 `/opt/manjing-video` 更新到提交 `faafd8a Align video toolbar controls`。
+- 本次生产更新包含：
+  - 上传素材元数据写入 PostgreSQL 的 `Material` 表。
+  - `/api/materials` 素材记录接口。
+  - 视频工作台 UI 布局优化。
+  - “开始生成”按钮简化、浅色背景、去除箭头和字数统计。
+  - 视频工具栏控件高度统一为 52px，`全能参考 / 模型 / 比例 / 清晰度 / 时长 / @ 素材 / 开始生成` 水平对齐。
+- 生产部署时已执行：
+  - `npm ci`
+  - `npx prisma generate`
+  - 显式加载 `.env` 后执行 `npx prisma migrate deploy`
+  - `npm run build`
+  - `pm2 restart manjing-video --update-env`
+- 生产数据库已应用 migration `20260706001000_add_materials`。
+- 已验证：
+  - `http://118.196.44.191/` 返回 `200 OK`。
+  - `POST /api/auth/login` 返回 `200`，备案期间 IP 模式下 cookie 不带 `Secure`。
+  - `GET /api/materials?projectId=1` 返回正常。
+  - `POST /api/assets/upload` 返回 `http://118.196.44.191/uploads/...`。
+  - 上传图片 URL 返回 `200 OK`。
+  - 部署测试上传目录 `/data/manjing/uploads/projects/deploy-test` 已清理。
+- 当前生产仍为备案期间 IP 测试入口：`http://118.196.44.191`。
+- 重要细节：服务器上的 Prisma CLI 因为 `prisma.config.ts` 不自动加载 `.env`，执行迁移时必须显式加载环境变量，例如：
+
+```bash
+cd /opt/manjing-video
+set -a && source .env && set +a
+npx prisma migrate deploy
+```
+
 ## 已完成的重要修复
 
 - 登录与本地 PostgreSQL/Prisma 账号体系已接入。
@@ -318,6 +350,13 @@ zjljzn.ltd
   - 登录后进入项目会从数据库读取当前项目素材并合并到本地状态。
   - 删除素材会删除数据库记录，但暂不删除物理文件，避免误删共享或后续需要追溯的文件。
   - 生图结果、提示词素材、团队共享跨项目读取还需要后续继续完善。
+- 视频工作台 UI 已完成一轮整理：
+  - 参考素材独立成区域，不再和参数挤在一行。
+  - 提示词输入框独立显示。
+  - 设置项拆成网格：全能参考、模型、比例、清晰度、时长。
+  - 提交区只保留 `@ 素材` 和 `开始生成`。
+  - 去掉 `0 字` 字数显示和向上箭头。
+  - 工具栏控件高度和水平线已统一。
 
 ## 仍需注意的问题
 
@@ -327,15 +366,15 @@ zjljzn.ltd
 - 模型渠道配置目前用 `.data/api-profiles.json`，后续应迁移到数据库并按租户/平台权限隔离。
 - 上游生成视频没有自动转存到自有存储。
 - 生图工作台目前还不是完整真实生图链路。
-- 服务器环境不要贸然同步，需先在本地完成一轮稳定验证。
+- 服务器部署现在已验证可用；涉及 Prisma migration 的部署必须显式加载服务器 `.env`。
 
 ## 建议下一步
 
 优先级从高到低：
 
-1. 确认 `super_admin` 登录后左侧“模型渠道管理”可见，渠道列表、编辑、设为当前、并发数都可用。
-2. 确认视频工作台模型下拉来自当前渠道的视频模型列表。
-3. 生成一条 ZJLJZN Seedance 任务，验证创建、同步状态、预览、下载完整闭环。
-4. 梳理项目/分镜/素材/任务的数据模型，准备从 localStorage 迁移到 PostgreSQL。
-5. 设计自有对象存储方案，明确图片、视频、参考素材、生成结果的存储生命周期。
-6. 本地稳定后再推 GitHub，最后由服务器拉取更新。
+1. 在生产 IP 模式下再做一次完整用户路径：登录 -> 上传图片 -> 素材库显示 -> 视频工作台选为参考 -> 提交生成。
+2. 完善素材数据库化：生图结果、提示词素材、团队共享跨项目读取都写入/读取 PostgreSQL。
+3. 梳理项目/分镜/任务的数据模型，继续从 localStorage 迁移到 PostgreSQL。
+4. 生成一条 ZJLJZN Seedance 任务，验证创建、同步状态、预览、下载完整闭环。
+5. 设计生成视频自有转存：上游视频完成后拉取到 `/data/manjing/generated` 或对象存储，并保存自有 URL。
+6. 备案完成后切回正式域名 HTTPS：`ASSET_PUBLIC_BASE_URL=https://console.manjingstudio.com`，恢复 Secure cookie。
