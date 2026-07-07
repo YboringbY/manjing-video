@@ -110,6 +110,10 @@ function mergeMaterials(current: MaterialAsset[], incoming: MaterialAsset[]) {
   });
 }
 
+function projectStatesFromWorkspaces(workspaces: { projectId: number; state: Partial<AppState> }[]) {
+  return Object.fromEntries(workspaces.map(item => [item.projectId, normalizeAppState(item.state)])) as ProjectStates;
+}
+
 function normalizeAssetUrl(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return "";
@@ -251,6 +255,8 @@ export default function Home() {
   const [selectedLizhenAssetIds, setSelectedLizhenAssetIds] = useState<string[]>([]);
   const [lizhenAssetMessage, setLizhenAssetMessage] = useState("");
   const [isLoadingLizhenAssets, setIsLoadingLizhenAssets] = useState(false);
+  const [workspaceSyncReady, setWorkspaceSyncReady] = useState(false);
+  const [workspaceSyncMessage, setWorkspaceSyncMessage] = useState("");
   const [showFullScript, setShowFullScript] = useState(false);
   const [scriptTheme, setScriptTheme] = useState("");
   const [scriptCharacters, setScriptCharacters] = useState("");
@@ -374,6 +380,41 @@ export default function Home() {
   useEffect(() => {
     if (!authReady || !currentUser || !storageReady) return;
     let cancelled = false;
+    async function loadWorkspaces() {
+      try {
+        const response = await fetch("/api/workspaces");
+        const result = await response.json();
+        if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "加载项目工作区失败");
+        if (cancelled) return;
+        const workspaces = result.data as { projectId: number; state: Partial<AppState> }[];
+        if (!workspaces.length) {
+          setWorkspaceSyncReady(true);
+          return;
+        }
+        const serverProjectStates = projectStatesFromWorkspaces(workspaces);
+        const serverProjects = Object.values(serverProjectStates).map(item => item.project);
+        setProjectStates(prev => ({ ...prev, ...serverProjectStates }));
+        setProjects(prev => {
+          const merged = [...serverProjects, ...prev];
+          return merged.filter((project, index, list) => index === list.findIndex(item => item.id === project.id));
+        });
+        if (serverProjectStates[currentProjectId]) setState(serverProjectStates[currentProjectId]);
+        setWorkspaceSyncMessage(`已同步 ${workspaces.length} 个项目工作区。`);
+      } catch (error) {
+        if (!cancelled) setWorkspaceSyncMessage(error instanceof Error ? error.message : "项目工作区暂时无法同步。");
+      } finally {
+        if (!cancelled) setWorkspaceSyncReady(true);
+      }
+    }
+    loadWorkspaces();
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, currentUser, storageReady]);
+
+  useEffect(() => {
+    if (!authReady || !currentUser || !storageReady) return;
+    let cancelled = false;
     async function loadProjectMaterials() {
       try {
         const response = await fetch(`/api/materials?projectId=${currentProjectId}`);
@@ -451,6 +492,25 @@ export default function Home() {
     if (!storageReady || typeof window === "undefined") return;
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ state, projectStates, projects, currentProjectId }));
   }, [state, projectStates, projects, currentProjectId, storageReady]);
+
+  useEffect(() => {
+    if (!authReady || !currentUser || !storageReady || !workspaceSyncReady) return;
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch("/api/workspaces", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId: currentProjectId, name: state.project.name, state })
+        });
+        const result = await response.json();
+        if (!response.ok || result.code !== 0) throw new Error(result.message || "保存项目工作区失败");
+        setWorkspaceSyncMessage("项目工作区已同步。");
+      } catch (error) {
+        setWorkspaceSyncMessage(error instanceof Error ? error.message : "项目工作区同步失败。");
+      }
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [authReady, currentUser, storageReady, workspaceSyncReady, currentProjectId, state]);
 
   useEffect(() => {
     if (!storageReady) return;
@@ -1693,6 +1753,7 @@ export default function Home() {
       <main>
         <div className="topbar"><div className="crumb">漫镜视频 / AI 短剧生产平台</div><div className="actions"><div className="user-menu-wrap"><button className="user-chip" onClick={() => setUserMenuOpen(open => !open)}><strong>{currentDisplayName}</strong><span>{roleLabel(currentUserRole)}</span></button>{userMenuOpen && <div className="user-menu"><strong>{currentDisplayName}</strong><small>{currentUserRecord?.account || "-"}</small><small>{roleLabel(currentUserRole)}</small><button onClick={() => { setActiveSection("profile"); setProfileSection("basic"); setMemberNameDraft(currentDisplayName); setUserMenuOpen(false); }}>个人中心</button><button onClick={() => { setActiveSection("material-assets"); setActiveAssetScope("project"); setUserMenuOpen(false); }}>素材库</button><button onClick={switchLanguage}>语言 · {languageLabel}</button><button onClick={logout} className="danger">退出登录</button></div>}</div></div></div>
         {userActionMessage && <div className="action-toast">{userActionMessage}</div>}
+        {workspaceSyncMessage && <div className="sync-toast">{workspaceSyncMessage}</div>}
         <ProjectListSection
           currentProjectId={currentProjectId}
           projects={projects}

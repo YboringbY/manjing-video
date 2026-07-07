@@ -363,6 +363,13 @@ npx prisma migrate deploy
   - 登录后进入项目会从数据库读取当前项目素材并合并到本地状态。
   - 删除素材会删除数据库记录，但暂不删除物理文件，避免误删共享或后续需要追溯的文件。
   - 生图结果、提示词素材、团队共享跨项目读取还需要后续继续完善。
+- 项目工作区已开始接入 PostgreSQL 快照同步：
+  - 新增 `ProjectWorkspace` 表和 `/api/workspaces`。
+  - 当前以“项目完整工作区快照”的方式保存 `project / shots / tasks / assets / materials`。
+  - 登录后会从数据库读取工作区快照并合并到本地项目列表。
+  - 当前项目状态变化后会防抖写入数据库。
+  - 这样同一团队/同一账号在不同浏览器登录时，可以先共享项目、分镜、生成任务和已生成视频记录。
+  - 这是迁移 localStorage 的第一步；后续仍建议逐步拆成规范化的 `Project / Shot / VideoTask / VideoAsset` 表，减少冲突覆盖。
 - 视频工作台 UI 已完成一轮整理：
   - 参考素材独立成区域，不再和参数挤在一行。
   - 提示词输入框独立显示。
@@ -374,7 +381,7 @@ npx prisma migrate deploy
 ## 仍需注意的问题
 
 - `app/page.tsx` 仍然偏大，已先拆出左侧导航、项目列表、项目概览；后续继续拆剧本、生图、视频、资产和生成记录，并逐步拆业务 hooks。
-- 项目、分镜、素材、生成记录大多仍在 localStorage，需要逐步迁移到数据库。
+- 项目、分镜、生成记录已开始通过 `ProjectWorkspace` 快照同步到数据库，但前端仍保留 localStorage 作为本地缓存；后续需要继续拆成规范化表。
 - 素材迁移已开始，但目前只有上传素材写入 PostgreSQL；项目、分镜、生成记录和生图/提示词素材仍需继续迁移。
 - 模型渠道配置目前用 `.data/api-profiles.json`，后续应迁移到数据库并按租户/平台权限隔离。
 - 上游生成视频没有自动转存到自有存储。
@@ -386,8 +393,9 @@ npx prisma migrate deploy
 优先级从高到低：
 
 1. 在生产 IP 模式下再做一次完整用户路径：登录 -> 上传图片 -> 素材库显示 -> 视频工作台选为参考 -> 提交生成。
-2. 完善素材数据库化：生图结果、提示词素材、团队共享跨项目读取都写入/读取 PostgreSQL。
-3. 梳理项目/分镜/任务的数据模型，继续从 localStorage 迁移到 PostgreSQL。
-4. 生成一条 ZJLJZN Seedance 任务，验证创建、同步状态、预览、下载完整闭环。
-5. 设计生成视频自有转存：上游视频完成后拉取到 `/data/manjing/generated` 或对象存储，并保存自有 URL。
-6. 备案完成后切回正式域名 HTTPS：`ASSET_PUBLIC_BASE_URL=https://console.manjingstudio.com`，恢复 Secure cookie。
+2. 验证跨浏览器共享：浏览器 A 生成任务后，浏览器 B 用同一账号登录能看到项目、分镜、生成记录和已生成视频。
+3. 完善素材数据库化：生图结果、提示词素材、团队共享跨项目读取都写入/读取 PostgreSQL。
+4. 将 `ProjectWorkspace` 快照逐步拆成规范化的 `Project / Shot / VideoTask / VideoAsset` 表，降低多人同时编辑时的覆盖风险。
+5. 生成一条 ZJLJZN Seedance 任务，验证创建、同步状态、预览、下载完整闭环。
+6. 设计生成视频自有转存：上游视频完成后拉取到 `/data/manjing/generated` 或对象存储，并保存自有 URL。
+7. 备案完成后切回正式域名 HTTPS：`ASSET_PUBLIC_BASE_URL=https://console.manjingstudio.com`，恢复 Secure cookie。
