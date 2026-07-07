@@ -1,4 +1,7 @@
 import { NextResponse } from "next/server";
+import { getCurrentMembership } from "@/lib/auth";
+import { fetchWithTimeout } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
 import { readServerApiProfiles } from "../api-profiles/store";
 
 const BASE_URL = process.env.SEEDANCE_BASE_URL || "https://api.aifastgate.com";
@@ -64,17 +67,12 @@ function appendPath(baseUrl: string, path: string) {
   return `${normalized}${path}`;
 }
 
-function parseProfileParam(value: string | null) {
-  if (!value) return undefined;
-  try { return JSON.parse(value) as ApiProfile; } catch { return undefined; }
-}
-
 async function fetchVideo(url: string, apiKey?: string, allowTrustedHttps = false) {
   const targetUrl = safeTargetUrl(url, allowTrustedHttps);
   if (!targetUrl) return null;
   const headers: HeadersInit = {};
   if (apiKey && ["api.aifastgate.com", "console.aifastgate.com", "gw.aifastgate.com", "43.159.135.17", "zjljzn.ltd"].includes(targetUrl.hostname)) headers.Authorization = `Bearer ${apiKey}`;
-  const response = await fetch(targetUrl.toString(), { headers, cache: "no-store" });
+  const response = await fetchWithTimeout(targetUrl.toString(), { headers, cache: "no-store" }, 60000);
   return { response, targetUrl };
 }
 
@@ -82,10 +80,10 @@ async function latestVideoUrl(taskId: string, apiKey: string | undefined, baseUr
   if (!apiKey) return "";
   const endpoints = baseUrl.includes("/api/v3") ? [`${baseUrl}/contents/generations/tasks/${taskId}`, `${baseUrl}/contents/generations/tasks`] : isZJProvider(baseUrl) ? [appendPath(baseUrl, `/v1/videos/generations/${taskId}`), appendPath(baseUrl, `/v1/video/generations/${taskId}`)] : [`${baseUrl}/v1/video/generations/${taskId}`];
   for (const endpoint of endpoints) {
-    const response = await fetch(endpoint, {
+    const response = await fetchWithTimeout(endpoint, {
       headers: { Authorization: `Bearer ${apiKey}` },
       cache: "no-store"
-    });
+    }, 30000);
     if (!response.ok) continue;
     const text = await response.text();
     let result: FastGateStatusResponse = {};
@@ -99,12 +97,17 @@ async function latestVideoUrl(taskId: string, apiKey: string | undefined, baseUr
 }
 
 export async function GET(request: Request) {
+  const membership = await getCurrentMembership();
+  if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
+  const limited = rateLimit(request, { keyPrefix: `video:file:${membership.userId}`, limit: 120, windowMs: 60 * 1000 });
+  if (limited) return limited;
+
   const { searchParams } = new URL(request.url);
   const profileId = searchParams.get("profile_id") || "";
   const profiles = profileId ? await readServerApiProfiles() : [];
   const serverProfile = profileId ? profiles.find(profile => profile.id === profileId) : undefined;
   if (profileId && !serverProfile) return NextResponse.json({ code: 404, message: "当前选中的 API Profile 不存在，请重新选择后再播放。" }, { status: 404 });
-  const { apiKey, baseUrl } = resolveApiProfile(serverProfile || parseProfileParam(searchParams.get("profile")));
+  const { apiKey, baseUrl } = resolveApiProfile(serverProfile);
   const rawUrl = searchParams.get("url") || "";
   const taskId = searchParams.get("task_id") || "";
   const download = searchParams.get("download") === "1";

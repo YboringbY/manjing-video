@@ -362,6 +362,56 @@ npx prisma migrate deploy
   - 文件导入统一放在当前剧本正文区域，明确会覆盖正文。
   - 优化和大纲/单集拆分只针对当前剧本正文执行。
 
+2026-07-08 安全加固与健壮性优化：
+
+- 已完成一轮代码 review 后的高优先级安全修复，准备提交和部署。
+- API 鉴权：
+  - `/api/api-profiles` 未登录不可读取；普通用户只能拿到工作台所需的模型能力，管理员才能新增/修改/删除渠道。
+  - `/api/scripts`、`/api/images/generate`、`/api/video-tasks`、`/api/video-tasks/status`、`/api/video-files`、`/api/assets/upload` 均已要求登录。
+  - 旧外接资产接口 `/api/assets`、`/api/assets/groups` 和余额接口 `/api/user/balance` 已加鉴权，其中余额接口要求管理员。
+  - 假项目/分镜接口 `/api/projects`、`/api/shots` 不再返回假成功数据；未登录 401，登录后返回 410，提示使用 `/api/workspaces`。
+- SSRF 收紧：
+  - 视频创建、状态查询、视频代理不再接受客户端传入的 `api_profile.baseUrl/apiKey`。
+  - 后端只按服务端保存的模型渠道和 `profile_id` 选择上游。
+- Session 加固：
+  - `AUTH_SECRET` 生产环境必须配置，不能回落到默认开发密钥。
+  - session payload 增加 `exp`，服务端会校验过期时间。
+- 限流：
+  - 新增 `lib/rate-limit.ts`，当前为进程内内存限流，适合 PM2 单实例；后续多实例应迁移到 Redis 或数据库。
+  - 登录：10 次/分钟。
+  - 剧本生成：20 次/10 分钟/用户。
+  - 生图：120 次/10 分钟/用户。
+  - 视频创建：90 次/10 分钟/用户。
+  - 视频状态查询：240 次/分钟/用户。
+  - 视频文件代理：120 次/分钟/用户。
+  - 素材上传：40 次/10 分钟/用户。
+- 安全响应头：
+  - `next.config.js` 已增加 `X-Frame-Options`、`X-Content-Type-Options`、`Referrer-Policy`、`Permissions-Policy` 和 CSP。
+- 输入边界：
+  - 剧本故事想法最多 4000 字，主要人物最多 4000 字，剧本正文最多 30000 字，目标集数 0-300。
+  - 生图提示词最多 6000 字。
+  - 视频提示词最多 8000 字。
+  - 视频参考素材 URL 必须为 `http/https`，单个 URL 最多 2048 字符。
+- 上游调用健壮性：
+  - 新增 `lib/http.ts`，提供 `fetchWithTimeout` 和 `readLimitedResponseBuffer`。
+  - 剧本模型超时 120 秒，生图创建 180 秒，视频创建 60 秒，视频状态查询 30 秒，视频文件代理 60 秒，旧外接资产/余额接口 30 秒。
+  - 生图远程图片下载限制为 25MB，且必须返回 `image/*`。
+- 工作区并发保护：
+  - `/api/workspaces` 保存时带 `lastUpdatedAt`，服务端使用 `updatedAt` 做乐观锁。
+  - 如果云端工作区已被其他窗口或成员更新，返回 409，避免静默覆盖。
+  - 已有工作区但本地缺少版本信息时也会拒绝覆盖，提示刷新。
+- 素材删除权限：
+  - 管理员可删，素材创建者可删。
+  - 普通成员不能随意删除其他人的团队共享素材。
+  - 前端改为服务端删除成功后再从界面移除，避免权限失败但本地已消失。
+- 验证记录：
+  - `npx tsc --noEmit` 通过。
+  - `npm run build` 通过。
+  - 本地 5050 首页返回 200。
+  - 未登录生成接口返回 401。
+  - 登录限流验证：第 11 次错误登录返回 429。
+  - 安全响应头已通过 `curl -I` 验证实际返回。
+
 ## 已完成的重要修复
 
 - 登录与本地 PostgreSQL/Prisma 账号体系已接入。

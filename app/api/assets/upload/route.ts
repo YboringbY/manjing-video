@@ -2,6 +2,8 @@ import { randomUUID } from "crypto";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import { NextResponse } from "next/server";
+import { getCurrentMembership } from "@/lib/auth";
+import { rateLimit } from "@/lib/rate-limit";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 const PUBLIC_DIR = path.join(process.cwd(), "public");
@@ -39,6 +41,11 @@ function publicUrlFor(relativePath: string) {
 }
 
 export async function POST(request: Request) {
+  const membership = await getCurrentMembership();
+  if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
+  const limited = rateLimit(request, { keyPrefix: `assets:upload:${membership.userId}`, limit: 40, windowMs: 10 * 60 * 1000 });
+  if (limited) return limited;
+
   const formData = await request.formData();
   const file = formData.get("file");
 

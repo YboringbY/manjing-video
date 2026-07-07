@@ -1,22 +1,16 @@
 import { NextResponse } from "next/server";
+import { getCurrentMembership } from "@/lib/auth";
 
 export async function GET() {
-  return NextResponse.json({
-    data: [],
-    message: "分镜列表接口已预留，后续按 projectId 查询。"
-  });
+  const membership = await getCurrentMembership();
+  if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
+
+  return NextResponse.json({ code: 410, message: "分镜接口尚未启用，当前分镜仍保存在项目工作区中。" }, { status: 410 });
 }
 
-export async function POST(request: Request) {
-  const body = await request.json();
+export async function POST() {
+  const membership = await getCurrentMembership();
+  if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
 
-  return NextResponse.json({
-    data: {
-      id: `shot_${Date.now()}`,
-      status: "pending",
-      ...body,
-      createdAt: new Date().toISOString()
-    },
-    message: "分镜创建接口已预留。"
-  });
+  return NextResponse.json({ code: 410, message: "分镜创建接口尚未启用，当前请通过项目工作区保存分镜。" }, { status: 410 });
 }

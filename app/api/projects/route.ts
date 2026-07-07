@@ -1,21 +1,16 @@
 import { NextResponse } from "next/server";
+import { getCurrentMembership } from "@/lib/auth";
 
 export async function GET() {
-  return NextResponse.json({
-    data: [],
-    message: "项目列表接口已预留，后续接入数据库后返回真实项目。"
-  });
+  const membership = await getCurrentMembership();
+  if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
+
+  return NextResponse.json({ code: 410, message: "项目接口尚未启用，请使用 /api/workspaces 读取项目工作区。" }, { status: 410 });
 }
 
-export async function POST(request: Request) {
-  const body = await request.json();
+export async function POST() {
+  const membership = await getCurrentMembership();
+  if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
 
-  return NextResponse.json({
-    data: {
-      id: `project_${Date.now()}`,
-      ...body,
-      createdAt: new Date().toISOString()
-    },
-    message: "项目创建接口已预留。"
-  });
+  return NextResponse.json({ code: 410, message: "项目创建接口尚未启用，请使用 /api/workspaces 保存项目工作区。" }, { status: 410 });
 }

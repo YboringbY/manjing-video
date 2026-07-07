@@ -50,26 +50,65 @@ export async function POST(request: Request) {
   const projectId = cleanNumber(body.projectId, 0);
   const state = body.state;
   const name = cleanText(body.name || state?.project?.name, `项目 ${projectId}`);
+  const lastUpdatedAt = cleanText(body.lastUpdatedAt);
 
   if (!projectId) return NextResponse.json({ code: 400, message: "缺少项目 ID。" }, { status: 400 });
   if (!state || typeof state !== "object") return NextResponse.json({ code: 400, message: "缺少项目工作区数据。" }, { status: 400 });
 
-  const workspace = await prisma.projectWorkspace.upsert({
-    where: { tenantId_projectId: { tenantId: membership.tenantId, projectId } },
-    create: {
-      tenantId: membership.tenantId,
-      projectId,
-      name,
-      state,
-      updatedById: membership.userId,
-      updatedByName: membership.user.displayName
-    },
-    update: {
+  const existing = await prisma.projectWorkspace.findUnique({
+    where: { tenantId_projectId: { tenantId: membership.tenantId, projectId } }
+  });
+  if (existing && !lastUpdatedAt) {
+    return NextResponse.json({
+      code: 409,
+      message: "项目工作区已存在，但本地缺少版本信息，请先刷新项目后再保存。",
+      data: publicWorkspace(existing)
+    }, { status: 409 });
+  }
+  if (existing && existing.updatedAt.toISOString() !== lastUpdatedAt) {
+    return NextResponse.json({
+      code: 409,
+      message: "项目工作区已被其他窗口或成员更新，请先刷新项目后再保存。",
+      data: publicWorkspace(existing)
+    }, { status: 409 });
+  }
+
+  if (!existing) {
+    const workspace = await prisma.projectWorkspace.create({
+      data: {
+        tenantId: membership.tenantId,
+        projectId,
+        name,
+        state,
+        updatedById: membership.userId,
+        updatedByName: membership.user.displayName
+      }
+    });
+    return NextResponse.json({ code: 0, data: publicWorkspace(workspace) });
+  }
+
+  const updateResult = await prisma.projectWorkspace.updateMany({
+    where: { id: existing.id, updatedAt: existing.updatedAt },
+    data: {
       name,
       state,
       updatedById: membership.userId,
       updatedByName: membership.user.displayName
     }
+  });
+  if (updateResult.count !== 1) {
+    const latest = await prisma.projectWorkspace.findUnique({
+      where: { tenantId_projectId: { tenantId: membership.tenantId, projectId } }
+    });
+    return NextResponse.json({
+      code: 409,
+      message: "项目工作区刚刚被其他请求更新，请刷新后再保存。",
+      data: latest ? publicWorkspace(latest) : undefined
+    }, { status: 409 });
+  }
+
+  const workspace = await prisma.projectWorkspace.findUniqueOrThrow({
+    where: { id: existing.id }
   });
 
   return NextResponse.json({ code: 0, data: publicWorkspace(workspace) });

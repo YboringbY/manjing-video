@@ -1,12 +1,24 @@
 import { NextResponse } from "next/server";
+import { getCurrentMembership, requireAdmin } from "@/lib/auth";
 import { normalizeBaseUrl, readServerApiProfiles, ServerApiProfile, toPublicProfile, writeServerApiProfiles } from "./store";
 
 export async function GET() {
+  const membership = await getCurrentMembership();
+  if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
   const profiles = await readServerApiProfiles();
-  return NextResponse.json({ code: 0, data: profiles.map(toPublicProfile) });
+  const isAdmin = ["super_admin", "tenant_admin"].includes(membership.role);
+  return NextResponse.json({
+    code: 0,
+    data: profiles.map((profile, index) => {
+      const publicProfile = toPublicProfile(profile);
+      return isAdmin ? publicProfile : { ...publicProfile, name: `模型服务 ${index + 1}`, baseUrl: "" };
+    })
+  });
 }
 
 export async function POST(request: Request) {
+  const auth = await requireAdmin();
+  if ("error" in auth) return auth.error;
   const body = await request.json() as Partial<ServerApiProfile> & { textModels?: string[] | string; scriptModels?: string[] | string; videoModels?: string[] | string; imageModels?: string[] | string; active?: boolean; enabled?: boolean };
   const name = body.name?.trim() || "";
   const baseUrl = normalizeBaseUrl(body.baseUrl || "");
@@ -43,6 +55,8 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
+  const auth = await requireAdmin();
+  if ("error" in auth) return auth.error;
   const body = await request.json() as { id?: string };
   if (!body.id) return NextResponse.json({ code: 400, message: "缺少 Profile ID。" }, { status: 400 });
   const profiles = await readServerApiProfiles();
@@ -54,6 +68,8 @@ export async function PATCH(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const auth = await requireAdmin();
+  if ("error" in auth) return auth.error;
   const id = new URL(request.url).searchParams.get("id");
   if (!id) return NextResponse.json({ code: 400, message: "缺少 Profile ID。" }, { status: 400 });
   const profiles = await readServerApiProfiles();

@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { getCurrentMembership } from "@/lib/auth";
+import { fetchWithTimeout } from "@/lib/http";
 
 type SeedanceResponse<T> = {
   code: number;
@@ -74,6 +76,9 @@ function toVisualAsset(item: AssetItem, groupName = DEFAULT_GROUP_NAME) {
 }
 
 export async function GET(request: Request) {
+  const membership = await getCurrentMembership();
+  if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
+
   const apiKey = getApiKey();
 
   if (!apiKey) {
@@ -88,7 +93,7 @@ export async function GET(request: Request) {
   const assetType = Number(searchParams.get("asset_type") || 0);
   const keyword = searchParams.get("keyword") || "";
 
-  const response = await fetch(`${BASE_URL}/ai-open-platform-api/v1/asset/list`, {
+  const response = await fetchWithTimeout(`${BASE_URL}/ai-open-platform-api/v1/asset/list`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ApiKey: apiKey },
     body: JSON.stringify({
@@ -98,7 +103,7 @@ export async function GET(request: Request) {
       page,
       page_size: pageSize
     })
-  });
+  }, 30000);
 
   const text = await response.text();
   let result: SeedanceResponse<ListAssetsData> = { code: response.status, message: text };
@@ -124,6 +129,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const membership = await getCurrentMembership();
+  if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
+
   const apiKey = getApiKey();
 
   if (!apiKey) {
@@ -141,7 +149,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ code: 400, message: "创建资产需要 group_id、url、asset_type。" }, { status: 400 });
   }
 
-  const response = await fetch(`${BASE_URL}/ai-open-platform-api/v1/asset/create`, {
+  const response = await fetchWithTimeout(`${BASE_URL}/ai-open-platform-api/v1/asset/create`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ApiKey: apiKey },
     body: JSON.stringify({
@@ -150,7 +158,7 @@ export async function POST(request: Request) {
       asset_name: body.asset_name || "漫镜视频素材",
       asset_type: body.asset_type
     })
-  });
+  }, 30000);
 
   const result = await response.json() as SeedanceResponse<CreateAssetData>;
 

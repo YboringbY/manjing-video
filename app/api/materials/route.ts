@@ -145,6 +145,16 @@ export async function DELETE(request: Request) {
   const id = cleanNumber(searchParams.get("id"), 0);
   if (!id) return NextResponse.json({ code: 400, message: "缺少素材 ID。" }, { status: 400 });
 
-  await prisma.material.deleteMany({ where: { id, tenantId: membership.tenantId } });
+  const material = await prisma.material.findFirst({ where: { id, tenantId: membership.tenantId } });
+  if (!material) return NextResponse.json({ code: 404, message: "素材不存在或已被删除。" }, { status: 404 });
+
+  const isAdmin = ["super_admin", "tenant_admin"].includes(membership.role);
+  const isOwner = material.createdById === membership.userId;
+  const isLegacyProjectMaterial = !material.createdById && material.scope === "project";
+  if (!isAdmin && !isOwner && !isLegacyProjectMaterial) {
+    return NextResponse.json({ code: 403, message: "只能删除自己上传的素材，团队共享素材请联系管理员处理。" }, { status: 403 });
+  }
+
+  await prisma.material.delete({ where: { id: material.id } });
   return NextResponse.json({ code: 0 });
 }

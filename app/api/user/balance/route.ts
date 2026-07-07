@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/auth";
+import { fetchWithTimeout } from "@/lib/http";
 
 type SeedanceResponse<T> = {
   code: number;
@@ -14,6 +16,9 @@ type BalanceData = {
 const BASE_URL = process.env.SEEDANCE_BASE_URL || "https://aiopenapi.kuaizi.cn";
 
 export async function POST() {
+  const auth = await requireAdmin();
+  if ("error" in auth) return auth.error;
+
   const apiKey = process.env.SEEDANCE_API_KEY;
 
   if (!apiKey) {
@@ -23,14 +28,14 @@ export async function POST() {
     );
   }
 
-  const response = await fetch(`${BASE_URL}/ai-open-platform-api/v1/user/balance`, {
+  const response = await fetchWithTimeout(`${BASE_URL}/ai-open-platform-api/v1/user/balance`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ApiKey: apiKey
     },
     body: JSON.stringify({})
-  });
+  }, 30000);
 
   const result = await response.json() as SeedanceResponse<BalanceData>;
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ProjectListSection } from "./components/ProjectListSection";
 import { ProjectOverviewSection } from "./components/ProjectOverviewSection";
 import { Sidebar } from "./components/Sidebar";
@@ -19,6 +19,7 @@ type AuthUser = {
   language?: string;
 };
 type AuthUsers = Record<string, AuthUser>;
+type WorkspaceRecord = { projectId: number; state: Partial<AppState>; updatedAt?: string };
 
 const STORAGE_KEY = "manjing-video-mvp";
 const AUTH_STORAGE_KEY = "manjing-video-auth";
@@ -122,7 +123,7 @@ function mergeMaterials(current: MaterialAsset[], incoming: MaterialAsset[]) {
   });
 }
 
-function projectStatesFromWorkspaces(workspaces: { projectId: number; state: Partial<AppState> }[]) {
+function projectStatesFromWorkspaces(workspaces: WorkspaceRecord[]) {
   return Object.fromEntries(workspaces.map(item => {
     const normalizedState = normalizeAppState(item.state);
     const projectId = safeProjectId(normalizedState.project.id || item.projectId);
@@ -254,6 +255,7 @@ export default function Home() {
   const [projectStates, setProjectStates] = useState<ProjectStates>(defaultProjectStates);
   const [projects, setProjects] = useState<Project[]>(defaultProjects);
   const [currentProjectId, setCurrentProjectId] = useState(seedState.project.id);
+  const workspaceUpdatedAtRef = useRef<Record<number, string>>({});
   const [storageReady, setStorageReady] = useState(false);
   const [activeSection, setActiveSection] = useState<WorkspaceSection>("overview");
   const [projectModalOpen, setProjectModalOpen] = useState(false);
@@ -435,11 +437,15 @@ export default function Home() {
         const result = await readApiJson(response, "加载项目工作区失败");
         if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "加载项目工作区失败");
         if (cancelled) return;
-        const workspaces = result.data as { projectId: number; state: Partial<AppState> }[];
+        const workspaces = result.data as WorkspaceRecord[];
         if (!workspaces.length) {
           setWorkspaceSyncReady(true);
           return;
         }
+        workspaceUpdatedAtRef.current = {
+          ...workspaceUpdatedAtRef.current,
+          ...Object.fromEntries(workspaces.filter(item => item.updatedAt).map(item => [safeProjectId(item.projectId), item.updatedAt as string]))
+        };
         const serverProjectStates = projectStatesFromWorkspaces(workspaces);
         const serverProjects = Object.values(serverProjectStates).map(item => item.project);
         setProjectStates(prev => ({ ...prev, ...serverProjectStates }));
@@ -572,10 +578,11 @@ export default function Home() {
         const response = await fetch("/api/workspaces", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ projectId: currentProjectId, name: state.project.name, state })
+          body: JSON.stringify({ projectId: currentProjectId, name: state.project.name, state, lastUpdatedAt: workspaceUpdatedAtRef.current[currentProjectId] })
         });
         const result = await readApiJson(response, "保存项目工作区失败");
         if (!response.ok || result.code !== 0) throw new Error(result.message || "保存项目工作区失败");
+        if (result.data?.updatedAt) workspaceUpdatedAtRef.current[currentProjectId] = result.data.updatedAt;
         setWorkspaceSyncMessage("项目工作区已同步。");
       } catch (error) {
         setWorkspaceSyncMessage(error instanceof Error ? error.message : "项目工作区同步失败。");
@@ -690,10 +697,11 @@ export default function Home() {
     const response = await fetch("/api/workspaces", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ projectId: nextState.project.id, name: nextState.project.name, state: nextState })
+      body: JSON.stringify({ projectId: nextState.project.id, name: nextState.project.name, state: nextState, lastUpdatedAt: workspaceUpdatedAtRef.current[nextState.project.id] })
     });
     const result = await readApiJson(response, "保存项目工作区失败");
     if (!response.ok || result.code !== 0) throw new Error(result.message || "保存项目工作区失败");
+    if (result.data?.updatedAt) workspaceUpdatedAtRef.current[nextState.project.id] = result.data.updatedAt;
   }
 
   function createBlankProject(name: string, type: string): AppState {
@@ -753,6 +761,7 @@ export default function Home() {
     setGeneratedImages([]);
     setDeleteProjectTarget(null);
     setDeleteProjectName("");
+    delete workspaceUpdatedAtRef.current[deleteProjectTarget.id];
     persistWorkspace(nextState, nextProjectStates, nextProjects, nextCurrentProject.id);
     if (currentUser) {
       fetch(`/api/workspaces?projectId=${deleteProjectTarget.id}`, { method: "DELETE" })
@@ -1280,20 +1289,20 @@ export default function Home() {
 
   async function deleteMaterial(materialId: number) {
     const material = state.materials.find(item => item.id === materialId);
-    setSelectedMaterialIds(prev => prev.filter(id => id !== materialId));
-    setState(prev => ({ ...prev, materials: prev.materials.filter(material => material.id !== materialId) }));
-    if (material?.scope === "team") setServerTeamMaterials(prev => prev.filter(item => item.id !== material.id));
+    if (!material) return;
     if (material?.dbId) {
       try {
         const response = await fetch(`/api/materials?id=${material.dbId}`, { method: "DELETE" });
         const result = await readApiJson(response, "删除素材失败");
         if (!response.ok || result.code !== 0) throw new Error(result.message || "删除素材失败");
-        setMaterialMessage("素材记录已删除，并已从 @ 引用中移除。");
       } catch (error) {
-        setMaterialMessage(error instanceof Error ? `本地已移除，数据库删除失败：${error.message}` : "本地已移除，数据库删除失败。");
+        setMaterialMessage(error instanceof Error ? error.message : "删除素材失败。");
+        return;
       }
-      return;
     }
+    setSelectedMaterialIds(prev => prev.filter(id => id !== materialId));
+    setState(prev => ({ ...prev, materials: prev.materials.filter(material => material.id !== materialId) }));
+    if (material.scope === "team") setServerTeamMaterials(prev => prev.filter(item => item.id !== material.id));
     setMaterialMessage("素材已删除，并已从 @ 引用中移除。");
   }
 
@@ -1411,22 +1420,28 @@ export default function Home() {
       const resolvedApiProfile = result.data.api_profile as ApiProfile | undefined;
       const selectedLizhenNames = lizhenAssets.filter(item => selectedLizhenAssetIds.includes(item.id)).map(item => item.asset_name).join("、");
       setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, provider: "视频生成", providerTaskId, apiProfile: resolvedApiProfile, result: `任务已提交：${providerTaskId}${selectedLizhenNames ? `｜参考素材：${selectedLizhenNames}` : ""}` } : item) }));
-      pollGenerationStatus(shotId, localTaskId, providerTaskId, resolvedApiProfile?.id, undefined);
+      pollGenerationStatus(shotId, localTaskId, providerTaskId, resolvedApiProfile?.id);
     } catch (error) {
       markGenerationFailed(shotId, localTaskId, error instanceof Error ? error.message : "创建视频任务失败");
     }
   }
 
-  function pollGenerationStatus(shotId: number, localTaskId: string, providerTaskId: string, profileId?: string, apiProfile?: ApiProfile) {
+  function pollGenerationStatus(shotId: number, localTaskId: string, providerTaskId: string, profileId?: string, attempt = 0, failedAttempts = 0, startedAt = Date.now()) {
     window.setTimeout(async () => {
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs > 30 * 60 * 1000 || attempt >= 360 || failedAttempts >= 12) {
+        markGenerationFailed(shotId, localTaskId, "状态同步已超过安全重试上限，请稍后手动同步后台状态。");
+        return;
+      }
+
       try {
-        const response = await fetch("/api/video-tasks/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task_id: providerTaskId, profile_id: profileId, api_profile: apiProfile }) });
+        const response = await fetch("/api/video-tasks/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task_id: providerTaskId, profile_id: profileId }) });
         const result = await readApiJson(response, "查询视频任务失败");
         if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "查询视频任务失败");
         const data = result.data as { status: string; video_url?: string; duration?: number; error?: string };
         if (["pending", "submitted", "queued", "running", "processing"].includes(data.status)) {
           setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, status: "running", result: `生成中：${data.status}｜任务ID：${providerTaskId}` } : item), shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "running" } : item) }));
-          pollGenerationStatus(shotId, localTaskId, providerTaskId, profileId, apiProfile);
+          pollGenerationStatus(shotId, localTaskId, providerTaskId, profileId, attempt + 1, 0, startedAt);
           return;
         }
         if (data.status === "succeeded" && data.video_url) {
@@ -1434,7 +1449,7 @@ export default function Home() {
         }
         if (data.status === "succeeded" && !data.video_url) {
           setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, result: "生成已完成，正在等待视频地址同步" } : item) }));
-          pollGenerationStatus(shotId, localTaskId, providerTaskId, profileId, apiProfile);
+          pollGenerationStatus(shotId, localTaskId, providerTaskId, profileId, attempt + 1, 0, startedAt);
           return;
         }
         if (["failed", "error", "cancelled", "canceled"].includes(data.status)) {
@@ -1442,10 +1457,10 @@ export default function Home() {
           return;
         }
         setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, result: `等待上游同步：${data.status || "unknown"}` } : item) }));
-        pollGenerationStatus(shotId, localTaskId, providerTaskId, profileId, apiProfile);
+        pollGenerationStatus(shotId, localTaskId, providerTaskId, profileId, attempt + 1, 0, startedAt);
       } catch (error) {
         setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, result: error instanceof Error ? `状态查询暂未成功，继续重试：${error.message}` : "状态查询暂未成功，继续重试" } : item) }));
-        pollGenerationStatus(shotId, localTaskId, providerTaskId, profileId, apiProfile);
+        pollGenerationStatus(shotId, localTaskId, providerTaskId, profileId, attempt + 1, failedAttempts + 1, startedAt);
       }
     }, 5000);
   }

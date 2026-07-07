@@ -2,9 +2,13 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getDefaultTenant, publicUserFromMembership, setAuthSession } from "@/lib/auth";
 import { verifyPassword } from "@/lib/password";
+import { rateLimit } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
   try {
+    const limited = rateLimit(request, { keyPrefix: "auth:login", limit: 10, windowMs: 60 * 1000 });
+    if (limited) return limited;
+
     const body = await request.json();
     const account = String(body.account || "").trim();
     const password = String(body.password || "");

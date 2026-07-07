@@ -1,4 +1,7 @@
 import { NextResponse } from "next/server";
+import { getCurrentMembership } from "@/lib/auth";
+import { fetchWithTimeout } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
 import { readServerApiProfiles } from "../../api-profiles/store";
 
 type ApiProfile = { id?: string; name?: string; baseUrl?: string; apiKey?: string; model?: string };
@@ -6,7 +9,6 @@ type ApiProfile = { id?: string; name?: string; baseUrl?: string; apiKey?: strin
 type StatusPayload = {
   task_id?: string;
   profile_id?: string;
-  api_profile?: ApiProfile;
 };
 
 type FastGateStatusResponse = {
@@ -94,11 +96,16 @@ function extractError(result: FastGateStatusResponse) {
 }
 
 export async function POST(request: Request) {
+  const membership = await getCurrentMembership();
+  if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
+  const limited = rateLimit(request, { keyPrefix: `video:status:${membership.userId}`, limit: 240, windowMs: 60 * 1000 });
+  if (limited) return limited;
+
   const body = await request.json() as StatusPayload;
   const profiles = body.profile_id ? await readServerApiProfiles() : [];
   const serverProfile = body.profile_id ? profiles.find(profile => profile.id === body.profile_id) : undefined;
   if (body.profile_id && !serverProfile) return NextResponse.json({ code: 404, message: "当前选中的 API Profile 不存在，请重新选择后再同步。" }, { status: 404 });
-  const { apiKey, baseUrl } = resolveApiProfile(serverProfile || body.api_profile);
+  const { apiKey, baseUrl } = resolveApiProfile(serverProfile);
 
   if (!apiKey) {
     return NextResponse.json(
@@ -129,13 +136,13 @@ export async function POST(request: Request) {
   let response: Response | null = null;
   let text = "";
   for (const endpoint of endpoints) {
-    response = await fetch(endpoint, {
+    response = await fetchWithTimeout(endpoint, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         Accept: "application/json"
       }
-    });
+    }, 30000);
     text = await response.text();
     if (response.ok || response.status !== 404) break;
   }

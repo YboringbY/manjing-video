@@ -2,6 +2,9 @@ import { randomUUID } from "crypto";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import { NextResponse } from "next/server";
+import { getCurrentMembership } from "@/lib/auth";
+import { fetchWithTimeout, readLimitedResponseBuffer } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
 import { resolveModelRoute } from "../../api-profiles/store";
 
 type ImageGeneratePayload = {
@@ -26,6 +29,8 @@ type ProviderResponse = {
 
 const DEFAULT_BASE_URL = process.env.IMAGE_API_BASE_URL || "https://api.openai.com";
 const DEFAULT_MODEL = process.env.IMAGE_MODEL || "gpt-image-1";
+const MAX_IMAGE_PROMPT_LENGTH = 6000;
+const MAX_REMOTE_IMAGE_BYTES = 25 * 1024 * 1024;
 const PUBLIC_DIR = path.join(process.cwd(), "public");
 const DEFAULT_UPLOAD_ROOT = path.join(PUBLIC_DIR, "uploads");
 const IMAGE_EXTENSION_BY_TYPE: Record<string, string> = {
@@ -77,20 +82,30 @@ async function saveImageBuffer(buffer: Buffer, projectId: string, extension: str
 }
 
 async function saveRemoteImage(url: string, projectId: string) {
-  const response = await fetch(url);
+  const response = await fetchWithTimeout(url, {}, 60000);
   if (!response.ok) throw new Error("下载生成图片失败");
   const contentType = response.headers.get("content-type") || "image/png";
-  const extension = IMAGE_EXTENSION_BY_TYPE[contentType.split(";")[0]] || ".png";
-  return saveImageBuffer(Buffer.from(await response.arrayBuffer()), projectId, extension);
+  const mimeType = contentType.split(";")[0];
+  if (!mimeType.startsWith("image/")) throw new Error("生成图片地址返回的不是图片文件");
+  const extension = IMAGE_EXTENSION_BY_TYPE[mimeType] || ".png";
+  return saveImageBuffer(await readLimitedResponseBuffer(response, MAX_REMOTE_IMAGE_BYTES), projectId, extension);
 }
 
 export async function POST(request: Request) {
+  const membership = await getCurrentMembership();
+  if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
+  const limited = rateLimit(request, { keyPrefix: `images:generate:${membership.userId}`, limit: 120, windowMs: 10 * 60 * 1000 });
+  if (limited) return limited;
+
   const body = await request.json() as ImageGeneratePayload;
   const prompt = body.prompt?.trim();
   const projectId = String(body.projectId || "default").replace(/[^a-zA-Z0-9_-]/g, "-");
 
   if (!prompt) {
     return NextResponse.json({ code: 400, message: "请先填写生图提示词。" }, { status: 400 });
+  }
+  if (prompt.length > MAX_IMAGE_PROMPT_LENGTH) {
+    return NextResponse.json({ code: 400, message: `生图提示词最多 ${MAX_IMAGE_PROMPT_LENGTH} 字，请精简后再生成。` }, { status: 400 });
   }
 
   const route = await resolveModelRoute("image", body.model);
@@ -107,7 +122,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ code: 500, message: "缺少图片生成访问凭证，请先在模型渠道中配置图片模型。" }, { status: 500 });
   }
 
-  const response = await fetch(appendPath(baseUrl, "/v1/images/generations"), {
+  const response = await fetchWithTimeout(appendPath(baseUrl, "/v1/images/generations"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -120,7 +135,7 @@ export async function POST(request: Request) {
       n: Math.max(1, Math.min(10, Number(body.n || 1))),
       response_format: "url"
     })
-  });
+  }, 180000);
 
   const text = await response.text();
   let result: ProviderResponse = {};

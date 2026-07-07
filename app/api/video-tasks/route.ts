@@ -1,4 +1,7 @@
 import { NextResponse } from "next/server";
+import { getCurrentMembership } from "@/lib/auth";
+import { fetchWithTimeout } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
 import { resolveModelRoute, toPublicProfile } from "../api-profiles/store";
 
 type MediaInput = {
@@ -10,7 +13,6 @@ type ApiProfile = { id?: string; name?: string; baseUrl?: string; apiKey?: strin
 
 type GenerateVideoPayload = {
   profile_id?: string;
-  api_profile?: ApiProfile;
   model_id?: string;
   shot?: {
     id?: number;
@@ -61,6 +63,8 @@ type FastGateListResponse = {
 
 const BASE_URL = process.env.SEEDANCE_BASE_URL || "https://api.aifastgate.com";
 const MODEL = process.env.SEEDANCE_MODEL || "doubao-seedance-2.0-fast";
+const MAX_VIDEO_PROMPT_LENGTH = 8000;
+const MAX_MEDIA_URL_LENGTH = 2048;
 
 function normalizeBaseUrl(value?: string) {
   return (value || BASE_URL).trim().replace(/\/$/, "");
@@ -91,12 +95,6 @@ function resolveApiProfile(profile?: ApiProfile) {
   };
 }
 
-function parseProfileParam(request: Request) {
-  const profile = new URL(request.url).searchParams.get("profile");
-  if (!profile) return undefined;
-  try { return JSON.parse(profile) as ApiProfile; } catch { return undefined; }
-}
-
 function normalizeRatio(value?: string) {
   if (!value) return "9:16";
   return value.split(" ")[0];
@@ -124,6 +122,16 @@ function normalizeMediaUrls(items: MediaInput[] | undefined, limit: number) {
   return (items || []).map(item => item.url.trim()).filter(Boolean).slice(0, limit);
 }
 
+function validateMediaUrl(url: string) {
+  if (url.length > MAX_MEDIA_URL_LENGTH) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 function extractTaskId(result: FastGateTaskResponse) {
   return result.task_id || result.data?.task_id || result.id || result.data?.id;
 }
@@ -134,7 +142,11 @@ function extractError(result: FastGateTaskResponse) {
 }
 
 export async function GET(request: Request) {
-  const { apiKey, baseUrl } = resolveApiProfile(parseProfileParam(request));
+  const membership = await getCurrentMembership();
+  if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
+
+  const route = await resolveModelRoute("video");
+  const { apiKey, baseUrl } = resolveApiProfile(route?.profile);
 
   if (!apiKey) {
     return NextResponse.json(
@@ -144,12 +156,12 @@ export async function GET(request: Request) {
   }
 
   const listEndpoint = baseUrl.includes("/api/v3") ? `${baseUrl}/contents/generations/tasks` : isZJProvider(baseUrl) ? appendPath(baseUrl, "/v1/videos/generations") : `${baseUrl}/v1/video/generations`;
-  const response = await fetch(listEndpoint, {
+  const response = await fetchWithTimeout(listEndpoint, {
     method: "GET",
     headers: {
       Authorization: `Bearer ${apiKey}`
     }
-  });
+  }, 30000);
 
   const text = await response.text();
   const result = text ? JSON.parse(text) as FastGateListResponse : {};
@@ -180,12 +192,17 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const membership = await getCurrentMembership();
+  if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
+  const limited = rateLimit(request, { keyPrefix: `video:create:${membership.userId}`, limit: 90, windowMs: 10 * 60 * 1000 });
+  if (limited) return limited;
+
   const body = await request.json() as GenerateVideoPayload;
   const route = await resolveModelRoute("video", body.model_id);
   if (body.model_id && !route) {
     return NextResponse.json({ code: 400, message: "当前没有启用的渠道支持所选视频模型，请在模型渠道管理中补充后重试。" }, { status: 400 });
   }
-  const { apiKey, baseUrl, model, name } = resolveApiProfile(route?.profile || body.api_profile);
+  const { apiKey, baseUrl, model, name } = resolveApiProfile(route?.profile);
   const requestedModel = body.model_id?.trim() || route?.model || model;
 
   if (!apiKey) {
@@ -203,10 +220,16 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
+  if (shot.prompt.length > MAX_VIDEO_PROMPT_LENGTH) {
+    return NextResponse.json({ code: 400, message: `视频提示词最多 ${MAX_VIDEO_PROMPT_LENGTH} 字，请精简后再生成。` }, { status: 400 });
+  }
 
   const imageUrls = normalizeMediaUrls(body.images, 9);
   const videoUrls = normalizeMediaUrls(body.videos, 3);
   const audioUrls = normalizeMediaUrls(body.audios, 3);
+  if (![...imageUrls, ...videoUrls, ...audioUrls].every(validateMediaUrl)) {
+    return NextResponse.json({ code: 400, message: "参考素材必须是可访问的 http/https URL。" }, { status: 400 });
+  }
   const content = [
     { type: "text", text: shot.prompt },
     ...normalizeMedia(body.images, 9, "image"),
@@ -243,7 +266,7 @@ export async function POST(request: Request) {
 
   const endpoint = baseUrl.includes("/api/v3") ? `${baseUrl}/contents/generations/tasks` : isZJProvider(baseUrl) ? appendPath(baseUrl, "/v1/videos/generations") : `${baseUrl}/v1/video/generations`;
 
-  const response = await fetch(endpoint, {
+  const response = await fetchWithTimeout(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -251,7 +274,7 @@ export async function POST(request: Request) {
       Authorization: `Bearer ${apiKey}`
     },
     body: JSON.stringify(payload)
-  });
+  }, 60000);
 
   const text = await response.text();
   let result: FastGateTaskResponse = {};

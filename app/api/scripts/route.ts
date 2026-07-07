@@ -1,4 +1,7 @@
 import { NextResponse } from "next/server";
+import { getCurrentMembership } from "@/lib/auth";
+import { fetchWithTimeout } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
 import { resolveModelRoute } from "../api-profiles/store";
 
 type ScriptAction = "draft" | "optimize" | "outline";
@@ -11,6 +14,26 @@ type ScriptRequestBody = {
   script?: string;
   model?: string;
 };
+
+const MAX_THEME_LENGTH = 4000;
+const MAX_CHARACTERS_LENGTH = 4000;
+const MAX_SCRIPT_LENGTH = 30000;
+const MAX_EPISODE_COUNT = 300;
+
+function textLength(value?: string) {
+  return String(value || "").trim().length;
+}
+
+function validateScriptInput(body: ScriptRequestBody) {
+  if (textLength(body.theme) > MAX_THEME_LENGTH) return `故事想法最多 ${MAX_THEME_LENGTH} 字。`;
+  if (textLength(body.characters) > MAX_CHARACTERS_LENGTH) return `主要人物最多 ${MAX_CHARACTERS_LENGTH} 字。`;
+  if (textLength(body.script) > MAX_SCRIPT_LENGTH) return `剧本正文最多 ${MAX_SCRIPT_LENGTH} 字，请分段处理。`;
+  const episodeCount = body.episodeCount === "" || body.episodeCount === undefined ? 0 : Number(body.episodeCount);
+  if (!Number.isFinite(episodeCount) || episodeCount < 0 || episodeCount > MAX_EPISODE_COUNT) return `目标集数需在 0-${MAX_EPISODE_COUNT} 之间。`;
+  if (body.action === "draft" && !textLength(body.theme)) return "请先填写故事想法。";
+  if ((body.action === "optimize" || body.action === "outline") && !textLength(body.script) && !textLength(body.theme)) return "请先填写剧本正文或故事想法。";
+  return "";
+}
 
 function getEnvApiConfig() {
   return {
@@ -44,7 +67,7 @@ async function callOpenAICompatible(prompt: string, model: string, apiConfig = g
     throw new Error("缺少 SCRIPT_AI_API_KEY 或 SEEDANCE_API_KEY，请先在 .env.local 中配置。");
   }
 
-  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/chat/completions`, {
+  const response = await fetchWithTimeout(`${baseUrl.replace(/\/$/, "")}/v1/chat/completions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -59,7 +82,7 @@ async function callOpenAICompatible(prompt: string, model: string, apiConfig = g
       temperature: 0.8,
       max_tokens: 3500
     })
-  });
+  }, 120000);
 
   const text = await response.text();
   const result = text ? JSON.parse(text) : {};
@@ -74,11 +97,18 @@ async function callOpenAICompatible(prompt: string, model: string, apiConfig = g
 
 export async function POST(request: Request) {
   try {
+    const membership = await getCurrentMembership();
+    if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
+    const limited = rateLimit(request, { keyPrefix: `scripts:${membership.userId}`, limit: 20, windowMs: 10 * 60 * 1000 });
+    if (limited) return limited;
+
     const body = await request.json() as ScriptRequestBody;
     const action = body.action;
     if (!action || !["draft", "optimize", "outline"].includes(action)) {
       return NextResponse.json({ code: 400, message: "缺少或无效的 action。" }, { status: 400 });
     }
+    const inputError = validateScriptInput({ ...body, action });
+    if (inputError) return NextResponse.json({ code: 400, message: inputError }, { status: 400 });
 
     const envConfig = getEnvApiConfig();
     const route = await resolveModelRoute("text", body.model);

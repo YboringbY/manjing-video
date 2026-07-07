@@ -7,9 +7,14 @@ export const AUTH_COOKIE = "manjing_session";
 export const DEFAULT_TENANT_SLUG = "default";
 
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7;
+const DEFAULT_AUTH_SECRET = "local-dev-auth-secret-change-before-production";
 
 function sessionSecret() {
-  return process.env.AUTH_SECRET || "local-dev-auth-secret-change-before-production";
+  const secret = process.env.AUTH_SECRET || DEFAULT_AUTH_SECRET;
+  if (process.env.NODE_ENV === "production" && secret === DEFAULT_AUTH_SECRET) {
+    throw new Error("生产环境必须配置 AUTH_SECRET，不能使用默认开发密钥。");
+  }
+  return secret;
 }
 
 function shouldUseSecureCookie() {
@@ -23,7 +28,8 @@ function signPayload(payload: string) {
 }
 
 function encodeSession(value: { userId: string; tenantId: string }) {
-  const payload = Buffer.from(JSON.stringify({ ...value, nonce: randomBytes(8).toString("hex") })).toString("base64url");
+  const now = Math.floor(Date.now() / 1000);
+  const payload = Buffer.from(JSON.stringify({ ...value, iat: now, exp: now + SESSION_MAX_AGE, nonce: randomBytes(8).toString("hex") })).toString("base64url");
   return `${payload}.${signPayload(payload)}`;
 }
 
@@ -35,7 +41,8 @@ function decodeSession(value?: string) {
   const actual = Buffer.from(signature);
   if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null;
   try {
-    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { userId?: string; tenantId?: string };
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { userId?: string; tenantId?: string; exp?: number };
+    if (!parsed.exp || parsed.exp < Math.floor(Date.now() / 1000)) return null;
     return parsed.userId && parsed.tenantId ? { userId: parsed.userId, tenantId: parsed.tenantId } : null;
   } catch {
     return null;
