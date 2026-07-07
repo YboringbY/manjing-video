@@ -358,11 +358,15 @@ npx prisma migrate deploy
 - 已开始拆分过大的 `app/page.tsx`：新增 `app/components/Sidebar.tsx`、`ProjectListSection.tsx`、`ProjectOverviewSection.tsx` 和 `types.ts`。当前先拆展示组件，不迁移业务状态。
 - 素材元数据已开始接入 PostgreSQL：
   - 新增 `Material` 表和 `/api/materials`。
-  - 当前优先覆盖“本地上传素材”的记录持久化。
+  - 已覆盖“本地上传素材”的记录持久化。
   - 上传成功后会保存素材名称、类型、角色、URL、预览地址、存储路径、项目 ID、共享范围和创建人。
   - 登录后进入项目会从数据库读取当前项目素材并合并到本地状态。
   - 删除素材会删除数据库记录，但暂不删除物理文件，避免误删共享或后续需要追溯的文件。
-  - 生图结果、提示词素材、团队共享跨项目读取还需要后续继续完善。
+  - 生图工作台生成结果会在真实 URL 返回后写入素材库和 PostgreSQL，不再创建空占位素材。
+  - 生成提示词会保存为提示词素材，并写入 PostgreSQL。
+  - 团队共享素材已改为从 `/api/materials?scope=team` 读取，同租户/同团队可跨项目复用。
+  - 素材库已移除旧的外部共享素材刷新入口，当前只保留“当前项目 / 团队共享”的主流程。
+  - 项目素材搜索已从提示文案改为真实过滤。
 - 项目工作区已开始接入 PostgreSQL 快照同步：
   - 新增 `ProjectWorkspace` 表和 `/api/workspaces`。
   - 当前以“项目完整工作区快照”的方式保存 `project / shots / tasks / assets / materials`。
@@ -384,10 +388,10 @@ npx prisma migrate deploy
 
 - `app/page.tsx` 仍然偏大，已先拆出左侧导航、项目列表、项目概览；后续继续拆剧本、生图、视频、资产和生成记录，并逐步拆业务 hooks。
 - 项目、分镜、生成记录已开始通过 `ProjectWorkspace` 快照同步到数据库，但前端仍保留 localStorage 作为本地缓存；后续需要继续拆成规范化表。
-- 素材迁移已开始，但目前只有上传素材写入 PostgreSQL；项目、分镜、生成记录和生图/提示词素材仍需继续迁移。
+- 素材迁移已覆盖上传、生图结果、提示词和团队共享读取；项目、分镜、生成记录目前仍主要依赖 `ProjectWorkspace` 快照同步，后续需继续拆成规范化表。
 - 模型渠道配置目前用 `.data/api-profiles.json`，后续应迁移到数据库并按租户/平台权限隔离。
-- 上游生成视频没有自动转存到自有存储。
-- 生图工作台目前还不是完整真实生图链路。
+- 上游生成视频保持上游 URL，不做服务器端视频转存；当前要求是能预览和下载即可。
+- 生图工作台已接入生成结果入素材库，但仍需继续打磨参数、历史记录和失败重试体验。
 - 服务器部署现在已验证可用；涉及 Prisma migration 的部署必须显式加载服务器 `.env`。
 
 ## 建议下一步
@@ -396,8 +400,8 @@ npx prisma migrate deploy
 
 1. 在生产 IP 模式下再做一次完整用户路径：登录 -> 上传图片 -> 素材库显示 -> 视频工作台选为参考 -> 提交生成。
 2. 验证跨浏览器共享：浏览器 A 生成任务后，浏览器 B 用同一账号登录能看到项目、分镜、生成记录和已生成视频。
-3. 完善素材数据库化：生图结果、提示词素材、团队共享跨项目读取都写入/读取 PostgreSQL。
+3. 验证素材库数据库链路：上传图片 -> 刷新页面仍显示；生图结果 -> 当前项目素材库显示；提示词 -> 提示词分类显示；团队共享 -> 另一个项目可复用。
 4. 将 `ProjectWorkspace` 快照逐步拆成规范化的 `Project / Shot / VideoTask / VideoAsset` 表，降低多人同时编辑时的覆盖风险。
 5. 生成一条 ZJLJZN Seedance 任务，验证创建、同步状态、预览、下载完整闭环。
-6. 设计生成视频自有转存：上游视频完成后拉取到 `/data/manjing/generated` 或对象存储，并保存自有 URL。
+6. 继续拆分 `app/page.tsx`：优先拆素材库、生图工作台、视频工作台和生成记录。
 7. 备案完成后切回正式域名 HTTPS：`ASSET_PUBLIC_BASE_URL=https://console.manjingstudio.com`，恢复 Secure cookie。

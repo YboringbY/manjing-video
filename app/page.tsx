@@ -251,10 +251,10 @@ export default function Home() {
   const [isImageGenerating, setIsImageGenerating] = useState(false);
   const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("all");
   const [librarySearch, setLibrarySearch] = useState("");
+  const [projectMaterialSearch, setProjectMaterialSearch] = useState("");
   const [lizhenAssets, setLizhenAssets] = useState<VisualAsset[]>([]);
+  const [serverTeamMaterials, setServerTeamMaterials] = useState<MaterialAsset[]>([]);
   const [selectedLizhenAssetIds, setSelectedLizhenAssetIds] = useState<string[]>([]);
-  const [lizhenAssetMessage, setLizhenAssetMessage] = useState("");
-  const [isLoadingLizhenAssets, setIsLoadingLizhenAssets] = useState(false);
   const [workspaceSyncReady, setWorkspaceSyncReady] = useState(false);
   const [workspaceSyncMessage, setWorkspaceSyncMessage] = useState("");
   const [showFullScript, setShowFullScript] = useState(false);
@@ -434,6 +434,25 @@ export default function Home() {
   }, [authReady, currentUser, storageReady, currentProjectId]);
 
   useEffect(() => {
+    if (!authReady || !currentUser || !storageReady) return;
+    let cancelled = false;
+    async function loadTeamMaterials() {
+      try {
+        const response = await fetch("/api/materials?scope=team");
+        const result = await response.json();
+        if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "加载团队共享素材失败");
+        if (!cancelled) setServerTeamMaterials(result.data as MaterialAsset[]);
+      } catch {
+        if (!cancelled) setMaterialMessage(prev => prev || "团队共享素材暂时无法同步数据库记录。");
+      }
+    }
+    loadTeamMaterials();
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, currentUser, storageReady]);
+
+  useEffect(() => {
     const role = currentUser ? authUsers[currentUser]?.role || "user" : "user";
     if (!canManageMembers(role) && activeSection === "members") setActiveSection("project-home");
     if (!canManageApiProfiles(role) && activeSection === "channel-management") setActiveSection("project-home");
@@ -511,27 +530,6 @@ export default function Home() {
     }, 800);
     return () => window.clearTimeout(timer);
   }, [authReady, currentUser, storageReady, workspaceSyncReady, currentProjectId, state]);
-
-  useEffect(() => {
-    if (!storageReady) return;
-    loadLizhenAssets();
-  }, [storageReady]);
-
-  async function loadLizhenAssets() {
-    try {
-      setIsLoadingLizhenAssets(true);
-      setLizhenAssetMessage("正在同步共享素材...");
-      const response = await fetch(`/api/assets?group_id=${DEFAULT_ASSET_GROUP_ID}&group_name=user_216&page=1&page_size=50`);
-      const result = await response.json();
-      if (!response.ok || result.code !== 0) throw new Error(result.message || "加载共享素材失败");
-      setLizhenAssets(result.data || []);
-      setLizhenAssetMessage(`已同步 ${result.total || 0} 个共享素材`);
-    } catch (error) {
-      setLizhenAssetMessage(error instanceof Error ? error.message : "加载共享素材失败");
-    } finally {
-      setIsLoadingLizhenAssets(false);
-    }
-  }
 
   async function upsertMember() {
     if (!currentUser) return alert("请先登录管理员账号。");
@@ -1088,6 +1086,18 @@ export default function Home() {
     return DEFAULT_ASSET_GROUP_ID;
   }
 
+  async function saveMaterialRecord(materialDraft: MaterialAsset, projectId = currentProjectId) {
+    if (!currentUser) return materialDraft;
+    const response = await fetch("/api/materials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...materialDraft, projectId })
+    });
+    const result = await response.json();
+    if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "素材记录保存失败。");
+    return result.data as MaterialAsset;
+  }
+
   async function addMaterialFromUrl() {
     const reviewedAssetUrl = normalizeAssetUrl(reviewedAssetInput);
     if (!materialUrl.trim() && !reviewedAssetUrl) {
@@ -1170,18 +1180,9 @@ export default function Home() {
         sourceProjectName: state.project.name,
         createdBy: currentDisplayName
       };
-      let material = materialDraft;
-      if (currentUser) {
-        const saveResponse = await fetch("/api/materials", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...materialDraft, projectId: currentProjectId })
-        });
-        const saveResult = await saveResponse.json();
-        if (!saveResponse.ok || saveResult.code !== 0 || !saveResult.data) throw new Error(saveResult.message || "素材文件已上传，但素材记录保存失败。");
-        material = saveResult.data as MaterialAsset;
-      }
+      const material = await saveMaterialRecord(materialDraft);
       setState(prev => ({ ...prev, materials: [material, ...prev.materials] }));
+      if (material.scope === "team") setServerTeamMaterials(prev => mergeMaterials(prev, [material]));
       setActiveAssetTab(kind);
       setActiveAssetScope("project");
       setMaterialMessage(shareUploadToTeam ? "素材已上传到当前项目，并加入团队共享。" : "素材已上传到当前项目，可作为参考素材使用。");
@@ -1220,6 +1221,7 @@ export default function Home() {
     const material = state.materials.find(item => item.id === materialId);
     setSelectedMaterialIds(prev => prev.filter(id => id !== materialId));
     setState(prev => ({ ...prev, materials: prev.materials.filter(material => material.id !== materialId) }));
+    if (material?.scope === "team") setServerTeamMaterials(prev => prev.filter(item => item.id !== material.id));
     if (material?.dbId) {
       try {
         const response = await fetch(`/api/materials?id=${material.dbId}`, { method: "DELETE" });
@@ -1484,11 +1486,17 @@ export default function Home() {
     setState(prev => ({ ...prev, assets: prev.assets.filter(asset => asset.id !== assetId) }));
   }
 
-  const filteredMaterials = state.materials.filter(material => activeAssetTab === "sd2" ? material.kind === "sd2" : material.kind === activeAssetTab);
+  const filteredMaterials = state.materials.filter(material => {
+    const typeMatched = activeAssetTab === "sd2" ? material.kind === "sd2" : material.kind === activeAssetTab;
+    const keyword = projectMaterialSearch.trim().toLowerCase();
+    const keywordMatched = !keyword || `${material.name} ${material.sourceProjectName || ""} ${material.createdBy || ""}`.toLowerCase().includes(keyword);
+    return typeMatched && keywordMatched;
+  });
   const activeAssetTabLabel = activeAssetTab === "image" ? "图片" : activeAssetTab === "video" ? "视频" : activeAssetTab === "audio" ? "音频" : "提示词";
   const activeUploadAccept = activeAssetTab === "image" ? "image/*" : activeAssetTab === "video" ? "video/*" : "audio/*";
   const activeRoleOptions = activeAssetTab === "image" ? [["reference_image", "参考图"], ["first_frame", "首帧图"], ["last_frame", "尾帧图"]] : activeAssetTab === "video" ? [["reference_video", "参考视频"]] : [["reference_audio", "参考音频"]];
-  const teamSharedMaterials = Object.values({ ...projectStates, [currentProjectId]: state }).flatMap(projectState => projectState.materials || []).filter((material, index, list) => material.scope === "team" && index === list.findIndex(item => item.id === material.id));
+  const localTeamSharedMaterials = Object.values({ ...projectStates, [currentProjectId]: state }).flatMap(projectState => projectState.materials || []).filter(material => material.scope === "team");
+  const teamSharedMaterials = mergeMaterials(localTeamSharedMaterials, serverTeamMaterials);
   const hiddenAssetCount = Math.max(filteredMaterials.length - 5, 0);
   const visibleAssets = showAllAssets ? filteredMaterials : filteredMaterials.slice(0, 5);
   const hiddenImageResultCount = Math.max(generatedImages.length - 5, 0);
@@ -1512,13 +1520,6 @@ export default function Home() {
     const task = state.tasks.find(item => item.shotId === shotId && item.providerTaskId);
     return { asset, taskId: asset?.providerTaskId || task?.providerTaskId };
   }
-  const filteredLizhenAssets = lizhenAssets.filter(asset => {
-    const isPromptAsset = ["提示词", "文本", "Prompt", "prompt"].includes(asset.类型);
-    const typeMatched = libraryFilter === "all" || (libraryFilter === "image" && asset.类型 === "图片") || (libraryFilter === "video" && asset.类型 === "视频") || (libraryFilter === "audio" && asset.类型 === "音频") || (libraryFilter === "prompt" && isPromptAsset);
-    const keyword = librarySearch.trim().toLowerCase();
-    const keywordMatched = !keyword || `${asset.asset_name} ${asset.asset_url} ${asset.类型} ${asset.资产状态}`.toLowerCase().includes(keyword);
-    return typeMatched && keywordMatched;
-  });
   const filteredTeamSharedMaterials = teamSharedMaterials.filter(material => {
     const typeMatched = libraryFilter === "all" || (libraryFilter === "image" && material.kind === "image") || (libraryFilter === "video" && material.kind === "video") || (libraryFilter === "audio" && material.kind === "audio") || (libraryFilter === "prompt" && material.kind === "sd2");
     const keyword = librarySearch.trim().toLowerCase();
@@ -1526,9 +1527,7 @@ export default function Home() {
     return typeMatched && keywordMatched;
   });
   const visibleTeamSharedMaterials = showAllLizhenAssets ? filteredTeamSharedMaterials : filteredTeamSharedMaterials.slice(0, 5);
-  const remainingSharedAssetSlots = showAllLizhenAssets ? filteredLizhenAssets.length : Math.max(0, 5 - visibleTeamSharedMaterials.length);
-  const visibleLizhenAssets = showAllLizhenAssets ? filteredLizhenAssets : filteredLizhenAssets.slice(0, remainingSharedAssetSlots);
-  const hiddenLizhenAssetCount = Math.max(filteredTeamSharedMaterials.length + filteredLizhenAssets.length - 5, 0);
+  const hiddenLizhenAssetCount = Math.max(filteredTeamSharedMaterials.length - 5, 0);
   const currentUserRecord = currentUser ? authUsers[currentUser] : null;
   const currentUserRole = currentUserRecord?.role || "user";
   const currentUserCanManageMembers = canManageMembers(currentUserRole);
@@ -1566,15 +1565,33 @@ export default function Home() {
     setPromptModalOpen(true);
   }
 
-  function saveGeneratedPrompt() {
+  async function saveGeneratedPrompt() {
     const text = promptDraft.trim();
     if (!text) return;
-    setShotPrompt(text);
-    const material: MaterialAsset = { id: Date.now(), name: "生成提示词", url: text, kind: "sd2", role: "reference_image", source: "prompt", status: "ready" };
-    setState(prev => ({ ...prev, materials: [material, ...prev.materials] }));
-    setActiveAssetTab("sd2");
-    setPromptModalOpen(false);
-    setMaterialMessage("提示词已保存到素材库。提示词会用于分镜内容，不作为媒体素材提交。");
+    const materialDraft: MaterialAsset = {
+      id: Date.now(),
+      name: "生成提示词",
+      url: text,
+      kind: "sd2",
+      role: "reference_image",
+      source: "prompt",
+      status: "ready",
+      scope: "project",
+      prompt: text,
+      sourceProjectId: currentProjectId,
+      sourceProjectName: state.project.name,
+      createdBy: currentDisplayName
+    };
+    try {
+      const material = await saveMaterialRecord(materialDraft);
+      setShotPrompt(text);
+      setState(prev => ({ ...prev, materials: [material, ...prev.materials] }));
+      setActiveAssetTab("sd2");
+      setPromptModalOpen(false);
+      setMaterialMessage("提示词已保存到素材库。提示词会用于分镜内容，不作为媒体素材提交。");
+    } catch (error) {
+      setMaterialMessage(error instanceof Error ? error.message : "提示词保存失败");
+    }
   }
 
   function insertMention(material: MaterialAsset) {
@@ -1659,13 +1676,18 @@ export default function Home() {
         storagePath: item.storagePath,
         source: "generated",
         status: "ready",
-        prompt: imageWorkbenchPrompt
+        scope: "project",
+        prompt: imageWorkbenchPrompt,
+        sourceProjectId: currentProjectId,
+        sourceProjectName: state.project.name,
+        createdBy: currentDisplayName
       }));
-      setGeneratedImages(images);
-      setState(prev => ({ ...prev, materials: [...images, ...prev.materials] }));
+      const savedImages = await Promise.all(images.map(image => saveMaterialRecord(image)));
+      setGeneratedImages(savedImages);
+      setState(prev => ({ ...prev, materials: [...savedImages, ...prev.materials] }));
       setActiveAssetTab("image");
       setActiveAssetScope("project");
-      setMaterialMessage(`已生成 ${images.length} 张图片，并保存到当前项目素材库。`);
+      setMaterialMessage(`已生成 ${savedImages.length} 张图片，并保存到当前项目素材库。`);
     } catch (error) {
       setGeneratedImages([]);
       setMaterialMessage(error instanceof Error ? error.message : "图片生成失败");
@@ -1914,12 +1936,11 @@ export default function Home() {
           {activeAssetScope === "project" && <div className="asset-filterbar">
             {activeAssetTab === "sd2" && <button className="btn-ghost btn-small" onClick={openPromptDialog}>生成提示词</button>}
             {activeAssetTab === "image" && <button className="btn-ghost btn-small" onClick={() => setActiveSection("image-workbench")}>去生图工作台</button>}
-            <input placeholder="搜索素材名称..." onChange={event => setMaterialMessage(event.target.value ? `正在搜索：${event.target.value}` : "")} />
+            <input value={projectMaterialSearch} placeholder="搜索素材名称..." onChange={event => setProjectMaterialSearch(event.target.value)} />
             <span className="muted" style={{ marginLeft: "auto" }}>排序</span>
             <select onChange={event => alert(`排序方式：${event.target.value}`)}><option>类型</option><option>名称</option><option>创建时间</option></select>
           </div>}
           {activeAssetScope === "shared" && <div className="asset-filterbar">
-            <button className="btn-ghost btn-small" onClick={loadLizhenAssets}>{isLoadingLizhenAssets ? "同步中..." : "刷新共享素材"}</button>
             <div className="library-filter"><span>类型</span>{([["all", "全部"], ["image", "图片"], ["video", "视频"], ["audio", "音频"], ["prompt", "提示词"]] as [LibraryFilter, string][]).map(([key, label]) => <button key={key} className={libraryFilter === key ? "active" : ""} onClick={() => setLibraryFilter(key)}>{label}</button>)}</div>
             <input value={librarySearch} onChange={event => setLibrarySearch(event.target.value)} placeholder="搜索共享素材名称..." />
           </div>}
@@ -1954,18 +1975,7 @@ export default function Home() {
                 <div className="actions"><button className="btn-ghost btn-small" onClick={event => { event.stopPropagation(); toggleTeamSharedMaterial(material); }}>{selected ? "取消参考" : imported ? "选为参考" : "加入并参考"}</button></div>
               </div>
             ); })}
-            {visibleLizhenAssets.length ? visibleLizhenAssets.map(asset => (
-              <div className={`material-card ${selectedLizhenAssetIds.includes(asset.id) ? "selected" : ""}`} key={asset.id} onClick={() => toggleLizhenAsset(asset.id)}>
-                <div className="material-preview">
-                  {asset.类型 === "图片" && asset.原始URL ? <img src={asset.原始URL} alt={asset.asset_name} /> : asset.类型 === "视频" && asset.原始URL ? <video src={asset.原始URL} controls /> : <span>{asset.类型}</span>}
-                </div>
-                <strong>{asset.asset_name}</strong>
-                <p className="muted">{asset.类型} / 团队共享</p>
-                <span className="reviewed-badge">可生成</span>
-                <div className="actions"><button className="btn-ghost btn-small" onClick={event => { event.stopPropagation(); toggleLizhenAsset(asset.id); }}>{selectedLizhenAssetIds.includes(asset.id) ? "取消参考" : "选为参考"}</button></div>
-              </div>
-            )) : null}
-            {!visibleTeamSharedMaterials.length && !visibleLizhenAssets.length && <div className="empty">暂无共享素材。上传素材时勾选“同时加入团队共享”，角色、车辆、场景、道具、音乐等内容就可以在多个项目复用。</div>}
+            {!visibleTeamSharedMaterials.length && <div className="empty">暂无共享素材。上传素材时勾选“同时加入团队共享”，角色、车辆、场景、道具、音乐等内容就可以在多个项目复用。</div>}
           </div>}
           {activeAssetScope === "project" && hiddenAssetCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllAssets(prev => !prev)}>{showAllAssets ? "收起" : `展开全部 ${hiddenAssetCount}`}</button>}
           {activeAssetScope === "shared" && hiddenLizhenAssetCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllLizhenAssets(prev => !prev)}>{showAllLizhenAssets ? "收起" : `展开全部 ${hiddenLizhenAssetCount}`}</button>}
