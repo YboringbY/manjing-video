@@ -29,12 +29,14 @@ export type ModelCapability = "text" | "image" | "video";
 const PROFILE_DIR = path.join(process.cwd(), ".data");
 const PROFILE_FILE = path.join(PROFILE_DIR, "api-profiles.json");
 const ENCRYPTION_ALGORITHM = "aes-256-gcm";
-const ALLOWED_PROFILE_HOSTS = new Set(["api.aifastgate.com", "console.aifastgate.com", "gw.aifastgate.com", "43.159.135.17", "zjljzn.ltd", "api.openai.com"]);
+const ALLOWED_PROFILE_HOSTS = new Set(["api.aifastgate.com", "console.aifastgate.com", "gw.aifastgate.com", "gw.aifastnet.com", "43.159.135.17", "zjljzn.ltd", "api.openai.com"]);
 const ALLOWED_PROFILE_HOST_SUFFIXES = [".openai.com", ".volces.com", ".zjljzn.ltd"];
 const defaultProfiles: ServerApiProfile[] = [];
 
 export function normalizeBaseUrl(value: string) {
-  return value.trim().replace(/\/$/, "");
+  const trimmed = value.trim().replace(/\/$/, "");
+  if (!trimmed) return "";
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 }
 
 export function validateApiProfileBaseUrl(value: string) {
