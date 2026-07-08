@@ -231,9 +231,13 @@ export async function POST(request: Request) {
   if (![...imageUrls, ...videoUrls, ...audioUrls].every(validateMediaUrl)) {
     return NextResponse.json({ code: 400, message: "参考素材必须是可访问的 http/https URL。" }, { status: 400 });
   }
+  if (body.input_type === "first_last_frame" && imageUrls.length < 2) {
+    return NextResponse.json({ code: 400, message: "首尾帧生成需要同时提供首帧和尾帧图片。" }, { status: 400 });
+  }
+  const payloadImageUrls = body.input_type === "first_last_frame" ? imageUrls.slice(0, 2) : imageUrls;
   const content = [
     { type: "text", text: shot.prompt },
-    ...normalizeMedia(body.images, 9, "image"),
+    ...normalizeMedia(body.input_type === "first_last_frame" ? body.images?.slice(0, 2) : body.images, 9, "image"),
     ...normalizeMedia(body.videos, 3, "video"),
     ...normalizeMedia(body.audios, 3, "audio")
   ];
@@ -243,7 +247,7 @@ export async function POST(request: Request) {
     model: requestedModel,
     prompt: shot.prompt,
     input_type: inputType,
-    images: imageUrls,
+    images: payloadImageUrls,
     videos: videoUrls,
     audios: audioUrls,
     ratio: normalizeRatio(shot.ratio),

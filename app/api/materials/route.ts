@@ -138,6 +138,36 @@ export async function POST(request: Request) {
   return NextResponse.json({ code: 0, data: publicMaterial(material) });
 }
 
+export async function PATCH(request: Request) {
+  const membership = await getCurrentMembership();
+  if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
+
+  const body = await request.json();
+  const id = cleanNumber(body.id, 0);
+  const name = cleanText(body.name);
+  if (!id) return NextResponse.json({ code: 400, message: "缺少素材 ID。" }, { status: 400 });
+  if (!name) return NextResponse.json({ code: 400, message: "请输入素材名称。" }, { status: 400 });
+  if (name.length > 120) return NextResponse.json({ code: 400, message: "素材名称最多 120 个字符。" }, { status: 400 });
+
+  const material = await prisma.material.findFirst({ where: { id, tenantId: membership.tenantId } });
+  if (!material) return NextResponse.json({ code: 404, message: "素材不存在或已被删除。" }, { status: 404 });
+
+  const isAdmin = ["super_admin", "tenant_admin"].includes(membership.role);
+  const isOwner = material.createdById === membership.userId;
+  const isLegacyProjectMaterial = !material.createdById && material.scope === "project";
+  if (!isAdmin && !isOwner && !isLegacyProjectMaterial) {
+    await logAudit({ request, actor: membership, action: "material.rename", targetType: "material", targetId: material.id, result: "blocked", metadata: { oldName: material.name, nextName: name, scope: material.scope, createdById: material.createdById } });
+    return NextResponse.json({ code: 403, message: "只能重命名自己上传的素材，团队共享素材请联系管理员处理。" }, { status: 403 });
+  }
+
+  const updated = await prisma.material.update({
+    where: { id: material.id },
+    data: { name }
+  });
+  await logAudit({ request, actor: membership, action: "material.rename", targetType: "material", targetId: material.id, metadata: { oldName: material.name, nextName: name, kind: material.kind, scope: material.scope, projectId: material.projectId } });
+  return NextResponse.json({ code: 0, data: publicMaterial(updated) });
+}
+
 export async function DELETE(request: Request) {
   const membership = await getCurrentMembership();
   if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
