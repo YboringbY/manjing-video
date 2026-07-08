@@ -97,7 +97,7 @@ function normalizeAppState(value: Partial<AppState> | undefined, fallback: AppSt
     },
     shots: Array.isArray(value?.shots) ? value.shots : [],
     tasks: Array.isArray(value?.tasks) ? value.tasks : [],
-    assets: Array.isArray(value?.assets) ? value.assets : [],
+    assets: Array.isArray(value?.assets) ? value.assets.filter(asset => !asset.videoUrl || isHttpVideoUrl(asset.videoUrl)) : [],
     materials: Array.isArray(value?.materials) ? value.materials : [],
     assetGroupId: value?.assetGroupId
   };
@@ -766,7 +766,7 @@ export default function Home() {
     const failed = state.shots.filter(shot => shot.status === "failed").length;
     const percent = total ? Math.round((done / total) * 100) : 0;
     const totalDuration = state.shots.reduce((sum, shot) => sum + Number(shot.duration || 0), 0);
-    const completedAssets = state.assets.filter(asset => asset.videoUrl).length;
+    const completedAssets = state.assets.filter(asset => isHttpVideoUrl(asset.videoUrl)).length;
     const runningTasks = state.tasks.filter(task => task.status === "running" || task.status === "pending").length;
     const failedTasks = state.tasks.filter(task => task.status === "failed").length;
     return { total, done, failed, running, percent, totalDuration, completedAssets, runningTasks, failedTasks };
@@ -1700,7 +1700,7 @@ export default function Home() {
   }
 
   function markGenerationFailed(shotId: number, localTaskId: string, message: string) {
-    setState(prev => ({ ...prev, shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "failed" } : item), tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, status: "failed", result: message } : item) }));
+    setState(prev => ({ ...prev, shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "failed" } : item), tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, status: "failed", result: message } : item), assets: prev.assets.filter(asset => asset.shotId !== shotId) }));
   }
 
   async function refreshTaskStatus(task: VideoTask) {
@@ -1866,10 +1866,10 @@ export default function Home() {
   const hiddenShotCount = Math.max(state.shots.length - 5, 0);
   const hiddenTaskCount = Math.max(state.tasks.length - 5, 0);
   const sortedTasks = [...state.tasks].sort((a, b) => Number((b.id.match(/\d+/) || ["0"])[0]) - Number((a.id.match(/\d+/) || ["0"])[0]));
-  const sortedVideoAssets = [...state.assets].sort((a, b) => b.id - a.id);
+  const sortedVideoAssets = state.assets.filter(asset => isHttpVideoUrl(asset.videoUrl)).sort((a, b) => b.id - a.id);
   const visibleTasks = showAllTasks ? sortedTasks : sortedTasks.slice(0, 5);
   const visibleVideoAssets = showAllVideoAssets ? sortedVideoAssets : sortedVideoAssets.slice(0, 5);
-  const hiddenVideoAssetCount = Math.max(state.assets.length - 5, 0);
+  const hiddenVideoAssetCount = Math.max(sortedVideoAssets.length - 5, 0);
   const selectedProjectReferences = state.materials.filter(item => selectedMaterialIds.includes(item.id));
   const usableProjectReferences = selectedProjectReferences.filter(item => materialApiUrl(item));
   const localOnlyReferences = selectedProjectReferences.filter(item => !materialApiUrl(item));
@@ -1900,7 +1900,7 @@ export default function Home() {
     ...selectedExternalReferences.map(item => ({ id: `external-${item.id}`, name: item.asset_name, kind: item.类型, url: item.asset_url, previewUrl: "" }))
   ];
   function videoRecordForShot(shotId: number) {
-    const asset = state.assets.find(item => item.shotId === shotId && item.videoUrl);
+    const asset = state.assets.find(item => item.shotId === shotId && isHttpVideoUrl(item.videoUrl));
     const task = state.tasks.find(item => item.shotId === shotId && item.providerTaskId);
     return { asset, taskId: asset?.providerTaskId || task?.providerTaskId };
   }
@@ -2480,7 +2480,7 @@ export default function Home() {
                 <thead><tr><th>任务 ID</th><th>关联分镜</th><th>类型</th><th>进度</th><th>结果</th><th>操作</th></tr></thead>
                 <tbody>
                   {visibleTasks.length ? visibleTasks.map(task => {
-                    const taskAsset = state.assets.find(asset => asset.shotId === task.shotId && asset.videoUrl);
+                    const taskAsset = state.assets.find(asset => asset.shotId === task.shotId && isHttpVideoUrl(asset.videoUrl));
                     const taskVideoId = taskAsset?.providerTaskId || task.providerTaskId;
                     const canRegenerate = task.status !== "running";
                     return (
