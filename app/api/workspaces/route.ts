@@ -7,7 +7,9 @@ const MAX_DATABASE_INT = 2147483647;
 
 function cleanNumber(value: unknown, fallback = 0) {
   const number = Number(value);
-  return Number.isInteger(number) && number > 0 && number <= MAX_DATABASE_INT ? number : fallback;
+  if (Number.isInteger(number) && number > 0 && number <= MAX_DATABASE_INT) return number;
+  if (Number.isFinite(number) && number > MAX_DATABASE_INT) return 1000000000 + (Math.abs(Math.trunc(number)) % 1000000000);
+  return fallback;
 }
 
 function cleanText(value: unknown, fallback = "") {
@@ -49,7 +51,9 @@ export async function POST(request: Request) {
 
   const body = await request.json();
   const projectId = cleanNumber(body.projectId, 0);
-  const state = body.state;
+  const state = body.state && typeof body.state === "object"
+    ? { ...body.state, project: { ...body.state.project, id: projectId } }
+    : body.state;
   const name = cleanText(body.name || state?.project?.name, `项目 ${projectId}`);
   const lastUpdatedAt = cleanText(body.lastUpdatedAt);
 

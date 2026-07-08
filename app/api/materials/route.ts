@@ -22,7 +22,9 @@ function cleanOptionalText(value: unknown) {
 
 function cleanNumber(value: unknown, fallback = 0) {
   const number = Number(value);
-  return Number.isInteger(number) && number > 0 && number <= MAX_DATABASE_INT ? number : fallback;
+  if (Number.isInteger(number) && number > 0 && number <= MAX_DATABASE_INT) return number;
+  if (Number.isFinite(number) && number > MAX_DATABASE_INT) return 1000000000 + (Math.abs(Math.trunc(number)) % 1000000000);
+  return fallback;
 }
 
 function publicMaterial(material: {
