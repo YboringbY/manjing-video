@@ -39,6 +39,7 @@ type AuditLogEntry = {
   metadata?: Record<string, unknown> | null;
   createdAt: string;
 };
+type TaskRecordFilter = "all" | "running" | "done" | "failed";
 
 const STORAGE_KEY = "manjing-video-mvp";
 const AUTH_STORAGE_KEY = "manjing-video-auth";
@@ -381,10 +382,8 @@ export default function Home() {
   const [scriptOptimizationNote, setScriptOptimizationNote] = useState("");
   const [showAllAssets, setShowAllAssets] = useState(false);
   const [showAllImageResults, setShowAllImageResults] = useState(false);
-  const [showAllShots, setShowAllShots] = useState(false);
-  const [expandedShotContentIds, setExpandedShotContentIds] = useState<number[]>([]);
   const [showAllTasks, setShowAllTasks] = useState(false);
-  const [showAllVideoAssets, setShowAllVideoAssets] = useState(false);
+  const [taskRecordFilter, setTaskRecordFilter] = useState<TaskRecordFilter>("all");
   const [showAllLizhenAssets, setShowAllLizhenAssets] = useState(false);
   const [memberRoleDraft, setMemberRoleDraft] = useState<MemberRole>("user");
   const [memberAccountDraft, setMemberAccountDraft] = useState("");
@@ -761,7 +760,8 @@ export default function Home() {
 
   const stats = useMemo(() => {
     const total = state.shots.length;
-    const done = state.shots.filter(shot => shot.status === "done").length;
+    const completedShotIds = new Set(state.assets.filter(asset => isHttpVideoUrl(asset.videoUrl)).map(asset => asset.shotId));
+    const done = state.shots.filter(shot => completedShotIds.has(shot.id)).length;
     const running = state.shots.some(shot => shot.status === "running");
     const failed = state.shots.filter(shot => shot.status === "failed").length;
     const percent = total ? Math.round((done / total) * 100) : 0;
@@ -1862,14 +1862,22 @@ export default function Home() {
   const visibleAssets = showAllAssets ? filteredMaterials : filteredMaterials.slice(0, 5);
   const hiddenImageResultCount = Math.max(generatedImages.length - 5, 0);
   const visibleImageResults = showAllImageResults ? generatedImages : generatedImages.slice(0, 5);
-  const visibleShots = showAllShots ? state.shots : state.shots.slice(0, 5);
-  const hiddenShotCount = Math.max(state.shots.length - 5, 0);
-  const hiddenTaskCount = Math.max(state.tasks.length - 5, 0);
-  const sortedTasks = [...state.tasks].sort((a, b) => Number((b.id.match(/\d+/) || ["0"])[0]) - Number((a.id.match(/\d+/) || ["0"])[0]));
-  const sortedVideoAssets = state.assets.filter(asset => isHttpVideoUrl(asset.videoUrl)).sort((a, b) => b.id - a.id);
-  const visibleTasks = showAllTasks ? sortedTasks : sortedTasks.slice(0, 5);
-  const visibleVideoAssets = showAllVideoAssets ? sortedVideoAssets : sortedVideoAssets.slice(0, 5);
-  const hiddenVideoAssetCount = Math.max(sortedVideoAssets.length - 5, 0);
+  const sortedShots = [...state.shots].sort((a, b) => b.id - a.id);
+  const recentWorkbenchShots = sortedShots.slice(0, 3);
+  const sortedTasks = [...state.tasks];
+  const taskRecordTabs: Array<[TaskRecordFilter, string, number]> = [
+    ["all", "全部", sortedTasks.length],
+    ["running", "生成中", sortedTasks.filter(task => task.status === "running" || task.status === "pending").length],
+    ["done", "已完成", sortedTasks.filter(task => task.status === "done").length],
+    ["failed", "失败", sortedTasks.filter(task => task.status === "failed").length]
+  ];
+  const filteredTasks = sortedTasks.filter(task => {
+    if (taskRecordFilter === "all") return true;
+    if (taskRecordFilter === "running") return task.status === "running" || task.status === "pending";
+    return task.status === taskRecordFilter;
+  });
+  const hiddenTaskCount = Math.max(filteredTasks.length - 5, 0);
+  const visibleTasks = showAllTasks ? filteredTasks : filteredTasks.slice(0, 5);
   const selectedProjectReferences = state.materials.filter(item => selectedMaterialIds.includes(item.id));
   const usableProjectReferences = selectedProjectReferences.filter(item => materialApiUrl(item));
   const localOnlyReferences = selectedProjectReferences.filter(item => !materialApiUrl(item));
@@ -2365,9 +2373,24 @@ export default function Home() {
           </div>
 
           <div className="video-shot-list card">
-            <div className="card-title-row"><h2 style={{ marginTop: 0 }}>视频生成记录</h2><span className="muted">{state.shots.length} 条视频</span></div>
-            <div className="table-wrap"><table className="table"><thead><tr><th>镜头</th><th>画面内容</th><th>参数</th><th>状态</th><th>视频</th><th>操作</th></tr></thead><tbody>{visibleShots.length ? visibleShots.map((shot, index) => { const record = videoRecordForShot(shot.id); const expandedContent = expandedShotContentIds.includes(shot.id); const shouldCollapseContent = shot.prompt.length > 90; const displayPrompt = shouldCollapseContent && !expandedContent ? `${shot.prompt.slice(0, 90)}...` : shot.prompt; return <tr key={shot.id}><td>#{String(index + 1).padStart(2, "0")}</td><td><div className="shot-content-cell"><strong>{shot.title}</strong><span className="muted">{displayPrompt}</span>{shouldCollapseContent && <button className="text-toggle" onClick={() => setExpandedShotContentIds(prev => prev.includes(shot.id) ? prev.filter(id => id !== shot.id) : [...prev, shot.id])}>{expandedContent ? "收起" : "展开全部"}</button>}</div></td><td>{shot.ratio} / {shot.resolution || "720p"} / {shot.duration}s</td><td>{taskStatusTag(shot.status)}</td><td>{record.asset?.videoUrl ? <div className="record-video-box"><video src={proxiedVideoUrl(record.asset.videoUrl, false, record.taskId, activeApiProfile)} controls preload="metadata" /><div className="task-video-actions"><a href={proxiedVideoUrl(record.asset.videoUrl, false, record.taskId, activeApiProfile)} target="_blank" rel="noreferrer">预览</a><a href={proxiedVideoUrl(record.asset.videoUrl, true, record.taskId, activeApiProfile)}>下载</a></div></div> : <span className="muted">{shot.status === "done" ? "请同步本页任务状态" : "生成后可预览"}</span>}</td><td>{shot.status !== "running" && <button className="btn-primary btn-small" onClick={() => generateShotOrSplit(shot)}>{shot.status === "done" ? "重生成" : "生成"}</button>}<button className="btn-danger btn-small" onClick={() => deleteShot(shot.id)}>删除</button></td></tr>; }) : <tr><td colSpan={6}><div className="empty">暂无视频，输入提示词后点击“开始生成”。</div></td></tr>}</tbody></table></div>
-            {hiddenShotCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllShots(prev => !prev)}>{showAllShots ? "收起" : `展开全部 ${hiddenShotCount}`}</button>}
+            <div className="card-title-row"><div><h2 style={{ marginTop: 0 }}>最近提交</h2><p className="muted">这里只保留当前创作的最近状态；完整历史、预览、下载和重试统一在生成记录里处理。</p></div><button className="btn-primary btn-small" onClick={() => setActiveSection("tasks")}>查看生成记录</button></div>
+            {recentWorkbenchShots.length ? <div className="recent-shot-list">
+              {recentWorkbenchShots.map((shot, index) => {
+                const record = videoRecordForShot(shot.id);
+                const latestTask = state.tasks.find(task => task.shotId === shot.id);
+                return (
+                  <div className="recent-shot-item" key={shot.id}>
+                    <div><strong>{shot.title || `视频 ${index + 1}`}</strong><span>{shot.ratio} / {shot.resolution || "720p"} / {shot.duration}s</span></div>
+                    {taskStatusTag(shot.status)}
+                    <p className="muted">{latestTask?.result || (record.asset ? "已生成，可在生成记录中查看。" : "等待生成。")}</p>
+                    <div className="task-video-actions">
+                      {shot.status !== "running" && <button className="btn-ghost btn-small" onClick={() => generateShotOrSplit(shot)}>{record.asset ? "重新生成" : "生成"}</button>}
+                      {record.asset?.videoUrl && <button className="btn-ghost btn-small" onClick={() => setActiveSection("tasks")}>查看结果</button>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div> : <div className="empty">暂无提交。填写提示词并点击“开始生成”。</div>}
           </div>
         </section>
 
@@ -2472,12 +2495,17 @@ export default function Home() {
         </div>
 
         <div style={sectionStyle("tasks")}>
-          <div className="card-title-row"><div><h2 id="tasks">生成记录</h2><p className="muted">集中查看生成进度、任务结果和已完成视频。</p></div><button className="btn-primary btn-small" onClick={refreshAllTaskStatuses}>同步任务状态</button></div>
+          <div className="card-title-row"><div><h2 id="tasks">生成记录</h2><p className="muted">统一管理所有视频生成任务；最新任务始终在最前面，成功结果可直接预览和下载。</p></div><button className="btn-primary btn-small" onClick={refreshAllTaskStatuses}>同步任务状态</button></div>
           <section className="card">
-            <div className="task-head"><p className="muted">默认展示最近 5 个任务；完成后可直接预览、下载或用同一组参数重新生成。</p></div>
+            <div className="task-head">
+              <div className="record-filter-tabs">
+                {taskRecordTabs.map(([key, label, count]) => <button key={key} className={taskRecordFilter === key ? "active" : ""} onClick={() => { setTaskRecordFilter(key); setShowAllTasks(false); }}>{label}<span>{count}</span></button>)}
+              </div>
+              <p className="muted">默认展示最近 5 个任务；完成后可直接预览、下载或用同一组参数重新生成。</p>
+            </div>
             <div className="table-wrap">
               <table className="table">
-                <thead><tr><th>任务 ID</th><th>关联分镜</th><th>类型</th><th>进度</th><th>结果</th><th>操作</th></tr></thead>
+                <thead><tr><th>任务 ID</th><th>关联分镜</th><th>参数</th><th>进度</th><th>结果</th><th>操作</th></tr></thead>
                 <tbody>
                   {visibleTasks.length ? visibleTasks.map(task => {
                     const taskAsset = state.assets.find(asset => asset.shotId === task.shotId && isHttpVideoUrl(asset.videoUrl));
@@ -2494,7 +2522,7 @@ export default function Home() {
                         <td>{taskStatusTag(task.status)}</td>
                         <td>
                           {task.result}
-                          {taskAsset?.videoUrl && <div className="task-video-actions"><a href={proxiedVideoUrl(taskAsset.videoUrl, false, taskVideoId, activeApiProfile)} target="_blank" rel="noreferrer">预览视频</a><a href={proxiedVideoUrl(taskAsset.videoUrl, true, taskVideoId, activeApiProfile)}>下载</a></div>}
+                          {taskAsset?.videoUrl && <div className="task-result-video"><video src={proxiedVideoUrl(taskAsset.videoUrl, false, taskVideoId, activeApiProfile)} controls preload="metadata" /><div className="task-video-actions"><a href={proxiedVideoUrl(taskAsset.videoUrl, false, taskVideoId, activeApiProfile)} target="_blank" rel="noreferrer">新窗口打开</a><a href={proxiedVideoUrl(taskAsset.videoUrl, true, taskVideoId, activeApiProfile)}>下载视频</a></div></div>}
                         </td>
                         <td>
                           <div className="task-row-actions">
@@ -2505,16 +2533,11 @@ export default function Home() {
                         </td>
                       </tr>
                     );
-                  }) : <tr><td colSpan={6}><div className="empty">暂无生成记录。请先到视频工作台提交任务。</div></td></tr>}
+                  }) : <tr><td colSpan={6}><div className="empty">{taskRecordFilter === "all" ? "暂无生成记录。请先到视频工作台提交任务。" : "当前筛选下暂无生成记录。"}</div></td></tr>}
                 </tbody>
               </table>
             </div>
             {hiddenTaskCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllTasks(prev => !prev)}>{showAllTasks ? "收起" : `展开全部 ${hiddenTaskCount}`}</button>}
-          </section>
-          <section className="card generated-video-library">
-            <div className="card-title-row"><div><h2 style={{ marginTop: 0 }}>已完成视频</h2><p className="muted">成功生成的视频会出现在这里，可直接播放、打开或下载。</p></div></div>
-            {visibleVideoAssets.length ? <div className="video-preview-grid">{visibleVideoAssets.map(asset => <div className="video-preview-card" key={asset.id}>{asset.videoUrl && <video src={proxiedVideoUrl(asset.videoUrl, false, asset.providerTaskId, activeApiProfile)} controls preload="metadata" />}<strong>{asset.title}</strong><p className="muted">{asset.meta}</p><div className="task-video-actions">{asset.videoUrl && <a href={proxiedVideoUrl(asset.videoUrl, false, asset.providerTaskId, activeApiProfile)} target="_blank" rel="noreferrer">新窗口打开</a>}{asset.videoUrl && <a href={proxiedVideoUrl(asset.videoUrl, true, asset.providerTaskId, activeApiProfile)}>下载视频</a>}</div></div>)}</div> : <div className="empty">暂无可预览视频。请先点击“同步本页任务状态”，或等待生成任务完成。</div>}
-            {hiddenVideoAssetCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllVideoAssets(prev => !prev)}>{showAllVideoAssets ? "收起" : `展开全部 ${hiddenVideoAssetCount}`}</button>}
           </section>
         </div>
 
