@@ -56,7 +56,7 @@ npm run dev -- -p 5050
 - PostgreSQL 16
 - Prisma
 - localStorage 暂存项目工作区数据
-- 文件型 `.data/api-profiles.json` 暂存模型渠道配置
+- Prisma `ApiProfile` 表存储模型渠道配置，API Key 使用 AES-256-GCM 加密；旧 `.data/api-profiles.json` 仅作为兼容导入来源
 - 第三方视频生成：当前重点适配 `zjljzn.ltd` Seedance 中转
 
 关键文件：
@@ -353,7 +353,7 @@ npx prisma migrate deploy
   - 后端按 `能力类型 + 模型 ID` 查找所有启用渠道，并按手动优先级选择实际调用渠道。
   - 当前能力类别为 `text / image / video`，其中 `text` 是文字处理模型，可用于剧本生成、提示词生成、文本优化等。
   - 视频任务创建后会记录实际使用的渠道 ID，后续同步状态继续使用同一渠道查询，避免同模型不同渠道查不到任务。
-  - 当前仍使用 `.data/api-profiles.json` 存储配置，并兼容旧的 `scriptModels` 字段；新配置使用 `textModels`。
+  - 当前使用 Prisma `ApiProfile` 表存储配置，兼容旧 `.data/api-profiles.json` 自动导入和旧 `scriptModels` 字段；新配置使用 `textModels`。
 - 剧本工作台已重构为两段式：
   - `生成输入`：故事想法、主要人物、目标集数、文字处理模型，只用于生成初稿，不自动保存项目剧本。
   - `当前剧本正文`：AI 生成结果、文件导入、手动粘贴/编辑都会进入这里；点击“保存到项目”才写入当前项目。
@@ -474,7 +474,7 @@ npx prisma migrate deploy
 - `app/page.tsx` 仍然偏大，已先拆出左侧导航、项目列表、项目概览；后续继续拆剧本、生图、视频、资产和生成记录，并逐步拆业务 hooks。
 - 项目、分镜、生成记录已开始通过 `ProjectWorkspace` 快照同步到数据库，但前端仍保留 localStorage 作为本地缓存；后续需要继续拆成规范化表。
 - 素材迁移已覆盖上传、生图结果、提示词和团队共享读取；项目、分镜、生成记录目前仍主要依赖 `ProjectWorkspace` 快照同步，后续需继续拆成规范化表。
-- 模型渠道配置目前用 `.data/api-profiles.json`，后续应迁移到数据库并按租户/平台权限隔离。
+- 模型渠道配置已迁移到 Prisma `ApiProfile` 表；多租户开放前仍需进一步明确平台级/租户级渠道边界。
 - 上游生成视频保持上游 URL，不做服务器端视频转存；当前要求是能预览和下载即可。
 - 生图工作台已接入生成结果入素材库，但仍需继续打磨参数、历史记录和失败重试体验。
 - 服务器部署现在已验证可用；涉及 Prisma migration 的部署必须显式加载服务器 `.env`。
@@ -489,6 +489,15 @@ npx prisma migrate deploy
 - JSON 错误兜底已增强：
   - `fetchWithTimeout` 会把上游超时转换为明确中文错误。
   - 生图、视频创建、视频状态查询、视频文件代理等接口对上游失败/空响应/非 JSON 响应做 JSON 化返回，减少前端 `Unexpected end of JSON input`。
+- 2026-07-08 安全 review 后续修复：
+  - `.data/api-profiles.json` 写入时显式设置 `.data` 目录权限 `700`、配置文件权限 `600`，降低服务器本地进程直接读取渠道 API Key 的风险。
+  - 审计日志顶层 `actorAccount` 和 `targetId` 增加 200 字符截断，避免未登录失败登录路径写入超长账号造成日志膨胀。
+  - `/api/audit-logs` 增加管理员查询限流，保持和其他查库接口一致。
+  - 模型渠道配置已新增 Prisma `ApiProfile` 表，后续从 `.data/api-profiles.json` 自动导入到数据库；`.data` 文件只作为兼容导入来源。
+  - `ApiProfile.encryptedApiKey` 使用 AES-256-GCM 加密落库，加密密钥优先使用 `API_PROFILE_ENCRYPTION_KEY`，未配置时使用 `AUTH_SECRET` 派生；生产应显式配置独立密钥。
+  - 渠道 Base URL 保存和路由选择时加入允许域名校验，降低 SSRF/误配置风险。
+  - 更长期可继续评估云 KMS/Secrets Manager，替代应用本地持有长期加密主密钥。
+  - 审计日志留存/归档策略仍待设计，后续需要避免 `AuditLog` 表长期无限增长。
 
 ## 当前部署状态
 
@@ -512,8 +521,8 @@ npx prisma migrate deploy
 3. 跨浏览器共享复测：浏览器 A 新建/编辑项目并生成任务后，浏览器 B 用同一账号登录能看到项目、分镜、生成记录和已生成视频。
 4. 素材库数据库链路复测：上传图片 -> 刷新页面仍显示；生图结果 -> 当前项目素材库显示；提示词 -> 提示词分类显示；团队共享 -> 另一个项目可复用。
 5. 安全审计继续覆盖：把旧的 `/api/assets`、`/api/assets/groups`、`/api/user/balance`、`/api/projects`、`/api/shots` 等遗留/占位路由确认后删除或补鉴权。
-6. SSRF/渠道调用继续收紧：彻底拒绝客户端直接传 `api_profile.baseUrl/apiKey`，只允许 `profile_id` 命中服务端已保存渠道；供应商域名做 allowlist。
-7. 模型渠道配置迁移到数据库：从 `.data/api-profiles.json` 迁移到 Prisma，并明确平台级/租户级配置边界。
+6. 安全审计继续覆盖：把旧的 `/api/assets`、`/api/assets/groups`、`/api/user/balance`、`/api/projects`、`/api/shots` 等遗留/占位路由确认后删除或补鉴权。
+7. 渠道配置安全继续增强：生产显式配置 `API_PROFILE_ENCRYPTION_KEY`，并评估云 KMS/Secrets Manager；多租户开放前明确平台级/租户级渠道边界。
 8. 将 `ProjectWorkspace` 快照逐步拆成规范化的 `Project / Shot / VideoTask / VideoAsset` 表，降低多人同时编辑时的覆盖风险。
 9. 视频轮询优化：前端轮询增加生命周期清理、最大时长、最大失败次数和退避策略，避免长期标签页无限请求。
 10. 供应商适配抽象：把 ZJLJZN/Seedance 的 URL 拼接、状态解析、结果提取等逻辑抽成 `lib/providers/*`，减少多路由重复。
@@ -521,6 +530,7 @@ npx prisma migrate deploy
 12. 生图工作台继续打磨：参数、历史记录、失败重试、生成结果和素材库关系再整理。
 13. 备案完成后切回正式域名 HTTPS：`ASSET_PUBLIC_BASE_URL=https://console.manjingstudio.com`，恢复 Secure cookie。
 14. 配置 ESLint：当前 `npm run lint` 会进入 Next 交互式初始化，需迁移到非交互式 ESLint CLI 后纳入常规验证。
+15. 审计日志留存策略：增加归档或定期清理机制，避免高频生成操作导致 `AuditLog` 表持续膨胀。
 
 ## 客户初步使用反馈待优化
 

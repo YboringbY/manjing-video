@@ -21,6 +21,7 @@ type AuditOptions = {
 };
 
 const SECRET_KEY_PATTERN = /key|secret|token|password|credential|authorization/i;
+const MAX_AUDIT_FIELD_LENGTH = 200;
 
 function requestIp(request?: Request) {
   if (!request) return undefined;
@@ -50,6 +51,12 @@ function sanitizeMetadata(metadata?: Record<string, unknown>) {
   return sanitizeValue(metadata) as Prisma.InputJsonObject;
 }
 
+function truncateAuditField(value?: string | number | null) {
+  if (value === undefined || value === null) return undefined;
+  const text = String(value);
+  return text.length > MAX_AUDIT_FIELD_LENGTH ? `${text.slice(0, MAX_AUDIT_FIELD_LENGTH)}...` : text;
+}
+
 export async function logAudit(options: AuditOptions) {
   try {
     const tenantId = options.tenantId ?? options.actor?.tenantId ?? undefined;
@@ -60,10 +67,10 @@ export async function logAudit(options: AuditOptions) {
       data: {
         tenantId: tenantId || undefined,
         userId: userId || undefined,
-        actorAccount: actorAccount || undefined,
+        actorAccount: truncateAuditField(actorAccount),
         action: options.action,
         targetType: options.targetType,
-        targetId: options.targetId === undefined || options.targetId === null ? undefined : String(options.targetId),
+        targetId: truncateAuditField(options.targetId),
         result: options.result || "success",
         ip: requestIp(options.request),
         userAgent: options.request?.headers.get("user-agent")?.slice(0, 500) || undefined,

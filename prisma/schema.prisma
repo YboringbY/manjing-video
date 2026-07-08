@@ -28,6 +28,7 @@ model Tenant {
   materials   Material[]
   workspaces  ProjectWorkspace[]
   auditLogs   AuditLog[]
+  apiProfiles ApiProfile[]
 }
 
 model User {
@@ -128,4 +129,30 @@ model AuditLog {
   @@index([userId, createdAt])
   @@index([action, createdAt])
   @@index([targetType, targetId])
+}
+
+model ApiProfile {
+  id                String   @id
+  tenantId          String
+  name              String
+  baseUrl           String
+  encryptedApiKey   String
+  model             String?
+  textModels        Json
+  scriptModels      Json?
+  videoModels       Json
+  imageModels       Json
+  priority          Int      @default(100)
+  enabled           Boolean  @default(true)
+  concurrencyLimit  Int      @default(1)
+  active            Boolean  @default(false)
+  createdAtMillis   BigInt?
+  updatedAtMillis   BigInt?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, name, baseUrl])
+  @@index([tenantId, active])
+  @@index([tenantId, enabled, priority])
 }

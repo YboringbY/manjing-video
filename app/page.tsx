@@ -113,6 +113,16 @@ function proxiedVideoUrl(url?: string, download = false, taskId?: string, profil
   return `/api/video-files?${params.toString()}`;
 }
 
+function isHttpVideoUrl(value?: string): value is string {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
   function taskStatusTag(status: TaskStatus) {
   const map = { pending: ["pending", "等待生成"], running: ["running", "生成中"], done: ["done", "完成"], failed: ["pending", "失败"] } as const;
   const [className, text] = map[status];
@@ -1657,7 +1667,7 @@ export default function Home() {
           pollGenerationStatus(shotId, localTaskId, providerTaskId, profileId, attempt + 1, 0, startedAt);
           return;
         }
-        if (data.status === "succeeded" && data.video_url) {
+        if (data.status === "succeeded" && isHttpVideoUrl(data.video_url)) {
           return completeGeneration(shotId, localTaskId, data.video_url, data.duration, providerTaskId);
         }
         if (data.status === "succeeded" && !data.video_url) {
@@ -1704,7 +1714,7 @@ export default function Home() {
       const result = await readApiJson(response, "同步任务状态失败");
       if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "同步任务状态失败");
       const data = result.data as { status: string; video_url?: string; duration?: number; error?: string };
-      if (data.status === "succeeded" && data.video_url) {
+      if (data.status === "succeeded" && isHttpVideoUrl(data.video_url)) {
         completeGeneration(task.shotId, task.id, data.video_url, data.duration, task.providerTaskId);
         setUserActionMessage("已从后台同步成功视频，任务状态已更新为完成。");
         return;

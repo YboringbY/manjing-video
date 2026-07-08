@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentMembership, requireAdmin } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
-import { normalizeBaseUrl, readServerApiProfiles, ServerApiProfile, toPublicProfile, writeServerApiProfiles } from "./store";
+import { normalizeBaseUrl, readServerApiProfiles, ServerApiProfile, toPublicProfile, validateApiProfileBaseUrl, writeServerApiProfiles } from "./store";
 
 export async function GET() {
   const membership = await getCurrentMembership();
@@ -33,6 +33,7 @@ export async function POST(request: Request) {
   const existing = profiles.find(profile => profile.id === body.id || (profile.name.trim() === name && normalizeBaseUrl(profile.baseUrl) === baseUrl));
   const priority = Math.max(1, Math.min(999, Number(body.priority || existing?.priority || 100)));
   if (!name || !baseUrl || (!apiKey && !existing?.apiKey) || (!textModels.length && !videoModels.length && !imageModels.length)) return NextResponse.json({ code: 400, message: "请完整填写服务名称、Base URL、API Key，并至少配置一个文字处理、生图或视频模型 ID。编辑已有配置时 API Key 可留空。" }, { status: 400 });
+  if (!validateApiProfileBaseUrl(baseUrl)) return NextResponse.json({ code: 400, message: "当前 Base URL 不在允许的模型服务域名范围内。" }, { status: 400 });
   const nextProfile: ServerApiProfile = {
     id: existing?.id || `profile-${Date.now()}`,
     name,

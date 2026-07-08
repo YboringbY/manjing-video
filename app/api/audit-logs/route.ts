@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { rateLimit } from "@/lib/rate-limit";
 
 const MAX_LIMIT = 200;
 
@@ -12,6 +13,8 @@ function cleanLimit(value: string | null) {
 export async function GET(request: Request) {
   const auth = await requireAdmin();
   if ("error" in auth) return auth.error;
+  const limited = rateLimit(request, { keyPrefix: `audit-logs:${auth.membership.userId}`, limit: 120, windowMs: 10 * 60 * 1000 });
+  if (limited) return limited;
 
   const { searchParams } = new URL(request.url);
   const action = searchParams.get("action")?.trim();

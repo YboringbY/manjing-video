@@ -28,13 +28,38 @@ type FastGateStatusResponse = {
   items?: Array<{ id?: string; status?: string; url?: string; video_url?: string; content?: { video_url?: string; url?: string } }>;
 };
 
+function isHttpUrl(value?: string) {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 function extractVideoUrl(result: FastGateStatusResponse) {
   const dataObject = Array.isArray(result.data) ? undefined : result.data;
   const dataItem = Array.isArray(result.data) ? result.data[0] : undefined;
   const output = result.output || dataObject?.output;
-  if (typeof output === "string") return output;
-  if (Array.isArray(output)) return output[0];
-  return output?.video_url || output?.url || result.video_url || dataObject?.video_url || dataItem?.video_url || result.url || dataObject?.url || dataItem?.url || result.content?.video_url || result.content?.url || dataObject?.content?.video_url || dataObject?.content?.url;
+  const outputObject = typeof output === "object" && !Array.isArray(output) ? output : undefined;
+  const candidates = [
+    typeof output === "string" ? output : undefined,
+    Array.isArray(output) ? output[0] : undefined,
+    outputObject?.video_url,
+    outputObject?.url,
+    result.video_url,
+    dataObject?.video_url,
+    dataItem?.video_url,
+    result.url,
+    dataObject?.url,
+    dataItem?.url,
+    result.content?.video_url,
+    result.content?.url,
+    dataObject?.content?.video_url,
+    dataObject?.content?.url
+  ];
+  return candidates.find(isHttpUrl) || "";
 }
 
 function safeTargetUrl(rawUrl: string, allowTrustedHttps = false) {
@@ -90,7 +115,7 @@ async function latestVideoUrl(taskId: string, apiKey: string | undefined, baseUr
     try { result = text ? JSON.parse(text) as FastGateStatusResponse : {}; } catch { result = {}; }
     const matchedItem = result.items?.find(item => item.id === taskId);
     const matchedDataItem = Array.isArray(result.data) ? result.data.find(item => item.id === taskId) || result.data[0] : undefined;
-    const videoUrl = matchedItem?.video_url || matchedItem?.url || matchedItem?.content?.video_url || matchedItem?.content?.url || matchedDataItem?.video_url || matchedDataItem?.url || extractVideoUrl(result);
+    const videoUrl = [matchedItem?.video_url, matchedItem?.url, matchedItem?.content?.video_url, matchedItem?.content?.url, matchedDataItem?.video_url, matchedDataItem?.url, extractVideoUrl(result)].find(isHttpUrl) || "";
     if (videoUrl) return videoUrl;
   }
   return "";
@@ -122,6 +147,9 @@ export async function GET(request: Request) {
   const allowTrustedHttps = Boolean(latestUrl && taskId && profileId);
   if (!resolvedUrl) {
     return NextResponse.json({ code: 400, message: "缺少视频地址或后台任务 ID。" }, { status: 400 });
+  }
+  if (!isHttpUrl(resolvedUrl)) {
+    return NextResponse.json({ code: 400, message: "当前任务没有可用视频地址，请同步任务状态或重新生成。" }, { status: 400 });
   }
 
   let result: Awaited<ReturnType<typeof fetchVideo>>;
