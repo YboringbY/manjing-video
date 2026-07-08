@@ -336,6 +336,12 @@ textarea { min-height: 108px; resize: vertical; }
 .reference-slot-strip { display: flex; gap: 6px; align-items: center; min-height: 42px; }
 .video-selected-thumb, .reference-slot-add { width: 42px; height: 42px; border-radius: 12px; overflow: hidden; display: grid; place-items: center; background: #eef4ff; border: 1px solid var(--line); box-shadow: 0 8px 18px rgba(15,23,42,.08); padding: 0; color: var(--blue); font-size: 20px; font-weight: 900; }
 .video-selected-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.video-selected-thumb.video { background: #ecfeff; color: #0e7490; }
+.video-selected-thumb.audio { background: #f0fdf4; color: #15803d; }
+.reference-type-badge { width: 100%; height: 100%; display: grid; place-items: center; border-radius: inherit; font-size: 11px; font-weight: 900; letter-spacing: 0; }
+.reference-type-badge.video { background: #ecfeff; color: #0e7490; }
+.reference-type-badge.audio { background: #f0fdf4; color: #15803d; }
+.reference-type-badge.image { background: #eef4ff; color: var(--blue); }
 .first-last-slot { background: #f8fbff; }
 .first-last-title { pointer-events: none; }
 .first-last-frame-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -350,6 +356,8 @@ textarea { min-height: 108px; resize: vertical; }
 .reference-picker-item.selected { border-color: var(--primary); background: #eef2ff; }
 .reference-picker-thumb { width: 44px; height: 44px; border-radius: 12px; background: #eef4ff; display: grid; place-items: center; overflow: hidden; color: var(--primary); font-size: 12px; font-weight: 900; }
 .reference-picker-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.reference-picker-thumb.video { background: #ecfeff; color: #0e7490; }
+.reference-picker-thumb.audio { background: #f0fdf4; color: #15803d; }
 .reference-picker-item strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
 .reference-picker-item em { font-style: normal; color: var(--muted); font-size: 12px; font-weight: 850; }
 .reference-picker-actions { display: flex; justify-content: flex-end; gap: 8px; }
