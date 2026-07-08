@@ -492,7 +492,7 @@ npx prisma migrate deploy
 
 ## 当前部署状态
 
-- 最新 GitHub/生产 commit：`d9d7b66 Improve video reference asset workflow`。
+- 最新 GitHub/生产 commit：`1eaf3bb Improve video duration and regeneration flow`。
 - 生产服务器 `/opt/manjing-video` 已拉取该 commit。
 - 生产 PostgreSQL 当前无待应用 migration。
 - 生产 `npm ci`、`npx prisma migrate deploy`、`npm run build`、`pm2 restart manjing-video --update-env` 已执行成功。
@@ -501,7 +501,7 @@ npx prisma migrate deploy
 - 生产 `/api/video-tasks` 未登录返回 JSON 401。
 - 生产 `/api/materials` 未登录返回 JSON 401。
 - `console.manjingstudio.com` 在备案前仍不开放访问；通过 Host 访问生产 IP 返回空响应，符合当前要求。
-- 本地 5050 已重新清理 `.next` 并启动，`http://127.0.0.1:5050/` 返回 200。
+- 本地 5050 已重新清理 `.next` 并启动，`http://127.0.0.1:5050/` 返回 200；生产部署前后 `npm run build` 和 `npx tsc --noEmit` 均通过。
 
 ## 建议下一步
 
