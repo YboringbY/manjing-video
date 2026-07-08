@@ -356,6 +356,7 @@ export default function Home() {
   const [projectMaterialSearch, setProjectMaterialSearch] = useState("");
   const [renamingMaterialId, setRenamingMaterialId] = useState<number | null>(null);
   const [renamingMaterialName, setRenamingMaterialName] = useState("");
+  const [previewingMaterial, setPreviewingMaterial] = useState<MaterialAsset | null>(null);
   const [lizhenAssets, setLizhenAssets] = useState<VisualAsset[]>([]);
   const [serverTeamMaterials, setServerTeamMaterials] = useState<MaterialAsset[]>([]);
   const [selectedLizhenAssetIds, setSelectedLizhenAssetIds] = useState<string[]>([]);
@@ -1027,10 +1028,11 @@ export default function Home() {
     const alreadyControlled = cleanPrompt.includes("严格时长控制") || cleanPrompt.includes(`完整${durationText}`);
     if (alreadyControlled) return cleanPrompt;
     return [
-      `严格时长控制：生成一个完整连续的 ${durationText} 单镜头视频。`,
+      `严格时长控制：生成一个完整连续的 ${durationText} 视频。`,
       `完整画面和动作：${cleanPrompt}`,
-      `节奏要求：所有动作、表情、镜头运动和停顿必须自然铺满 ${durationText}，不要提前结束，不要压缩成 3 秒，不要拆成多个片段。`,
-      "结构要求：只生成这一条连续镜头，禁止自动分割、禁止多段拼接、禁止新增无关剧情或字幕。"
+      `多场景要求：如果提示词包含“场景1/2、场景2/2”或多个段落，请把它们理解为同一个 ${durationText} 视频内部的连续场景变化，不要拆成多个独立视频。`,
+      `节奏要求：所有场景、动作、表情、镜头运动和停顿必须共同铺满 ${durationText}，不要提前结束，不要把每个场景单独压缩成 3 秒。`,
+      "结构要求：只生成一个完整视频，禁止自动分割、禁止输出多个片段、禁止新增无关剧情或字幕。"
     ].join("\n");
   }
 
@@ -1478,6 +1480,16 @@ export default function Home() {
 
   function materialApiUrl(item: MaterialAsset) {
     return item.reviewedAssetUrl || item.seedanceAssetUrl || item.url;
+  }
+
+  function materialPreviewUrl(item: MaterialAsset) {
+    return item.previewUrl || materialApiUrl(item);
+  }
+
+  function openMaterialPreview(event: React.MouseEvent, material: MaterialAsset) {
+    event.stopPropagation();
+    if (material.kind === "sd2") return;
+    setPreviewingMaterial(material);
   }
 
   function referenceThumb(material: Pick<MaterialAsset, "kind" | "name" | "previewUrl">, compact = false) {
@@ -2397,8 +2409,8 @@ export default function Home() {
               const usable = Boolean(material.reviewedAssetUrl || material.seedanceAssetUrl || material.url);
               return (
               <div className={`material-card ${selectedMaterialIds.includes(material.id) ? "selected" : ""}`} key={material.id} onClick={() => toggleMaterial(material.id)}>
-                <div className="material-preview">
-                  {material.kind === "image" && material.previewUrl ? <img src={material.previewUrl} alt={material.name} /> : material.kind === "video" && material.previewUrl ? <video src={material.previewUrl} controls /> : <span>{material.kind === "sd2" ? "提示词" : material.kind}</span>}
+                <div className={`material-preview ${material.kind}`} onClick={event => openMaterialPreview(event, material)}>
+                  {material.kind === "image" && materialPreviewUrl(material) ? <img src={materialPreviewUrl(material)} alt={material.name} /> : material.kind === "video" && materialPreviewUrl(material) ? <video src={materialPreviewUrl(material)} muted preload="metadata" /> : material.kind === "audio" && materialPreviewUrl(material) ? <span>音频</span> : <span>{material.kind === "sd2" ? "提示词" : material.kind}</span>}
                 </div>
                 {renamingMaterialId === material.id ? <div className="material-rename-row" onClick={event => event.stopPropagation()}><input value={renamingMaterialName} onChange={event => setRenamingMaterialName(event.target.value)} onKeyDown={event => { if (event.key === "Enter") saveMaterialName(material); if (event.key === "Escape") setRenamingMaterialId(null); }} autoFocus /><button className="btn-primary btn-small" onClick={() => saveMaterialName(material)}>保存</button><button className="btn-ghost btn-small" onClick={() => setRenamingMaterialId(null)}>取消</button></div> : <strong>{material.name}</strong>}
                 <p className="muted">{material.kind === "sd2" ? "提示词" : material.kind === "image" ? "图片" : material.kind === "video" ? "视频" : "音频"}{material.source === "generated" ? " / 生图" : material.source === "upload" ? " / 上传" : ""}{material.scope === "team" ? " / 团队共享" : " / 项目独享"}</p>
@@ -2413,8 +2425,8 @@ export default function Home() {
               const selected = selectedMaterialIds.includes(material.id);
               return (
               <div className={`material-card ${selected ? "selected" : ""}`} key={`team-${material.id}`} onClick={() => toggleTeamSharedMaterial(material)}>
-                <div className="material-preview">
-                  {material.kind === "image" && material.previewUrl ? <img src={material.previewUrl} alt={material.name} /> : material.kind === "video" && material.previewUrl ? <video src={material.previewUrl} controls /> : <span>{material.kind === "sd2" ? "提示词" : material.kind === "audio" ? "音频" : "素材"}</span>}
+                <div className={`material-preview ${material.kind}`} onClick={event => openMaterialPreview(event, material)}>
+                  {material.kind === "image" && materialPreviewUrl(material) ? <img src={materialPreviewUrl(material)} alt={material.name} /> : material.kind === "video" && materialPreviewUrl(material) ? <video src={materialPreviewUrl(material)} muted preload="metadata" /> : material.kind === "audio" && materialPreviewUrl(material) ? <span>音频</span> : <span>{material.kind === "sd2" ? "提示词" : material.kind === "audio" ? "音频" : "素材"}</span>}
                 </div>
                 <strong>{material.name}</strong>
                 <p className="muted">{material.kind === "image" ? "图片" : material.kind === "video" ? "视频" : material.kind === "audio" ? "音频" : "提示词"} / 团队共享</p>
@@ -2497,6 +2509,15 @@ export default function Home() {
         </div>
 
       </main>
+
+      <div className={`modal ${previewingMaterial ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setPreviewingMaterial(null)}>
+        <div className="modal-card modal-card-wide media-preview-modal">
+          <div className="modal-head"><h2>{previewingMaterial?.name || "素材预览"}</h2><button className="btn-ghost btn-small" onClick={() => setPreviewingMaterial(null)}>关闭</button></div>
+          {previewingMaterial && previewingMaterial.kind === "image" && materialPreviewUrl(previewingMaterial) && <img className="media-preview-image" src={materialPreviewUrl(previewingMaterial)} alt={previewingMaterial.name} />}
+          {previewingMaterial && previewingMaterial.kind === "video" && materialPreviewUrl(previewingMaterial) && <video className="media-preview-video" src={materialPreviewUrl(previewingMaterial)} controls autoPlay />}
+          {previewingMaterial && previewingMaterial.kind === "audio" && materialPreviewUrl(previewingMaterial) && <div className="media-preview-audio"><span>音频</span><audio src={materialPreviewUrl(previewingMaterial)} controls autoPlay /></div>}
+        </div>
+      </div>
 
       <div className={`modal ${passwordModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setPasswordModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>修改密码</h2><button className="btn-ghost btn-small" onClick={() => setPasswordModalOpen(false)}>关闭</button></div><div className="form"><div><label>手机号</label><input value={securityPhone} onChange={event => setSecurityPhone(event.target.value)} placeholder="请输入绑定手机号" /></div><div><label>验证码</label><div className="code-row"><input value={securityCode} onChange={event => setSecurityCode(event.target.value)} placeholder="请输入 6 位验证码" /><button className="btn-primary" onClick={() => alert(`验证码已发送至 ${securityPhone}`)}>发送验证码</button></div></div><div><label>新密码</label><input type="password" value={newPassword} onChange={event => setNewPassword(event.target.value)} placeholder="请输入新密码（至少 6 个字符）" /></div><div><label>确认新密码</label><input type="password" value={confirmNewPassword} onChange={event => setConfirmNewPassword(event.target.value)} placeholder="请再次输入新密码" /></div><div className="actions"><button className="btn-ghost" onClick={() => setPasswordModalOpen(false)}>取消</button><button className="btn-primary" onClick={() => { if (!securityCode || !newPassword || newPassword !== confirmNewPassword) return alert("请确认验证码和两次密码输入一致。"); setPasswordModalOpen(false); alert("演示环境已完成密码修改流程。") }}>确认修改</button></div></div></div></div>
       <div className={`modal ${projectModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setProjectModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>新建项目</h2><button className="btn-ghost btn-small" onClick={() => setProjectModalOpen(false)}>关闭</button></div><div className="form"><div><label>项目名称</label><input value={projectName} onChange={event => setProjectName(event.target.value)} /></div><div><label>项目类型</label><select value={projectType} onChange={event => setProjectType(event.target.value)}>{PROJECT_TYPES.map(type => <option key={type}>{type}</option>)}</select></div><button className="btn-primary" onClick={saveProject}>创建项目</button></div></div></div>
