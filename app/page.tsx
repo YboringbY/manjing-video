@@ -4,7 +4,7 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ProjectListSection } from "./components/ProjectListSection";
 import { ProjectOverviewSection } from "./components/ProjectOverviewSection";
 import { Sidebar } from "./components/Sidebar";
-import { ApiProfile, AppState, AspectRatio, ImageQuality, LibraryFilter, MaterialAsset, MaterialKind, MaterialRole, MemberRole, ProfileSection, Project, ProjectStates, Shot, ShotStatus, TaskStatus, VideoAsset, VideoTask, VisualAsset, WorkspaceSection } from "./components/types";
+import { ApiProfile, AppState, AspectRatio, ImageQuality, LibraryFilter, MaterialAsset, MaterialKind, MaterialRole, MemberRole, ProfileSection, Project, ProjectStates, Shot, ShotStatus, TaskStatus, VideoAsset, VideoTask, VideoTaskSnapshot, VisualAsset, WorkspaceSection } from "./components/types";
 
 type AuthUser = {
   id: string;
@@ -20,6 +20,12 @@ type AuthUser = {
 };
 type AuthUsers = Record<string, AuthUser>;
 type WorkspaceRecord = { projectId: number; state: Partial<AppState>; updatedAt?: string };
+type GenerationContext = {
+  materialIds: number[];
+  externalAssetIds: string[];
+  omniReferenceEnabled: boolean;
+  videoModel?: string;
+};
 type AuditLogEntry = {
   id: number;
   action: string;
@@ -1010,7 +1016,29 @@ export default function Home() {
     return splitPromptLikeEditor(prompt, ratio, duration).map((shot, index) => ({ ...shot, title: `${title || "分镜"}｜${String(index + 1).padStart(2, "0")}` }));
   }
 
-  function addShot(preset?: Partial<Pick<Shot, "title" | "prompt" | "ratio" | "duration" | "resolution">>) {
+  function buildDurationControlledPrompt(prompt: string, duration: number) {
+    const cleanPrompt = prompt.trim();
+    const durationText = `${duration}秒`;
+    const alreadyControlled = cleanPrompt.includes("严格时长控制") || cleanPrompt.includes(`完整${durationText}`);
+    if (alreadyControlled) return cleanPrompt;
+    return [
+      `严格时长控制：生成一个完整连续的 ${durationText} 单镜头视频。`,
+      `完整画面和动作：${cleanPrompt}`,
+      `节奏要求：所有动作、表情、镜头运动和停顿必须自然铺满 ${durationText}，不要提前结束，不要压缩成 3 秒，不要拆成多个片段。`,
+      "结构要求：只生成这一条连续镜头，禁止自动分割、禁止多段拼接、禁止新增无关剧情或字幕。"
+    ].join("\n");
+  }
+
+  function currentGenerationContext(): GenerationContext {
+    return {
+      materialIds: [...selectedMaterialIds],
+      externalAssetIds: [...selectedLizhenAssetIds],
+      omniReferenceEnabled,
+      videoModel: selectedVideoModel
+    };
+  }
+
+  function addShot(preset?: Partial<Pick<Shot, "title" | "prompt" | "ratio" | "duration" | "resolution">>, context = currentGenerationContext()) {
     const nextTitle = (preset?.title ?? shotTitle).trim();
     const nextPrompt = (preset?.prompt ?? shotPrompt).trim();
     const nextRatio = preset?.ratio ?? shotRatio;
@@ -1020,20 +1048,12 @@ export default function Home() {
       alert("请先填写视频提示词。");
       return;
     }
-    const splitShots = splitLongPromptIntoShots(nextTitle || "新视频", nextPrompt, nextRatio, nextDuration);
-    if (splitShots.length > 1) {
-      setState(prev => ({ ...prev, shots: [...prev.shots, ...splitShots.map(item => ({ ...item, resolution: nextResolution }))] }));
-      setShotTitle("");
-      setShotPrompt("");
-      splitShots.forEach((shot, index) => window.setTimeout(() => startGeneration(shot.id, { ...shot, resolution: nextResolution }), index * 800));
-      return;
-    }
     const id = Date.now();
     const nextShot: Shot = { id, title: nextTitle || `视频 ${state.shots.length + 1}`, prompt: nextPrompt, ratio: nextRatio, duration: nextDuration, resolution: nextResolution, status: "pending", ...shotSizeForRatio(nextRatio) };
     setState(prev => ({ ...prev, shots: [...prev.shots, nextShot] }));
     setShotTitle("");
     setShotPrompt("");
-    startGeneration(id, nextShot);
+    startGeneration(id, nextShot, context);
   }
 
 
@@ -1053,24 +1073,12 @@ export default function Home() {
   }
 
   function generateShotOrSplit(shot: Shot) {
-    const alreadySegmented = shot.prompt.includes("只生成本段内容") || /第\s*\d+\/\d+\s*段/.test(shot.prompt);
-    const canSplit = splitLongPromptIntoShots(shot.title, shot.prompt, shot.ratio, Math.max(12, shot.duration)).length > 1;
-    if (!alreadySegmented && canSplit) {
-      splitExistingShot(shot);
-      return;
-    }
     startGeneration(shot.id);
   }
 
   function createSinglePromptShot(text: string, duration: number) {
     const content = text.trim();
-    const prompt = [
-      `这是一个完整的 ${duration} 秒短剧镜头，不要压缩到 3 秒。`,
-      `完整画面和动作：${content}。`,
-      `生成要求：按 ${duration} 秒节奏自然表达完整内容，动作和台词要完整，语速正常，保留停顿。`,
-      "不要自由发挥新增人物、地点、情节或反转；严格按照提示词内容生成。",
-      "真人写实短剧质感，电影级布光，24帧，禁止字幕。"
-    ].join("\n");
+    const prompt = buildDurationControlledPrompt(content, duration);
     return { id: Date.now(), title: `镜头 01｜完整${duration}秒镜头`, prompt, ratio: "9:16 竖屏短剧", duration, status: "pending" as ShotStatus };
   }
 
@@ -1462,9 +1470,9 @@ export default function Home() {
     setMaterialMessage("共享素材已加入当前项目，并选为参考。");
   }
 
-  function buildMediaPayload() {
-    const selected = state.materials.filter(item => selectedMaterialIds.includes(item.id));
-    const selectedLizhenAssets = lizhenAssets.filter(item => selectedLizhenAssetIds.includes(item.id));
+  function buildMediaPayload(context = currentGenerationContext()) {
+    const selected = state.materials.filter(item => context.materialIds.includes(item.id));
+    const selectedLizhenAssets = lizhenAssets.filter(item => context.externalAssetIds.includes(item.id));
     const firstFrame = selected.find(item => item.kind === "image" && item.role === "first_frame" && materialApiUrl(item));
     const lastFrame = selected.find(item => item.kind === "image" && item.role === "last_frame" && materialApiUrl(item));
     if (firstFrame && lastFrame) {
@@ -1493,9 +1501,9 @@ export default function Home() {
     };
   }
 
-  function buildShotWithReferencePrompt(shot: Shot): Shot {
-    const selectedInternalAssets = state.materials.filter(item => selectedMaterialIds.includes(item.id) && item.kind === "image" && materialApiUrl(item));
-    const selectedExternalAssets = lizhenAssets.filter(item => selectedLizhenAssetIds.includes(item.id) && item.类型 === "图片");
+  function buildShotWithReferencePrompt(shot: Shot, context = currentGenerationContext()): Shot {
+    const selectedInternalAssets = state.materials.filter(item => context.materialIds.includes(item.id) && item.kind === "image" && materialApiUrl(item));
+    const selectedExternalAssets = lizhenAssets.filter(item => context.externalAssetIds.includes(item.id) && item.类型 === "图片");
     if (!selectedInternalAssets.length && !selectedExternalAssets.length) return shot;
     const internalLines = selectedInternalAssets.map(item => `- ${item.name}：严格参考素材 ${materialApiUrl(item)} 的人物/场景/道具外观，不要重新设计外貌。`);
     const externalLines = selectedExternalAssets.map(item => `- ${item.asset_name}：严格参考共享素材的人物/场景/道具外观，不要重新设计外貌。`);
@@ -1505,29 +1513,31 @@ export default function Home() {
     };
   }
 
-  function inferInputType() {
-    const selected = state.materials.filter(item => selectedMaterialIds.includes(item.id));
+  function inferInputType(context = currentGenerationContext()) {
+    const selected = state.materials.filter(item => context.materialIds.includes(item.id));
     const roles = selected.map(item => item.role);
     return roles.includes("first_frame") && roles.includes("last_frame") ? "first_last_frame" : "reference";
   }
 
-  async function startGeneration(shotId: number, injectedShot?: Shot) {
+  async function startGeneration(shotId: number, injectedShot?: Shot, context = currentGenerationContext()) {
     const shot = injectedShot || state.shots.find(item => item.id === shotId);
     if (!shot) return;
 
     const localTaskId = `MV-${String(Date.now()).slice(-6)}`;
-    const localOnlyMaterials = state.materials.filter(item => selectedMaterialIds.includes(item.id) && !materialApiUrl(item));
+    const localOnlyMaterials = state.materials.filter(item => context.materialIds.includes(item.id) && !materialApiUrl(item));
     if (localOnlyMaterials.length) {
       setMaterialMessage(`已选择 ${localOnlyMaterials.length} 个仅预览素材，无法用于生成：${localOnlyMaterials.map(item => item.name).join("、")}。请改用可生成素材。`);
       alert("你选择的参考素材里有仅预览素材。请改用可生成素材后再提交。");
       return;
     }
 
-    if (omniReferenceEnabled && !omniReferenceItems.length) {
+    const selectedProjectAssets = state.materials.filter(item => context.materialIds.includes(item.id) && materialApiUrl(item));
+    const selectedExternalAssets = lizhenAssets.filter(item => context.externalAssetIds.includes(item.id));
+    if (context.omniReferenceEnabled && !selectedProjectAssets.length && !selectedExternalAssets.length) {
       alert("全能参考模式需要先选择至少 1 个可生成参考素材。");
       return;
     }
-    const selectedWithUrl = state.materials.filter(item => selectedMaterialIds.includes(item.id) && materialApiUrl(item));
+    const selectedWithUrl = selectedProjectAssets;
     const hasFirstFrame = selectedWithUrl.some(item => item.role === "first_frame");
     const hasLastFrame = selectedWithUrl.some(item => item.role === "last_frame");
     if (hasFirstFrame !== hasLastFrame) {
@@ -1542,9 +1552,21 @@ export default function Home() {
       return;
     }
 
-    const selectedAssetCount = state.materials.filter(item => selectedMaterialIds.includes(item.id) && materialApiUrl(item)).length + selectedLizhenAssetIds.length;
-    const modelForGeneration = selectedVideoModel || activeApiProfile?.videoModels[0] || activeApiProfile?.model || "";
-    const task: VideoTask = { id: localTaskId, shotId: shot.id, shotTitle: shot.title, provider: "视频生成", status: "running", result: selectedAssetCount ? `任务已提交，${omniReferenceEnabled ? "全能参考模式已启用，" : ""}正在使用 ${selectedAssetCount} 个参考素材生成视频。` : "任务已提交，正在生成视频。" };
+    const selectedAssetCount = selectedProjectAssets.length + selectedExternalAssets.length;
+    const modelForGeneration = context.videoModel || selectedVideoModel || activeApiProfile?.videoModels[0] || activeApiProfile?.model || "";
+    const inputType = inferInputType(context);
+    const snapshot: VideoTaskSnapshot = {
+      prompt: shot.prompt,
+      model: modelForGeneration,
+      ratio: shot.ratio,
+      duration: shot.duration,
+      resolution: shot.resolution || "720p",
+      materialIds: [...context.materialIds],
+      externalAssetIds: [...context.externalAssetIds],
+      omniReferenceEnabled: context.omniReferenceEnabled,
+      inputType
+    };
+    const task: VideoTask = { id: localTaskId, shotId: shot.id, shotTitle: shot.title, provider: "视频生成", status: "running", result: selectedAssetCount ? `任务已提交，按 ${shot.duration}s 生成，${context.omniReferenceEnabled ? "全能参考模式已启用，" : ""}正在使用 ${selectedAssetCount} 个参考素材。` : `任务已提交，按 ${shot.duration}s 生成。`, snapshot };
 
     setState(prev => ({
       ...prev,
@@ -1552,19 +1574,20 @@ export default function Home() {
       tasks: [task, ...prev.tasks.filter(item => !(item.shotId === shotId && item.status === "running"))]
     }));
 
-    const shotForGeneration = buildShotWithReferencePrompt(shot);
+    const durationControlledShot = { ...shot, prompt: buildDurationControlledPrompt(shot.prompt, shot.duration) };
+    const shotForGeneration = buildShotWithReferencePrompt(durationControlledShot, context);
 
     try {
       const response = await fetch("/api/video-tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shot: omniReferenceEnabled ? { ...shotForGeneration, prompt: `${shotForGeneration.prompt}\n\n全能参考模式：已启用。请综合所有提交的图片、视频、音频参考素材，保持人物外貌、服装、场景、道具、动作节奏和画面风格一致。优先遵循 reference inputs，不要自行替换角色或背景。` } : shotForGeneration, provider: "seedance-2.0", model_id: modelForGeneration, resolution: shot.resolution || "720p", input_type: inferInputType(), omni_reference: omniReferenceEnabled, ...buildMediaPayload() })
+        body: JSON.stringify({ shot: context.omniReferenceEnabled ? { ...shotForGeneration, prompt: `${shotForGeneration.prompt}\n\n全能参考模式：已启用。请综合所有提交的图片、视频、音频参考素材，保持人物外貌、服装、场景、道具、动作节奏和画面风格一致。优先遵循 reference inputs，不要自行替换角色或背景。` } : shotForGeneration, provider: "seedance-2.0", model_id: modelForGeneration, resolution: shot.resolution || "720p", input_type: inputType, omni_reference: context.omniReferenceEnabled, ...buildMediaPayload(context) })
       });
       const result = await readApiJson(response, "创建视频任务失败");
       if (!response.ok || result.code !== 0 || !result.data?.task_id) throw new Error(result.message || "创建视频任务失败");
       const providerTaskId = result.data.task_id as string;
       const resolvedApiProfile = result.data.api_profile as ApiProfile | undefined;
-      const selectedLizhenNames = lizhenAssets.filter(item => selectedLizhenAssetIds.includes(item.id)).map(item => item.asset_name).join("、");
+      const selectedLizhenNames = selectedExternalAssets.map(item => item.asset_name).join("、");
       setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, provider: "视频生成", providerTaskId, apiProfile: resolvedApiProfile, result: `任务已提交：${providerTaskId}${selectedLizhenNames ? `｜参考素材：${selectedLizhenNames}` : ""}` } : item) }));
       pollGenerationStatus(shotId, localTaskId, providerTaskId, resolvedApiProfile?.id);
     } catch (error) {
@@ -1702,6 +1725,64 @@ export default function Home() {
       };
     });
     setUserActionMessage("生成记录已删除，关联分镜已恢复为待生成。");
+  }
+
+  function applyTaskSnapshot(task: VideoTask) {
+    const snapshot = task.snapshot;
+    const shot = state.shots.find(item => item.id === task.shotId);
+    if (!snapshot && !shot) {
+      setUserActionMessage("这条记录缺少可复用的生成参数。");
+      return null;
+    }
+    const nextPrompt = snapshot?.prompt || shot?.prompt || "";
+    const nextRatio = snapshot?.ratio || shot?.ratio || shotRatio;
+    const nextDuration = snapshot?.duration || shot?.duration || shotDuration;
+    const nextResolution = snapshot?.resolution || shot?.resolution || shotResolution;
+    setShotPrompt(nextPrompt);
+    setShotRatio(nextRatio);
+    setShotDuration(nextDuration);
+    setShotResolution(nextResolution);
+    if (snapshot?.model) setSelectedVideoModel(snapshot.model);
+    setSelectedMaterialIds(snapshot?.materialIds || []);
+    setSelectedLizhenAssetIds(snapshot?.externalAssetIds || []);
+    setOmniReferenceEnabled(Boolean(snapshot?.omniReferenceEnabled));
+    return {
+      title: task.shotTitle,
+      prompt: nextPrompt,
+      ratio: nextRatio,
+      duration: nextDuration,
+      resolution: nextResolution
+    };
+  }
+
+  function editRegeneration(task: VideoTask) {
+    const preset = applyTaskSnapshot(task);
+    if (!preset) return;
+    setActiveSection("shots");
+    setUserActionMessage("已回填上一轮提示词、参数和参考素材，可编辑后重新生成。");
+    window.setTimeout(() => shotPromptRef.current?.focus(), 0);
+  }
+
+  function rerunTask(task: VideoTask) {
+    const preset = applyTaskSnapshot(task);
+    if (!preset) return;
+    setActiveSection("shots");
+    setUserActionMessage("已按上一轮参数直接重新生成。");
+    const snapshot = task.snapshot;
+    addShot(preset, {
+      materialIds: snapshot?.materialIds || [],
+      externalAssetIds: snapshot?.externalAssetIds || [],
+      omniReferenceEnabled: Boolean(snapshot?.omniReferenceEnabled),
+      videoModel: snapshot?.model
+    });
+  }
+
+  function taskSnapshotText(task: VideoTask) {
+    const snapshot = task.snapshot;
+    if (!snapshot) return "历史任务未记录完整参数";
+    const refs = snapshot.materialIds.length + snapshot.externalAssetIds.length;
+    const inputLabel = snapshot.inputType === "first_last_frame" ? "首尾帧" : refs ? "参考素材" : "纯文本";
+    return `${snapshot.duration}s / ${snapshot.ratio.split(" ")[0]} / ${snapshot.resolution || "720p"} / ${inputLabel}${refs ? ` ${refs} 个` : ""}`;
   }
 
   function deleteVideoAsset(assetId: number) {
@@ -2317,7 +2398,44 @@ export default function Home() {
 
         <div style={sectionStyle("tasks")}>
           <div className="card-title-row"><div><h2 id="tasks">生成记录</h2><p className="muted">集中查看生成进度、任务结果和已完成视频。</p></div><button className="btn-primary btn-small" onClick={refreshAllTaskStatuses}>同步任务状态</button></div>
-          <section className="card"><div className="task-head"><p className="muted">默认展示最近 5 个任务；完成后可直接预览或下载。</p></div><div className="table-wrap"><table className="table"><thead><tr><th>任务 ID</th><th>关联分镜</th><th>类型</th><th>进度</th><th>结果</th><th>操作</th></tr></thead><tbody>{visibleTasks.length ? visibleTasks.map(task => { const taskAsset = state.assets.find(asset => asset.shotId === task.shotId && asset.videoUrl); const taskVideoId = taskAsset?.providerTaskId || task.providerTaskId; return <tr key={task.id}><td>{task.id}</td><td>#{String(task.shotId).padStart(2, "0")} {task.shotTitle}</td><td>{task.provider}</td><td>{taskStatusTag(task.status)}</td><td>{task.result}{taskAsset?.videoUrl && <div className="task-video-actions"><a href={proxiedVideoUrl(taskAsset.videoUrl, false, taskVideoId, activeApiProfile)} target="_blank" rel="noreferrer">预览视频</a><a href={proxiedVideoUrl(taskAsset.videoUrl, true, taskVideoId, activeApiProfile)}>下载</a></div>}</td><td><button className="btn-danger btn-small" onClick={() => deleteTask(task.id)}>删除</button></td></tr>; }) : <tr><td colSpan={6}><div className="empty">暂无生成记录。请先到视频工作台提交任务。</div></td></tr>}</tbody></table></div>{hiddenTaskCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllTasks(prev => !prev)}>{showAllTasks ? "收起" : `展开全部 ${hiddenTaskCount}`}</button>}</section>
+          <section className="card">
+            <div className="task-head"><p className="muted">默认展示最近 5 个任务；完成后可直接预览、下载或用同一组参数重新生成。</p></div>
+            <div className="table-wrap">
+              <table className="table">
+                <thead><tr><th>任务 ID</th><th>关联分镜</th><th>类型</th><th>进度</th><th>结果</th><th>操作</th></tr></thead>
+                <tbody>
+                  {visibleTasks.length ? visibleTasks.map(task => {
+                    const taskAsset = state.assets.find(asset => asset.shotId === task.shotId && asset.videoUrl);
+                    const taskVideoId = taskAsset?.providerTaskId || task.providerTaskId;
+                    const canRegenerate = task.status !== "running";
+                    return (
+                      <tr key={task.id}>
+                        <td>{task.id}</td>
+                        <td>
+                          <div>#{String(task.shotId).padStart(2, "0")} {task.shotTitle}</div>
+                          <small className="muted">{taskSnapshotText(task)}</small>
+                        </td>
+                        <td>{task.provider}</td>
+                        <td>{taskStatusTag(task.status)}</td>
+                        <td>
+                          {task.result}
+                          {taskAsset?.videoUrl && <div className="task-video-actions"><a href={proxiedVideoUrl(taskAsset.videoUrl, false, taskVideoId, activeApiProfile)} target="_blank" rel="noreferrer">预览视频</a><a href={proxiedVideoUrl(taskAsset.videoUrl, true, taskVideoId, activeApiProfile)}>下载</a></div>}
+                        </td>
+                        <td>
+                          <div className="task-row-actions">
+                            <button className="btn-ghost btn-small" onClick={() => rerunTask(task)} disabled={!canRegenerate}>直接重新生成</button>
+                            <button className="btn-ghost btn-small" onClick={() => editRegeneration(task)} disabled={!canRegenerate}>编辑后重新生成</button>
+                            <button className="btn-danger btn-small" onClick={() => deleteTask(task.id)}>删除</button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  }) : <tr><td colSpan={6}><div className="empty">暂无生成记录。请先到视频工作台提交任务。</div></td></tr>}
+                </tbody>
+              </table>
+            </div>
+            {hiddenTaskCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllTasks(prev => !prev)}>{showAllTasks ? "收起" : `展开全部 ${hiddenTaskCount}`}</button>}
+          </section>
           <section className="card generated-video-library">
             <div className="card-title-row"><div><h2 style={{ marginTop: 0 }}>已完成视频</h2><p className="muted">成功生成的视频会出现在这里，可直接播放、打开或下载。</p></div></div>
             {visibleVideoAssets.length ? <div className="video-preview-grid">{visibleVideoAssets.map(asset => <div className="video-preview-card" key={asset.id}>{asset.videoUrl && <video src={proxiedVideoUrl(asset.videoUrl, false, asset.providerTaskId, activeApiProfile)} controls preload="metadata" />}<strong>{asset.title}</strong><p className="muted">{asset.meta}</p><div className="task-video-actions">{asset.videoUrl && <a href={proxiedVideoUrl(asset.videoUrl, false, asset.providerTaskId, activeApiProfile)} target="_blank" rel="noreferrer">新窗口打开</a>}{asset.videoUrl && <a href={proxiedVideoUrl(asset.videoUrl, true, asset.providerTaskId, activeApiProfile)}>下载视频</a>}</div></div>)}</div> : <div className="empty">暂无可预览视频。请先点击“同步本页任务状态”，或等待生成任务完成。</div>}

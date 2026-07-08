@@ -108,6 +108,17 @@ function normalizeDuration(value?: number) {
   return duration;
 }
 
+function buildDurationControlledPrompt(prompt: string, duration: number) {
+  const text = prompt.trim();
+  if (text.includes("严格时长控制")) return text;
+  return [
+    `严格时长控制：生成一个完整连续的 ${duration}秒 单镜头视频。`,
+    text,
+    `节奏要求：所有动作、表情、镜头运动和停顿必须自然铺满 ${duration}秒，不要提前结束，不要压缩成 3 秒，不要拆成多个片段。`,
+    "结构要求：只生成这一条连续镜头，禁止自动分割、禁止多段拼接、禁止新增无关剧情或字幕。"
+  ].join("\n");
+}
+
 function normalizeMedia(items: MediaInput[] | undefined, limit: number, type: "image" | "video" | "audio") {
   return (items || [])
     .filter(item => item.url.trim())
@@ -221,7 +232,9 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-  if (shot.prompt.length > MAX_VIDEO_PROMPT_LENGTH) {
+  const duration = normalizeDuration(shot.duration);
+  const prompt = buildDurationControlledPrompt(shot.prompt, duration);
+  if (prompt.length > MAX_VIDEO_PROMPT_LENGTH) {
     return NextResponse.json({ code: 400, message: `视频提示词最多 ${MAX_VIDEO_PROMPT_LENGTH} 字，请精简后再生成。` }, { status: 400 });
   }
 
@@ -236,7 +249,7 @@ export async function POST(request: Request) {
   }
   const payloadImageUrls = body.input_type === "first_last_frame" ? imageUrls.slice(0, 2) : imageUrls;
   const content = [
-    { type: "text", text: shot.prompt },
+    { type: "text", text: prompt },
     ...normalizeMedia(body.input_type === "first_last_frame" ? body.images?.slice(0, 2) : body.images, 9, "image"),
     ...normalizeMedia(body.videos, 3, "video"),
     ...normalizeMedia(body.audios, 3, "audio")
@@ -245,13 +258,13 @@ export async function POST(request: Request) {
   const inputType = imageUrls.length || videoUrls.length || audioUrls.length ? body.input_type || "reference" : "text_to_video";
   const payload = isZJProvider(baseUrl) ? {
     model: requestedModel,
-    prompt: shot.prompt,
+    prompt,
     input_type: inputType,
     images: payloadImageUrls,
     videos: videoUrls,
     audios: audioUrls,
     ratio: normalizeRatio(shot.ratio),
-    duration: normalizeDuration(shot.duration),
+    duration,
     resolution: body.resolution || "720p",
     metadata: {
       draft: false,
@@ -260,10 +273,10 @@ export async function POST(request: Request) {
     }
   } : {
     model: requestedModel,
-    prompt: shot.prompt,
+    prompt,
     content,
     ratio: normalizeRatio(shot.ratio),
-    duration: normalizeDuration(shot.duration),
+    duration,
     resolution: body.resolution || "720p",
     generate_audio: body.generate_audio ?? true,
     watermark: body.watermark ?? false

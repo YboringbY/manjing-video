@@ -492,14 +492,14 @@ npx prisma migrate deploy
 
 ## 当前部署状态
 
-- 最新 GitHub/生产 commit：`71d4458 Add audit logging and admin audit view`。
+- 最新 GitHub/生产 commit：`d9d7b66 Improve video reference asset workflow`。
 - 生产服务器 `/opt/manjing-video` 已拉取该 commit。
-- 生产 PostgreSQL 已应用 `20260708011000_add_audit_logs` migration。
+- 生产 PostgreSQL 当前无待应用 migration。
 - 生产 `npm ci`、`npx prisma migrate deploy`、`npm run build`、`pm2 restart manjing-video --update-env` 已执行成功。
 - 生产 PM2 应用 `manjing-video` 在线。
 - 生产 IP `http://118.196.44.191/` 返回 200。
-- 生产 `/api/auth/me` 未登录返回 JSON 401。
-- 生产 `/api/audit-logs` 未登录返回 JSON 401。
+- 生产 `/api/video-tasks` 未登录返回 JSON 401。
+- 生产 `/api/materials` 未登录返回 JSON 401。
 - `console.manjingstudio.com` 在备案前仍不开放访问；通过 Host 访问生产 IP 返回空响应，符合当前要求。
 - 本地 5050 已重新清理 `.next` 并启动，`http://127.0.0.1:5050/` 返回 200。
 
@@ -587,3 +587,21 @@ npx prisma migrate deploy
   - 已沿用现有真实生成链路：`images/videos/audios` 会随任务提交，`first_frame/last_frame` 会触发 `first_last_frame` input type，没有新增空能力。
   - 已按火山/字节首尾帧格式收紧：前端必须同时选择首帧和尾帧才允许提交；后端在 `input_type=first_last_frame` 时要求至少 2 张图，并只传 `images: [首帧URL, 尾帧URL]`。
 - 已验证：`npm run build` 通过，`npx tsc --noEmit` 通过，本地 5050 首页返回 200，未登录 `/api/materials` 和 `/api/video-tasks` 返回 JSON 401。
+- 已完成第 3 组严格时长与重生成闭环：
+  - 视频工作台普通生成不再自动把长提示词拆成多个分镜；拆分保留在“提示词拆分分镜”这个显式动作里，避免用户选择 6 秒却被系统拆成多个片段。
+  - 前端在提交视频任务前会包装“严格时长控制”提示词，明确要求按用户选择的秒数生成一个完整连续单镜头，禁止自动分割、压缩成 3 秒或多段拼接。
+  - 后端 `/api/video-tasks` 也增加同样的时长控制包装，并统一使用规范化后的 `duration` 写入上游 payload，防止旧客户端或绕过前端时丢失时长约束。
+  - `VideoTask` 增加 `snapshot`，记录上一轮生成使用的提示词、模型、比例、时长、清晰度、内部素材、外部素材、全能参考状态和 input type。
+  - 生成记录增加“直接重新生成”和“编辑后重新生成”两个动作：前者用上一轮 snapshot 立即新建并提交任务，后者把上一轮参数和参考素材回填到视频工作台，用户可微调后再点开始生成。
+  - 直接重新生成已改为显式传入 `GenerationContext`，不依赖 React 状态刚回填后的异步读取，避免参考素材/模型被读成旧状态。
+  - 生成记录中补充展示任务快照摘要，例如 `6s / 9:16 / 720p / 首尾帧 2 个`，让用户知道这条记录当时用的关键参数。
+  - 已验证：`npm run build` 通过，`npx tsc --noEmit` 通过；本地 5050 清理 `.next` 后启动成功，首页返回 200；未登录 `/api/video-tasks` GET/POST 返回 JSON 401。
+  - 带本地 seed 管理员登录后，测试 `first_last_frame` 缺少尾帧的请求没有进入上游；当前本地先被“没有启用渠道支持所选视频模型”挡住，说明本地需要先配置匹配视频模型后才能继续验证首尾帧 400 校验分支。该校验代码已在后端保留。
+
+### 客户反馈剩余待处理
+
+1. 拖拽上传：视频描述窗口/参考素材区域支持桌面拖拽上传，并自动预引用到当前生成上下文。
+2. 重生成体验细化：后续可增加“使用同一 seed/随机 seed”的明确选项；当前上游 payload 暂未暴露 seed 控制，先保留直接重跑。
+3. 生成结果质量反馈：在已完成视频上增加“不满意/满意”或备注入口，用于后续模型渠道质量统计和人工优先级调整。
+4. 严格时长结果校验：拿到生成视频后读取实际时长并与用户设定时长对比，明显偏差时在任务结果里提示“时长不符合预期，可重新生成”。
+5. 参考素材引用可视化：生成记录和分镜列表里展示本次用到的素材名称，而不只是数量。

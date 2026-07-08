@@ -8,7 +8,8 @@ export type LibraryFilter = "all" | "image" | "video" | "audio" | "prompt";
 
 export type Project = { id: number; name: string; type: string; script: string };
 export type Shot = { id: number; title: string; prompt: string; ratio: string; duration: number; status: ShotStatus; resolution?: "480p" | "720p" | "1080p"; width?: number; height?: number };
-export type VideoTask = { id: string; shotId: number; shotTitle: string; provider: string; status: TaskStatus; result: string; providerTaskId?: string; apiProfile?: ApiProfile };
+export type VideoTaskSnapshot = { prompt: string; model?: string; ratio: string; duration: number; resolution?: "480p" | "720p" | "1080p"; materialIds: number[]; externalAssetIds: string[]; omniReferenceEnabled?: boolean; inputType?: "reference" | "first_last_frame" | "text_to_video" };
+export type VideoTask = { id: string; shotId: number; shotTitle: string; provider: string; status: TaskStatus; result: string; providerTaskId?: string; apiProfile?: ApiProfile; snapshot?: VideoTaskSnapshot };
 export type VideoAsset = { id: number; shotId: number; title: string; meta: string; gradient: string; videoUrl?: string; providerTaskId?: string };
 export type MaterialStatus = "ready" | "processing" | "failed";
 export type MaterialSource = "upload" | "generated" | "prompt" | "link";

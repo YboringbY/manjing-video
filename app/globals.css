@@ -468,6 +468,8 @@ textarea { min-height: 108px; resize: vertical; }
 .sync-toast { margin: -6px 0 14px; color: var(--muted); font-size: 12px; font-weight: 800; text-align: right; }
 .task-video-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .task-video-actions a { color: var(--primary); font-weight: 850; text-decoration: none; }
+.task-row-actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 138px; }
+.task-row-actions .btn-small { width: 100%; text-align: center; }
 .generated-video-library { margin-bottom: 18px; }
 .video-preview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
 .video-preview-card { border: 1px solid var(--border); border-radius: 18px; padding: 12px; background: #fff; box-shadow: 0 14px 32px rgba(15,23,42,.06); }
