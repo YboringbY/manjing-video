@@ -33,6 +33,17 @@ function publicWorkspace(workspace: {
   };
 }
 
+function projectFieldsFromState(state: unknown, fallbackName: string) {
+  const project = state && typeof state === "object" && "project" in state
+    ? (state as { project?: Record<string, unknown> }).project
+    : undefined;
+  return {
+    name: cleanText(project?.name, fallbackName),
+    type: cleanText(project?.type, "AI 漫剧"),
+    script: String(project?.script || "")
+  };
+}
+
 export async function GET() {
   const membership = await getCurrentMembership();
   if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
@@ -63,6 +74,10 @@ export async function POST(request: Request) {
   const existing = await prisma.projectWorkspace.findUnique({
     where: { tenantId_projectId: { tenantId: membership.tenantId, projectId } }
   });
+  const existingProject = await prisma.project.findUnique({ where: { id: projectId } });
+  if (existingProject && existingProject.tenantId !== membership.tenantId) {
+    return NextResponse.json({ code: 409, message: "项目 ID 已被其他团队使用，请重新创建项目。" }, { status: 409 });
+  }
   if (existing && !lastUpdatedAt) {
     return NextResponse.json({
       code: 409,
@@ -79,27 +94,61 @@ export async function POST(request: Request) {
   }
 
   if (!existing) {
-    const workspace = await prisma.projectWorkspace.create({
-      data: {
+    const workspace = await prisma.$transaction(async tx => {
+      const projectFields = projectFieldsFromState(state, name);
+      await tx.project.upsert({
+        where: { id: projectId },
+        create: {
+          id: projectId,
+          tenantId: membership.tenantId,
+          ...projectFields,
+          createdById: membership.userId,
+          updatedById: membership.userId
+        },
+        update: {
+          ...projectFields,
+          updatedById: membership.userId
+        }
+      });
+      return tx.projectWorkspace.create({
+        data: {
+          tenantId: membership.tenantId,
+          projectId,
+          name,
+          state,
+          updatedById: membership.userId,
+          updatedByName: membership.user.displayName
+        }
+      });
+    });
+    return NextResponse.json({ code: 0, data: publicWorkspace(workspace) });
+  }
+
+  const updateResult = await prisma.$transaction(async tx => {
+    const projectFields = projectFieldsFromState(state, name);
+    await tx.project.upsert({
+      where: { id: projectId },
+      create: {
+        id: projectId,
         tenantId: membership.tenantId,
-        projectId,
+        ...projectFields,
+        createdById: membership.userId,
+        updatedById: membership.userId
+      },
+      update: {
+        ...projectFields,
+        updatedById: membership.userId
+      }
+    });
+    return tx.projectWorkspace.updateMany({
+      where: { id: existing.id, updatedAt: existing.updatedAt },
+      data: {
         name,
         state,
         updatedById: membership.userId,
         updatedByName: membership.user.displayName
       }
     });
-    return NextResponse.json({ code: 0, data: publicWorkspace(workspace) });
-  }
-
-  const updateResult = await prisma.projectWorkspace.updateMany({
-    where: { id: existing.id, updatedAt: existing.updatedAt },
-    data: {
-      name,
-      state,
-      updatedById: membership.userId,
-      updatedByName: membership.user.displayName
-    }
   });
   if (updateResult.count !== 1) {
     const latest = await prisma.projectWorkspace.findUnique({
@@ -130,14 +179,19 @@ export async function DELETE(request: Request) {
   const workspace = await prisma.projectWorkspace.findUnique({
     where: { tenantId_projectId: { tenantId: membership.tenantId, projectId } }
   });
-  const deleted = await prisma.projectWorkspace.deleteMany({ where: { tenantId: membership.tenantId, projectId } });
+  const deleted = await prisma.$transaction(async tx => {
+    const materials = await tx.material.deleteMany({ where: { tenantId: membership.tenantId, projectId } });
+    const workspaces = await tx.projectWorkspace.deleteMany({ where: { tenantId: membership.tenantId, projectId } });
+    const projects = await tx.project.deleteMany({ where: { tenantId: membership.tenantId, id: projectId } });
+    return { materials, workspaces, projects };
+  });
   await logAudit({
     request,
     actor: membership,
     action: "project.delete",
     targetType: "project",
     targetId: projectId,
-    metadata: { name: workspace?.name, deletedCount: deleted.count }
+    metadata: { name: workspace?.name, deletedWorkspaces: deleted.workspaces.count, deletedMaterials: deleted.materials.count, deletedProjects: deleted.projects.count }
   });
   return NextResponse.json({ code: 0 });
 }

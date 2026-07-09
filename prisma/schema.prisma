@@ -25,6 +25,7 @@ model Tenant {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   memberships Membership[]
+  projects    Project[]
   materials   Material[]
   workspaces  ProjectWorkspace[]
   auditLogs   AuditLog[]
@@ -41,6 +42,8 @@ model User {
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
   memberships  Membership[]
+  createdProjects Project[] @relation("ProjectCreatedBy")
+  updatedProjects Project[] @relation("ProjectUpdatedBy")
   materials    Material[]
   workspaces   ProjectWorkspace[]
   auditLogs    AuditLog[]
@@ -59,6 +62,26 @@ model Membership {
 
   @@unique([tenantId, userId])
   @@index([userId])
+}
+
+model Project {
+  id            Int      @id
+  tenantId      String
+  name          String
+  type          String   @default("AI 漫剧")
+  script        String   @default("")
+  status        String   @default("active")
+  createdById   String?
+  updatedById   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy     User?    @relation("ProjectCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy     User?    @relation("ProjectUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, updatedAt])
+  @@index([createdById])
+  @@index([updatedById])
 }
 
 model Material {

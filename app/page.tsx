@@ -70,7 +70,12 @@ function safeProjectId(value: unknown, fallback = emptyProjectState.project.id) 
 }
 
 function createProjectId() {
-  return 1000000000 + (Date.now() % 1000000000);
+  if (typeof window !== "undefined" && window.crypto?.getRandomValues) {
+    const buffer = new Uint32Array(1);
+    window.crypto.getRandomValues(buffer);
+    return 1000000000 + (buffer[0] % 1000000000);
+  }
+  return 1000000000 + Math.floor(Math.random() * 1000000000);
 }
 
 function normalizeAppState(value: Partial<AppState> | undefined, fallback: AppState = emptyProjectState): AppState {
