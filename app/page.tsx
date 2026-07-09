@@ -412,7 +412,7 @@ export default function Home() {
   const [batchTargetDuration, setBatchTargetDuration] = useState(12);
   const [mentionMenuOpen, setMentionMenuOpen] = useState(false);
   const [omniReferenceEnabled, setOmniReferenceEnabled] = useState(false);
-  const mentionMaterials = state.materials.filter(material => material.kind === "image");
+  const mentionMaterials = state.materials.filter(material => material.kind === "image" || material.kind === "video" || material.kind === "audio");
 
   const [authUsers, setAuthUsers] = useState<Record<string, AuthUser>>({});
   const [authReady, setAuthReady] = useState(false);
@@ -1996,7 +1996,7 @@ export default function Home() {
       shotPromptRef.current?.focus();
       shotPromptRef.current?.setSelectionRange(nextCursor, nextCursor);
     }, 0);
-    if (material.previewUrl) setSelectedMaterialIds(prev => prev.includes(material.id) ? prev : [...prev, material.id]);
+    if (materialApiUrl(material)) setSelectedMaterialIds(prev => prev.includes(material.id) ? prev : [...prev, material.id]);
     setMentionMenuOpen(false);
   }
 
@@ -2342,9 +2342,9 @@ export default function Home() {
                 <div className="reference-picker-actions"><button className="btn-primary btn-small" onClick={() => prepareReferenceUpload(pickerGroup.kind, pickerGroup.role)}>上传{pickerGroup.title}</button><button className="btn-ghost btn-small" onClick={() => setReferencePickerRole(null)}>关闭</button></div>
               </div>}
             </div>
-            <textarea ref={shotPromptRef} className="video-prompt-editor" value={shotPrompt} onChange={event => setShotPrompt(event.target.value)} placeholder="描述视频内容，可点击 @ 选择素材库图片并插入人物名称，例如：@林凡 在教室门口回头，镜头缓慢推进。" />
+            <textarea ref={shotPromptRef} className="video-prompt-editor" value={shotPrompt} onChange={event => setShotPrompt(event.target.value)} placeholder="描述视频内容，可点击 @ 选择参考素材并插入素材名称，例如：@林凡 在教室门口回头，镜头缓慢推进。" />
             {omniReferenceEnabled && <div className="omni-reference-panel"><div className="omni-reference-head"><span className="live-dot" /><strong>全能参考模式已开启</strong><em>{omniReferenceItems.length ? `${omniReferenceItems.length} 个参考素材将随任务提交` : "等待绑定参考素材"}</em></div><div className="omni-reference-strip">{omniReferenceItems.length ? omniReferenceItems.map((item, index) => <div className="omni-ref-chip" key={item.id}>{item.previewUrl && item.kind === "image" ? <img src={item.previewUrl} alt={item.name} /> : <span className={`reference-type-badge ${item.kind === "视频" ? "video" : item.kind === "音频" ? "audio" : item.kind}`}>{String(item.kind).slice(0, 2)}</span>}<b>参考{index + 1}</b><small>{item.name}</small></div>) : <div className="omni-empty">请先在素材库选择可生成素材。</div>}</div>{localOnlyReferences.length > 0 && <p className="omni-warning">已忽略 {localOnlyReferences.length} 个仅预览素材；这类素材暂时不能随任务提交。</p>}</div>}
-            {mentionMenuOpen && <div className="video-mention-popover"><div className="mention-panel-head"><strong>可选参考素材</strong><span>点击素材插入到提示词；只有“可生成”素材会随任务提交</span></div><div className="mention-panel-list">{mentionMaterials.length ? mentionMaterials.map(material => { const usable = Boolean(material.reviewedAssetUrl || material.seedanceAssetUrl || material.url); const selected = selectedMaterialIds.includes(material.id); return <div key={material.id} className={`mention-item ${selected ? "selected" : ""}`}><button onClick={() => insertMention(material)}><div className="mention-thumb">{material.previewUrl ? <img src={material.previewUrl} alt={material.name} /> : <span>@</span>}</div><div className="mention-meta"><strong>{material.name}</strong><span>{usable ? "可生成" : "仅预览"}</span></div></button><button className="btn-ghost btn-small" onClick={() => toggleMaterial(material.id)}>{selected ? "取消参考" : "选为参考"}</button><button className="btn-danger btn-small" onClick={() => deleteMaterial(material.id)}>删除</button></div>; }) : <div className="mention-empty">素材库里还没有图片素材，请先上传图片。</div>}</div></div>}
+            {mentionMenuOpen && <div className="video-mention-popover"><div className="mention-panel-head"><strong>可选参考素材</strong><span>点击素材插入到提示词；只有“可生成”素材会随任务提交</span></div><div className="mention-panel-list">{mentionMaterials.length ? mentionMaterials.map(material => { const usable = Boolean(materialApiUrl(material)); const selected = selectedMaterialIds.includes(material.id); return <div key={material.id} className={`mention-item ${selected ? "selected" : ""}`}><button onClick={() => insertMention(material)}><div className="mention-thumb">{referenceThumb(material)}</div><div className="mention-meta"><strong>{material.name}</strong><span>{usable ? "可生成" : "仅预览"}</span></div></button><button className="btn-ghost btn-small" onClick={() => toggleMaterial(material.id)}>{selected ? "取消参考" : "选为参考"}</button><button className="btn-danger btn-small" onClick={() => deleteMaterial(material.id)}>删除</button></div>; }) : <div className="mention-empty">素材库里还没有可引用素材。</div>}</div></div>}
             <div className="video-composer-toolbar">
               <div className="video-settings-grid">
                 <button className={`tool-chip primary ${omniReferenceEnabled ? "active" : ""}`} onClick={() => setOmniReferenceEnabled(enabled => !enabled)}>全能参考{omniReferenceEnabled ? "已开" : ""}</button>
