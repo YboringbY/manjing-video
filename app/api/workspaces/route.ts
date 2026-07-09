@@ -18,6 +18,22 @@ function cleanText(value: unknown, fallback = "") {
   return text || fallback;
 }
 
+type WorkspaceRow = {
+  projectId: number;
+  name: string;
+  state: unknown;
+  updatedByName: string | null;
+  updatedAt: Date;
+};
+
+type ProjectContentRow = Prisma.ProjectGetPayload<{
+  include: {
+    shots: true;
+    videoTasks: true;
+    videoAssets: true;
+  };
+}>;
+
 function publicWorkspace(workspace: {
   projectId: number;
   name: string;
@@ -32,6 +48,62 @@ function publicWorkspace(workspace: {
     updatedBy: workspace.updatedByName || undefined,
     updatedAt: workspace.updatedAt.toISOString()
   };
+}
+
+function numberFromBigInt(value: bigint) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) ? number : 0;
+}
+
+function baseStateObject(state: unknown) {
+  return state && typeof state === "object" ? state as Record<string, unknown> : {};
+}
+
+function hydrateWorkspace(workspace: WorkspaceRow, project?: ProjectContentRow) {
+  if (!project) return publicWorkspace(workspace);
+  const baseState = baseStateObject(workspace.state);
+  const hydratedState = {
+    ...baseState,
+    project: {
+      ...(baseState.project && typeof baseState.project === "object" ? baseState.project as Record<string, unknown> : {}),
+      id: project.id,
+      name: project.name,
+      type: project.type,
+      script: project.script
+    },
+    shots: project.shots.map(shot => ({
+      id: numberFromBigInt(shot.id),
+      title: shot.title,
+      prompt: shot.prompt,
+      ratio: shot.ratio,
+      duration: shot.duration,
+      status: shot.status,
+      resolution: shot.resolution || undefined,
+      width: shot.width || undefined,
+      height: shot.height || undefined
+    })),
+    tasks: project.videoTasks.map(task => ({
+      id: task.id,
+      shotId: numberFromBigInt(task.shotId),
+      shotTitle: task.shotTitle,
+      provider: task.provider,
+      status: task.status,
+      result: task.result,
+      providerTaskId: task.providerTaskId || undefined,
+      apiProfile: task.apiProfileId ? { id: task.apiProfileId } : undefined,
+      snapshot: task.snapshot || undefined
+    })),
+    assets: project.videoAssets.map(asset => ({
+      id: numberFromBigInt(asset.id),
+      shotId: numberFromBigInt(asset.shotId),
+      title: asset.title,
+      meta: asset.meta,
+      gradient: asset.gradient,
+      videoUrl: asset.videoUrl || undefined,
+      providerTaskId: asset.providerTaskId || undefined
+    }))
+  };
+  return publicWorkspace({ ...workspace, name: project.name, state: hydratedState });
 }
 
 function projectFieldsFromState(state: unknown, fallbackName: string) {
@@ -156,12 +228,23 @@ export async function GET() {
   const membership = await getCurrentMembership();
   if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
 
-  const workspaces = await prisma.projectWorkspace.findMany({
-    where: { tenantId: membership.tenantId },
-    orderBy: { updatedAt: "desc" }
-  });
+  const [workspaces, projects] = await Promise.all([
+    prisma.projectWorkspace.findMany({
+      where: { tenantId: membership.tenantId },
+      orderBy: { updatedAt: "desc" }
+    }),
+    prisma.project.findMany({
+      where: { tenantId: membership.tenantId },
+      include: {
+        shots: { orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] },
+        videoTasks: { orderBy: { updatedAt: "desc" } },
+        videoAssets: { orderBy: { updatedAt: "desc" } }
+      }
+    })
+  ]);
+  const projectsById = new Map(projects.map(project => [project.id, project]));
 
-  return NextResponse.json({ code: 0, data: workspaces.map(publicWorkspace) });
+  return NextResponse.json({ code: 0, data: workspaces.map(workspace => hydrateWorkspace(workspace, projectsById.get(workspace.projectId))) });
 }
 
 export async function POST(request: Request) {
