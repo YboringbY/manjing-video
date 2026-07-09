@@ -1072,7 +1072,6 @@ export default function Home() {
     const nextShot: Shot = { id, title: nextTitle || `视频 ${state.shots.length + 1}`, prompt: nextPrompt, ratio: nextRatio, duration: nextDuration, resolution: nextResolution, status: "pending", ...shotSizeForRatio(nextRatio) };
     setState(prev => ({ ...prev, shots: [...prev.shots, nextShot] }));
     setShotTitle("");
-    setShotPrompt("");
     startGeneration(id, nextShot, context);
   }
 
