@@ -51,33 +51,18 @@ const PROJECT_TYPES = ["AI 漫剧", "AI 真人剧"] as const;
 const MAX_DATABASE_INT = 2147483647;
 const MIN_VIDEO_REFERENCE_IMAGE_SIDE = 300;
 
-const seedState: AppState = {
-  project: { id: 1, name: "短剧团队 Demo", type: "AI 真人剧", script: "女主带着关键合同来到男主公司，两人在会议室正面对峙，揭开三年前误会的真相。" },
-  shots: [
-    { id: 1, title: "女主入场", prompt: "女主推门进入办公室，灯光偏冷，镜头缓慢推进。", ratio: "9:16 竖屏短剧", duration: 5, status: "pending" },
-    { id: 2, title: "男主反应", prompt: "男主抬头看向门口，表情从惊讶转为克制。", ratio: "9:16 竖屏短剧", duration: 4, status: "pending" }
-  ],
-  tasks: [],
-  assets: [],
-  materials: []
-};
-
-const demo2State: AppState = {
-  project: { id: 2, name: "demo2", type: "AI 漫剧", script: "用于保留第二个演示项目，可切换后继续添加剧本、视频和素材。" },
+const emptyProjectState: AppState = {
+  project: { id: 1, name: "未命名项目", type: "AI 真人剧", script: "" },
   shots: [],
   tasks: [],
   assets: [],
   materials: []
 };
 
-const defaultProjectStates: ProjectStates = {
-  [seedState.project.id]: seedState,
-  [demo2State.project.id]: demo2State
-};
+const emptyProjectStates: ProjectStates = { [emptyProjectState.project.id]: emptyProjectState };
+const emptyProjects = [emptyProjectState.project];
 
-const defaultProjects = [seedState.project, demo2State.project];
-
-function safeProjectId(value: unknown, fallback = seedState.project.id) {
+function safeProjectId(value: unknown, fallback = emptyProjectState.project.id) {
   const id = Number(value);
   if (Number.isInteger(id) && id > 0 && id <= MAX_DATABASE_INT) return id;
   if (Number.isFinite(id) && id > MAX_DATABASE_INT) return 1000000000 + (Math.abs(Math.trunc(id)) % 1000000000);
@@ -88,7 +73,7 @@ function createProjectId() {
   return 1000000000 + (Date.now() % 1000000000);
 }
 
-function normalizeAppState(value: Partial<AppState> | undefined, fallback: AppState = seedState): AppState {
+function normalizeAppState(value: Partial<AppState> | undefined, fallback: AppState = emptyProjectState): AppState {
   return {
     project: {
       id: safeProjectId(value?.project?.id, fallback.project.id),
@@ -147,6 +132,10 @@ function mergeMaterials(current: MaterialAsset[], incoming: MaterialAsset[]) {
     seen.add(key);
     return true;
   });
+}
+
+function isLegacySeedProject(project?: Partial<Project>) {
+  return (project?.id === 1 && project.name === "短剧团队 Demo") || (project?.id === 2 && project.name === "demo2");
 }
 
 function materialDimensionText(material: Pick<MaterialAsset, "width" | "height">) {
@@ -313,10 +302,10 @@ async function readApiJson(response: Response, fallbackMessage: string) {
 }
 
 export default function Home() {
-  const [state, setState] = useState<AppState>(seedState);
-  const [projectStates, setProjectStates] = useState<ProjectStates>(defaultProjectStates);
-  const [projects, setProjects] = useState<Project[]>(defaultProjects);
-  const [currentProjectId, setCurrentProjectId] = useState(seedState.project.id);
+  const [state, setState] = useState<AppState>(emptyProjectState);
+  const [projectStates, setProjectStates] = useState<ProjectStates>(emptyProjectStates);
+  const [projects, setProjects] = useState<Project[]>(emptyProjects);
+  const [currentProjectId, setCurrentProjectId] = useState(emptyProjectState.project.id);
   const workspaceUpdatedAtRef = useRef<Record<number, string>>({});
   const generationPollTimersRef = useRef<Record<string, number>>({});
   const [storageReady, setStorageReady] = useState(false);
@@ -327,9 +316,9 @@ export default function Home() {
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [batchPromptInput, setBatchPromptInput] = useState("");
-  const [projectName, setProjectName] = useState(seedState.project.name);
-  const [projectType, setProjectType] = useState(seedState.project.type);
-  const [scriptInput, setScriptInput] = useState(seedState.project.script);
+  const [projectName, setProjectName] = useState("");
+  const [projectType, setProjectType] = useState(emptyProjectState.project.type);
+  const [scriptInput, setScriptInput] = useState(emptyProjectState.project.script);
   const [shotTitle, setShotTitle] = useState("");
   const [shotPrompt, setShotPrompt] = useState("");
   const shotPromptRef = useRef<HTMLTextAreaElement | null>(null);
@@ -548,12 +537,13 @@ export default function Home() {
         };
         const serverProjectStates = projectStatesFromWorkspaces(workspaces);
         const serverProjects = Object.values(serverProjectStates).map(item => item.project);
-        setProjectStates(prev => ({ ...prev, ...serverProjectStates }));
-        setProjects(prev => {
-          const merged = [...serverProjects, ...prev];
-          return merged.filter((project, index, list) => index === list.findIndex(item => item.id === project.id));
-        });
-        if (serverProjectStates[currentProjectId]) setState(serverProjectStates[currentProjectId]);
+        const nextCurrentProjectId = serverProjectStates[currentProjectId] ? currentProjectId : serverProjects[0]?.id || emptyProjectState.project.id;
+        const nextState = serverProjectStates[nextCurrentProjectId] || emptyProjectState;
+        setProjectStates(serverProjectStates);
+        setProjects(serverProjects.length ? serverProjects : emptyProjects);
+        setCurrentProjectId(nextCurrentProjectId);
+        setState(nextState);
+        setScriptInput(nextState.project.script);
         setWorkspaceSyncMessage(`已同步 ${workspaces.length} 个项目工作区。`);
       } catch (error) {
         if (!cancelled) setWorkspaceSyncMessage(error instanceof Error ? error.message : "项目工作区暂时无法同步。");
@@ -629,8 +619,11 @@ export default function Home() {
     if (typeof window === "undefined") return;
     const saved = window.localStorage.getItem(STORAGE_KEY);
     if (!saved) {
-      setProjectStates(defaultProjectStates);
-      setProjects(defaultProjects);
+      setState(emptyProjectState);
+      setProjectStates(emptyProjectStates);
+      setProjects(emptyProjects);
+      setCurrentProjectId(emptyProjectState.project.id);
+      setScriptInput(emptyProjectState.project.script);
       setStorageReady(true);
       return;
     }
@@ -639,29 +632,31 @@ export default function Home() {
       const nextState = normalizeAppState(parsed.state || parsed);
       const savedProjectStates = parsed.projectStates || { [nextState.project.id]: nextState };
       const nextProjectStates: ProjectStates = Object.fromEntries(
-        Object.values({ ...defaultProjectStates, ...savedProjectStates }).map(item => {
+        Object.values(savedProjectStates).map(item => {
           const normalizedState = normalizeAppState(item as Partial<AppState>);
           return [normalizedState.project.id, normalizedState];
-        })
+        }).filter(([, normalizedState]) => !isLegacySeedProject((normalizedState as AppState).project))
       );
       const savedProjects: Project[] = Array.isArray(parsed.projects) ? parsed.projects : Object.values(savedProjectStates).map((item: unknown) => normalizeAppState(item as Partial<AppState>).project);
-      const normalizedSavedProjects = savedProjects.map(project => ({ ...project, id: safeProjectId(project.id) }));
-      const savedProjectIds = new Set(normalizedSavedProjects.map(project => project.id));
-      const nextProjects = [...normalizedSavedProjects, ...defaultProjects.filter(project => !savedProjectIds.has(project.id))].filter((project, index, list) => index === list.findIndex(item => item.id === project.id));
+      const normalizedSavedProjects = savedProjects.map(project => ({ ...project, id: safeProjectId(project.id) })).filter(project => !isLegacySeedProject(project));
+      const nextProjects = normalizedSavedProjects.filter((project, index, list) => index === list.findIndex(item => item.id === project.id));
+      const safeProjects = nextProjects.length ? nextProjects : emptyProjects;
+      const safeProjectStates = nextProjects.length ? nextProjectStates : emptyProjectStates;
       const nextCurrentProjectId = safeProjectId(parsed.currentProjectId || nextState.project.id, nextState.project.id);
-      const currentState = nextProjectStates[nextCurrentProjectId] || nextState;
+      const currentProjectIdFromSaved = safeProjectStates[nextCurrentProjectId] ? nextCurrentProjectId : safeProjects[0].id;
+      const currentState = safeProjectStates[currentProjectIdFromSaved] || emptyProjectState;
       setState(currentState);
-      setProjectStates(nextProjectStates);
-      setProjects(nextProjects);
-      setCurrentProjectId(nextCurrentProjectId);
+      setProjectStates(safeProjectStates);
+      setProjects(safeProjects);
+      setCurrentProjectId(currentProjectIdFromSaved);
       setScriptInput(currentState.project.script);
     } catch {
       window.localStorage.removeItem(STORAGE_KEY);
-      setState(seedState);
-      setProjectStates(defaultProjectStates);
-      setProjects(defaultProjects);
-      setCurrentProjectId(seedState.project.id);
-      setScriptInput(seedState.project.script);
+      setState(emptyProjectState);
+      setProjectStates(emptyProjectStates);
+      setProjects(emptyProjects);
+      setCurrentProjectId(emptyProjectState.project.id);
+      setScriptInput(emptyProjectState.project.script);
     } finally {
       setStorageReady(true);
     }
@@ -1937,18 +1932,18 @@ export default function Home() {
     if (activeImageModels.length && !activeImageModels.includes(imageModel)) setImageModel(activeImageModels[0]);
   }, [activeApiProfileId, apiProfiles, activeTextModels, activeVideoModels, activeImageModels, selectedTextModel, selectedVideoModel, imageModel]);
 
-  function resetDemo() {
-    if (!confirm("确定重置为初始演示数据吗？")) return;
-    const nextProjectStates = { [seedState.project.id]: seedState };
-    const nextProjects = [seedState.project];
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ state: seedState, projectStates: nextProjectStates, projects: nextProjects, currentProjectId: seedState.project.id }));
+  function resetWorkspaceToBlank() {
+    if (!confirm("确定清空本地项目缓存并重置为空白项目吗？")) return;
+    const nextProjectStates = { [emptyProjectState.project.id]: emptyProjectState };
+    const nextProjects = [emptyProjectState.project];
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ state: emptyProjectState, projectStates: nextProjectStates, projects: nextProjects, currentProjectId: emptyProjectState.project.id }));
     setSelectedMaterialIds([]);
     setSelectedLizhenAssetIds([]);
     setGeneratedImages([]);
     setProjectStates(nextProjectStates);
     setProjects(nextProjects);
-    setCurrentProjectId(seedState.project.id);
-    setState(seedState);
+    setCurrentProjectId(emptyProjectState.project.id);
+    setState(emptyProjectState);
   }
 
   function openPromptDialog() {

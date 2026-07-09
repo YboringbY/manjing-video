@@ -535,10 +535,17 @@ npx prisma migrate deploy
   - 生产发现 `c1a93687667...` 和 `663639d868...` 两张素材在 `Material` 表已删除，但仍残留在 `ProjectWorkspace.state.materials` 快照中；原因是素材仍处于数据库表和工作区 JSON 双存储阶段，删除时只删了表记录。
   - `/api/materials` DELETE 已改为幂等：数据库记录已不存在时也返回成功，并清理同租户 `ProjectWorkspace.state.materials` 中 `dbId/id` 匹配的残留项；正常删除时也同步清理快照残留。
   - 验证：`npm run build` 通过；`npx tsc --noEmit` 通过；本地已应用新增 `20260709043000_add_material_dimensions` migration。
+- 2026-07-09 去除硬编码演示项目：
+  - 前端不再硬编码 `短剧团队 Demo` 和 `demo2` 两个演示项目。
+  - 本地缓存为空时只创建一个空白兜底项目 `未命名项目`，不包含演示剧本、分镜或素材。
+  - 读取 localStorage 时不再把默认项目 merge 回已保存项目；同时会过滤旧版本已经写入浏览器缓存的 `短剧团队 Demo/demo2` 种子项目。
+  - 登录后如果服务器已有工作区，项目列表以服务器工作区为准，不再混入本地兜底项目。
+  - “重置演示数据”逻辑改为清空本地项目缓存并重置为空白项目。
+  - 验证：`npm run build` 通过；`npx tsc --noEmit` 通过。
 
 ## 当前部署状态
 
-- 最新 GitHub/生产 commit：`d27df97 Harden legacy asset routes and polling`。本地另有未部署的图片尺寸校验、上游 message 和审计日志增强改动。
+- 最新 GitHub/生产 commit：`3223df2 Validate reference image dimensions`。本地另有未部署的去除硬编码演示项目改动。
 - 生产服务器 `/opt/manjing-video` 已拉取该 commit。
 - 生产 PostgreSQL 当前无待应用 migration。
 - 生产 `npm ci`、`npx prisma migrate deploy`、`npm run build`、`pm2 restart manjing-video --update-env` 已执行成功。
