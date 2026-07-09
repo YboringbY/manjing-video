@@ -46,7 +46,6 @@ const AUTH_STORAGE_KEY = "manjing-video-auth";
 const USER_STORAGE_KEY = "manjing-video-users";
 const API_PROFILE_STORAGE_KEY = "manjing-video-api-profiles";
 const ACTIVE_API_PROFILE_STORAGE_KEY = "manjing-video-active-api-profile";
-const DEFAULT_ASSET_GROUP_ID = "181862014778343444";
 const defaultApiProfiles: ApiProfile[] = [];
 const PROJECT_TYPES = ["AI 漫剧", "AI 真人剧"] as const;
 const MAX_DATABASE_INT = 2147483647;
@@ -135,10 +134,6 @@ function randomGradient() {
   return gradients[Math.floor(Math.random() * gradients.length)];
 }
 
-function assetTypeOf(kind: MaterialKind) {
-  return kind === "image" || kind === "sd2" ? 1 : kind === "video" ? 2 : 3;
-}
-
 function materialKey(material: MaterialAsset) {
   return material.dbId ? `db:${material.dbId}` : material.storagePath ? `storage:${material.storagePath}` : `url:${material.url}`;
 }
@@ -159,12 +154,6 @@ function projectStatesFromWorkspaces(workspaces: WorkspaceRecord[]) {
     const projectId = safeProjectId(normalizedState.project.id || item.projectId);
     return [projectId, { ...normalizedState, project: { ...normalizedState.project, id: projectId } }];
   })) as ProjectStates;
-}
-
-function normalizeAssetUrl(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  return trimmed.startsWith("asset://") ? trimmed : `asset://${trimmed}`;
 }
 
 function getStoredUsers(): Record<string, AuthUser> {
@@ -319,6 +308,7 @@ export default function Home() {
   const [projects, setProjects] = useState<Project[]>(defaultProjects);
   const [currentProjectId, setCurrentProjectId] = useState(seedState.project.id);
   const workspaceUpdatedAtRef = useRef<Record<number, string>>({});
+  const generationPollTimersRef = useRef<Record<string, number>>({});
   const [storageReady, setStorageReady] = useState(false);
   const [activeSection, setActiveSection] = useState<WorkspaceSection>("overview");
   const [projectModalOpen, setProjectModalOpen] = useState(false);
@@ -341,7 +331,6 @@ export default function Home() {
   const [lastFrameMaterialId, setLastFrameMaterialId] = useState<number | null>(null);
   const [materialName, setMaterialName] = useState("角色参考图");
   const [materialUrl, setMaterialUrl] = useState("");
-  const [reviewedAssetInput, setReviewedAssetInput] = useState("");
   const [materialKind, setMaterialKind] = useState<MaterialKind>("image");
   const [materialRole, setMaterialRole] = useState<MaterialRole>("reference_image");
   const [materialMessage, setMaterialMessage] = useState("");
@@ -488,6 +477,13 @@ export default function Home() {
       window.localStorage.removeItem(AUTH_STORAGE_KEY);
       setAuthReady(true);
     }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      Object.values(generationPollTimersRef.current).forEach(timer => window.clearTimeout(timer));
+      generationPollTimersRef.current = {};
+    };
   }, []);
 
   async function fetchUsers() {
@@ -1256,12 +1252,6 @@ export default function Home() {
     }
   }
 
-  async function ensureAssetGroup() {
-    if (state.assetGroupId) return state.assetGroupId;
-    setState(prev => ({ ...prev, assetGroupId: DEFAULT_ASSET_GROUP_ID }));
-    return DEFAULT_ASSET_GROUP_ID;
-  }
-
   async function saveMaterialRecord(materialDraft: MaterialAsset, projectId = currentProjectId) {
     if (!currentUser) return materialDraft;
     const response = await fetch("/api/materials", {
@@ -1275,46 +1265,34 @@ export default function Home() {
   }
 
   async function addMaterialFromUrl() {
-    const reviewedAssetUrl = normalizeAssetUrl(reviewedAssetInput);
-    if (!materialUrl.trim() && !reviewedAssetUrl) {
-      alert("请填写可访问的素材链接。当前本地文件只能预览，不能直接用于生成。");
+    const url = materialUrl.trim();
+    if (!url) {
+      alert("请填写可访问的素材链接。");
       return;
     }
 
-    const materialId = Date.now();
-    const material: MaterialAsset = {
-      id: materialId,
+    const materialDraft: MaterialAsset = {
+      id: Date.now(),
       name: materialName.trim() || "未命名素材",
-      url: materialUrl.trim(),
+      url,
       kind: materialKind,
       role: materialRole,
-      previewUrl: materialUrl.trim(),
-      reviewedAssetUrl
+      previewUrl: url,
+      source: "link",
+      status: "ready",
+      scope: "project",
+      sourceProjectId: currentProjectId,
+      sourceProjectName: state.project.name,
+      createdBy: currentDisplayName
     };
 
-    setState(prev => ({ ...prev, materials: [material, ...prev.materials] }));
-    setMaterialUrl("");
-    setReviewedAssetInput("");
-
-    if (reviewedAssetUrl) {
-      setMaterialMessage("素材已加入当前项目，可用于生成。");
-      return;
-    }
-
     try {
-      setMaterialMessage("素材已加入当前项目，正在准备生成引用...");
-      const groupId = await ensureAssetGroup();
-      const response = await fetch("/api/assets", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ group_id: groupId, url: material.url, asset_name: material.name, asset_type: assetTypeOf(material.kind) })
-      });
-      const result = await readApiJson(response, "准备生成引用失败");
-      if (!response.ok || result.code !== 0 || !result.data?.asset_url) throw new Error(result.message || "准备生成引用失败");
-      setState(prev => ({ ...prev, materials: prev.materials.map(item => item.id === materialId ? { ...item, seedanceAssetUrl: result.data.asset_url } : item) }));
-      setMaterialMessage("素材已准备好，可用于后续视频生成。");
+      const material = await saveMaterialRecord(materialDraft);
+      setState(prev => ({ ...prev, materials: [material, ...prev.materials] }));
+      setMaterialUrl("");
+      setMaterialMessage("URL 素材已加入当前项目，可作为参考素材使用。");
     } catch (error) {
-      setMaterialMessage(error instanceof Error ? `素材已加入当前项目，但暂时不能用于生成：${error.message}` : "素材已加入当前项目，但暂时不能用于生成");
+      setMaterialMessage(error instanceof Error ? error.message : "URL 素材保存失败。");
     }
   }
 
@@ -1369,29 +1347,6 @@ export default function Home() {
     } finally {
       setIsUploadingMaterial(false);
       event.target.value = "";
-    }
-  }
-
-  async function registerMaterialToSeedance(materialId: number) {
-    const material = state.materials.find(item => item.id === materialId);
-    if (!material?.url) {
-      alert("该素材还没有可生成链接，暂时只能预览。");
-      return;
-    }
-    try {
-      setMaterialMessage("正在准备生成引用...");
-      const groupId = await ensureAssetGroup();
-      const response = await fetch("/api/assets", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ group_id: groupId, url: material.url, asset_name: material.name, asset_type: assetTypeOf(material.kind) })
-      });
-      const result = await readApiJson(response, "准备生成引用失败");
-      if (!response.ok || result.code !== 0 || !result.data?.asset_url) throw new Error(result.message || "准备生成引用失败");
-      setState(prev => ({ ...prev, materials: prev.materials.map(item => item.id === materialId ? { ...item, seedanceAssetUrl: result.data.asset_url } : item) }));
-      setMaterialMessage("素材已准备好，可用于生成。");
-    } catch (error) {
-      setMaterialMessage(error instanceof Error ? error.message : "准备生成引用失败");
     }
   }
 
@@ -1649,8 +1604,19 @@ export default function Home() {
     }
   }
 
+  function clearGenerationPoll(localTaskId: string) {
+    const timer = generationPollTimersRef.current[localTaskId];
+    if (timer) window.clearTimeout(timer);
+    delete generationPollTimersRef.current[localTaskId];
+  }
+
   function pollGenerationStatus(shotId: number, localTaskId: string, providerTaskId: string, profileId?: string, attempt = 0, failedAttempts = 0, startedAt = Date.now()) {
-    window.setTimeout(async () => {
+    clearGenerationPoll(localTaskId);
+    const delayMs = Math.min(30000, 5000 + failedAttempts * 2000);
+    const timer = window.setTimeout(async () => {
+      if (generationPollTimersRef.current[localTaskId] !== timer) return;
+      delete generationPollTimersRef.current[localTaskId];
+
       const elapsedMs = Date.now() - startedAt;
       if (elapsedMs > 30 * 60 * 1000 || attempt >= 360 || failedAttempts >= 12) {
         markGenerationFailed(shotId, localTaskId, "状态同步已超过安全重试上限，请稍后手动同步后台状态。");
@@ -1685,10 +1651,12 @@ export default function Home() {
         setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, result: error instanceof Error ? `状态查询暂未成功，继续重试：${error.message}` : "状态查询暂未成功，继续重试" } : item) }));
         pollGenerationStatus(shotId, localTaskId, providerTaskId, profileId, attempt + 1, failedAttempts + 1, startedAt);
       }
-    }, 5000);
+    }, delayMs);
+    generationPollTimersRef.current[localTaskId] = timer;
   }
 
   function completeGeneration(shotId: number, localTaskId: string, videoUrl: string, realDuration?: number, providerTaskId?: string) {
+    clearGenerationPoll(localTaskId);
     setState(prev => {
       const shot = prev.shots.find(item => item.id === shotId);
       if (!shot) return prev;
@@ -1700,6 +1668,7 @@ export default function Home() {
   }
 
   function markGenerationFailed(shotId: number, localTaskId: string, message: string) {
+    clearGenerationPoll(localTaskId);
     setState(prev => ({ ...prev, shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "failed" } : item), tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, status: "failed", result: message } : item), assets: prev.assets.filter(asset => asset.shotId !== shotId) }));
   }
 

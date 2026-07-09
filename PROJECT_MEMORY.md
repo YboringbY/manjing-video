@@ -515,10 +515,17 @@ npx prisma migrate deploy
   - 渠道 Base URL 保存和路由选择时加入允许域名校验，降低 SSRF/误配置风险。
   - 更长期可继续评估云 KMS/Secrets Manager，替代应用本地持有长期加密主密钥。
   - 审计日志留存/归档策略仍待设计，后续需要避免 `AuditLog` 表长期无限增长。
+- 2026-07-09 P1 安全与稳定继续优化：
+  - 旧外接素材接口 `/api/assets` 不再调用历史 `aiopenapi.kuaizi.cn` 上游；未登录返回 401，登录后返回 410，并提示改用 `/api/assets/upload` 和 `/api/materials`。
+  - 旧素材组接口 `/api/assets/groups` 不再创建历史外接素材组；未登录返回 401，登录后返回 410。
+  - 旧余额接口 `/api/user/balance` 不再读取 `SEEDANCE_API_KEY` 或请求历史余额上游；未登录返回 401，管理员登录后返回 410。
+  - 前端 URL 素材保存不再尝试注册 `asset://` 外接引用，只把真实 URL 素材写入当前项目素材库数据库记录。
+  - 视频任务前端轮询已增加 timer registry：同一任务只保留一个轮询 timer，完成、失败和页面卸载都会清理；失败重试延迟从 5 秒逐步退避到最高 30 秒。
+  - 验证：`npm run build` 通过；`npx tsc --noEmit` 在构建后通过；本地 dev 首页返回 200；旧接口未登录返回 401，登录后返回 410。
 
 ## 当前部署状态
 
-- 最新 GitHub/生产 commit：`1c0d0ba Allow aifastnet API profile gateway`。
+- 最新 GitHub/生产 commit：`1c0d0ba Allow aifastnet API profile gateway`。本地另有未部署的 P1 安全稳定优化改动。
 - 生产服务器 `/opt/manjing-video` 已拉取该 commit。
 - 生产 PostgreSQL 当前无待应用 migration。
 - 生产 `npm ci`、`npx prisma migrate deploy`、`npm run build`、`pm2 restart manjing-video --update-env` 已执行成功。
@@ -536,21 +543,18 @@ npx prisma migrate deploy
 
 优先级从高到低：
 
-1. 生产 IP 完整用户路径复测：登录 -> 上传图片 -> 素材库显示 -> 视频工作台选为参考 -> 提交生成 -> 生成记录查看 -> 下载视频。
-2. 新渠道真实调用复测：使用 `https://gw.aifastnet.com` 新增渠道，验证文字/生图/视频模型路由、优先级、状态同步和视频下载。
-3. 跨浏览器共享复测：浏览器 A 新建/编辑项目并生成任务后，浏览器 B 用同一账号登录能看到项目、分镜、生成记录和已生成视频。
-4. 素材库数据库链路复测：上传图片 -> 刷新页面仍显示；生图结果 -> 当前项目素材库显示；提示词 -> 提示词分类显示；团队共享 -> 另一个项目可复用。
-5. 审计日志前端复测：管理员登录后进入“审计日志”，确认能看到登录失败、登录成功、上传素材、项目删除、生成调用等记录；普通用户不可见。
-6. 安全审计继续覆盖：把旧的 `/api/assets`、`/api/assets/groups`、`/api/user/balance`、`/api/projects`、`/api/shots` 等遗留/占位路由确认后删除或补鉴权。
-7. 渠道配置安全继续增强：继续使用 Base URL 白名单；多租户开放前明确平台级/租户级渠道边界；长期评估云 KMS/Secrets Manager。
-8. 将 `ProjectWorkspace` 快照逐步拆成规范化的 `Project / Shot / VideoTask / VideoAsset` 表，降低多人同时编辑时的覆盖风险。
-9. 视频轮询优化：前端轮询增加生命周期清理、最大时长、最大失败次数和退避策略，避免长期标签页持续请求。
-10. 供应商适配抽象：把 ZJLJZN/Seedance/AIFastNet 的 URL 拼接、状态解析、结果提取等逻辑抽成 `lib/providers/*`，减少多路由重复。
-11. 继续拆分 `app/page.tsx`：优先拆素材库、生图工作台、视频工作台、生成记录，并逐步拆业务 hooks。
-12. 生图工作台继续打磨：参数、历史记录、失败重试、生成结果和素材库关系再整理。
-13. 备案完成后切回正式域名 HTTPS：`ASSET_PUBLIC_BASE_URL=https://console.manjingstudio.com`，恢复 Secure cookie。
-14. 配置 ESLint：当前 `npm run lint` 会进入 Next 交互式初始化，需迁移到非交互式 ESLint CLI 后纳入常规验证。
-15. 审计日志留存策略：增加归档或定期清理机制，避免高频生成操作导致 `AuditLog` 表持续膨胀。
+1. 跨浏览器共享复测：浏览器 A 新建/编辑项目并生成任务后，浏览器 B 用同一账号登录能看到项目、分镜、生成记录和已生成视频。
+2. 素材库数据库链路复测：上传图片 -> 刷新页面仍显示；生图结果 -> 当前项目素材库显示；提示词 -> 提示词分类显示；团队共享 -> 另一个项目可复用。
+3. 审计日志前端复测：管理员登录后进入“审计日志”，确认能看到登录失败、登录成功、上传素材、项目删除、生成调用等记录；普通用户不可见。
+4. 安全审计继续覆盖：继续检查是否还有遗留/占位路由、未限流查库接口、可触发费用接口或跨租户边界问题。
+5. 渠道配置安全继续增强：继续使用 Base URL 白名单；多租户开放前明确平台级/租户级渠道边界；长期评估云 KMS/Secrets Manager。
+6. 将 `ProjectWorkspace` 快照逐步拆成规范化的 `Project / Shot / VideoTask / VideoAsset` 表，降低多人同时编辑时的覆盖风险。
+7. 供应商适配抽象：把 ZJLJZN/Seedance/AIFastNet 的 URL 拼接、状态解析、结果提取等逻辑抽成 `lib/providers/*`，减少多路由重复。
+8. 继续拆分 `app/page.tsx`：优先拆素材库、生图工作台、视频工作台、生成记录，并逐步拆业务 hooks。
+9. 生图工作台继续打磨：参数、历史记录、失败重试、生成结果和素材库关系再整理。
+10. 备案完成后切回正式域名 HTTPS：`ASSET_PUBLIC_BASE_URL=https://console.manjingstudio.com`，恢复 Secure cookie。
+11. 配置 ESLint：当前 `npm run lint` 会进入 Next 交互式初始化，需迁移到非交互式 ESLint CLI 后纳入常规验证。
+12. 审计日志留存策略：增加归档或定期清理机制，避免高频生成操作导致 `AuditLog` 表持续膨胀。
 
 ## 客户初步使用反馈待优化
 
