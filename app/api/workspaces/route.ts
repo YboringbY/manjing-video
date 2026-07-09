@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { getCurrentMembership } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { prisma } from "@/lib/prisma";
@@ -42,6 +43,113 @@ function projectFieldsFromState(state: unknown, fallbackName: string) {
     type: cleanText(project?.type, "AI 漫剧"),
     script: String(project?.script || "")
   };
+}
+
+function stateArray(state: unknown, key: "shots" | "tasks" | "assets") {
+  if (!state || typeof state !== "object") return [];
+  const value = (state as Record<string, unknown>)[key];
+  return Array.isArray(value) ? value.filter(item => item && typeof item === "object") as Record<string, unknown>[] : [];
+}
+
+function cleanBigInt(value: unknown) {
+  if (typeof value === "bigint" && value > BigInt(0)) return value;
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return BigInt(value);
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    const parsed = BigInt(value);
+    return parsed > BigInt(0) ? parsed : null;
+  }
+  return null;
+}
+
+function cleanSmallInt(value: unknown, fallback = 0) {
+  const number = Number(value);
+  return Number.isInteger(number) ? number : fallback;
+}
+
+function nullableText(value: unknown) {
+  const text = String(value || "").trim();
+  return text || null;
+}
+
+function taskApiProfileId(task: Record<string, unknown>) {
+  const apiProfile = task.apiProfile;
+  if (!apiProfile || typeof apiProfile !== "object") return null;
+  return nullableText((apiProfile as Record<string, unknown>).id);
+}
+
+async function syncProjectContent(tx: Prisma.TransactionClient, tenantId: string, projectId: number, state: unknown) {
+  const shots = stateArray(state, "shots");
+  const tasks = stateArray(state, "tasks");
+  const assets = stateArray(state, "assets");
+
+  const shotIds = shots.map(shot => cleanBigInt(shot.id)).filter((id): id is bigint => Boolean(id));
+  const taskIds = tasks.map(task => nullableText(task.id)).filter((id): id is string => Boolean(id));
+  const assetIds = assets.map(asset => cleanBigInt(asset.id)).filter((id): id is bigint => Boolean(id));
+
+  await tx.shot.deleteMany({ where: { tenantId, projectId, ...(shotIds.length ? { id: { notIn: shotIds } } : {}) } });
+  await tx.videoTask.deleteMany({ where: { tenantId, projectId, ...(taskIds.length ? { id: { notIn: taskIds } } : {}) } });
+  await tx.videoAsset.deleteMany({ where: { tenantId, projectId, ...(assetIds.length ? { id: { notIn: assetIds } } : {}) } });
+
+  for (let index = 0; index < shots.length; index += 1) {
+    const shot = shots[index];
+    const id = cleanBigInt(shot.id);
+    if (!id) continue;
+    const data = {
+      title: cleanText(shot.title, "未命名分镜"),
+      prompt: String(shot.prompt || ""),
+      ratio: cleanText(shot.ratio, "9:16 竖屏短剧"),
+      duration: cleanSmallInt(shot.duration, 6),
+      status: cleanText(shot.status, "pending"),
+      resolution: nullableText(shot.resolution),
+      width: shot.width == null ? null : cleanSmallInt(shot.width),
+      height: shot.height == null ? null : cleanSmallInt(shot.height),
+      sortOrder: index
+    };
+    await tx.shot.upsert({
+      where: { tenantId_projectId_id: { tenantId, projectId, id } },
+      create: { tenantId, projectId, id, ...data },
+      update: data
+    });
+  }
+
+  for (const task of tasks) {
+    const id = nullableText(task.id);
+    if (!id) continue;
+    const snapshot = task.snapshot && typeof task.snapshot === "object" ? task.snapshot : undefined;
+    const data = {
+      shotId: cleanBigInt(task.shotId) || BigInt(0),
+      shotTitle: cleanText(task.shotTitle, "未命名视频"),
+      provider: cleanText(task.provider, "视频生成"),
+      status: cleanText(task.status, "pending"),
+      result: String(task.result || ""),
+      providerTaskId: nullableText(task.providerTaskId),
+      apiProfileId: taskApiProfileId(task),
+      snapshot
+    };
+    await tx.videoTask.upsert({
+      where: { tenantId_projectId_id: { tenantId, projectId, id } },
+      create: { tenantId, projectId, id, ...data },
+      update: data
+    });
+  }
+
+  for (const asset of assets) {
+    const id = cleanBigInt(asset.id);
+    if (!id) continue;
+    const data = {
+      shotId: cleanBigInt(asset.shotId) || BigInt(0),
+      title: cleanText(asset.title, "未命名视频"),
+      meta: String(asset.meta || ""),
+      gradient: cleanText(asset.gradient, "linear-gradient(135deg, #1f2937, #111827)"),
+      videoUrl: nullableText(asset.videoUrl),
+      providerTaskId: nullableText(asset.providerTaskId)
+    };
+    await tx.videoAsset.upsert({
+      where: { tenantId_projectId_id: { tenantId, projectId, id } },
+      create: { tenantId, projectId, id, ...data },
+      update: data
+    });
+  }
 }
 
 export async function GET() {
@@ -110,6 +218,7 @@ export async function POST(request: Request) {
           updatedById: membership.userId
         }
       });
+      await syncProjectContent(tx, membership.tenantId, projectId, state);
       return tx.projectWorkspace.create({
         data: {
           tenantId: membership.tenantId,
@@ -125,6 +234,17 @@ export async function POST(request: Request) {
   }
 
   const updateResult = await prisma.$transaction(async tx => {
+    const updateResult = await tx.projectWorkspace.updateMany({
+      where: { id: existing.id, updatedAt: existing.updatedAt },
+      data: {
+        name,
+        state,
+        updatedById: membership.userId,
+        updatedByName: membership.user.displayName
+      }
+    });
+    if (updateResult.count !== 1) return updateResult;
+
     const projectFields = projectFieldsFromState(state, name);
     await tx.project.upsert({
       where: { id: projectId },
@@ -140,15 +260,8 @@ export async function POST(request: Request) {
         updatedById: membership.userId
       }
     });
-    return tx.projectWorkspace.updateMany({
-      where: { id: existing.id, updatedAt: existing.updatedAt },
-      data: {
-        name,
-        state,
-        updatedById: membership.userId,
-        updatedByName: membership.user.displayName
-      }
-    });
+    await syncProjectContent(tx, membership.tenantId, projectId, state);
+    return updateResult;
   });
   if (updateResult.count !== 1) {
     const latest = await prisma.projectWorkspace.findUnique({
@@ -180,10 +293,13 @@ export async function DELETE(request: Request) {
     where: { tenantId_projectId: { tenantId: membership.tenantId, projectId } }
   });
   const deleted = await prisma.$transaction(async tx => {
+    const shots = await tx.shot.deleteMany({ where: { tenantId: membership.tenantId, projectId } });
+    const videoTasks = await tx.videoTask.deleteMany({ where: { tenantId: membership.tenantId, projectId } });
+    const videoAssets = await tx.videoAsset.deleteMany({ where: { tenantId: membership.tenantId, projectId } });
     const materials = await tx.material.deleteMany({ where: { tenantId: membership.tenantId, projectId } });
     const workspaces = await tx.projectWorkspace.deleteMany({ where: { tenantId: membership.tenantId, projectId } });
     const projects = await tx.project.deleteMany({ where: { tenantId: membership.tenantId, id: projectId } });
-    return { materials, workspaces, projects };
+    return { shots, videoTasks, videoAssets, materials, workspaces, projects };
   });
   await logAudit({
     request,
@@ -191,7 +307,7 @@ export async function DELETE(request: Request) {
     action: "project.delete",
     targetType: "project",
     targetId: projectId,
-    metadata: { name: workspace?.name, deletedWorkspaces: deleted.workspaces.count, deletedMaterials: deleted.materials.count, deletedProjects: deleted.projects.count }
+    metadata: { name: workspace?.name, deletedWorkspaces: deleted.workspaces.count, deletedMaterials: deleted.materials.count, deletedProjects: deleted.projects.count, deletedShots: deleted.shots.count, deletedVideoTasks: deleted.videoTasks.count, deletedVideoAssets: deleted.videoAssets.count }
   });
   return NextResponse.json({ code: 0 });
 }

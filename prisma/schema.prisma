@@ -78,10 +78,77 @@ model Project {
   tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdBy     User?    @relation("ProjectCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedBy     User?    @relation("ProjectUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  shots         Shot[]
+  videoTasks    VideoTask[]
+  videoAssets   VideoAsset[]
 
   @@index([tenantId, updatedAt])
   @@index([createdById])
   @@index([updatedById])
+}
+
+model Shot {
+  id         BigInt
+  tenantId   String
+  projectId  Int
+  title      String
+  prompt     String
+  ratio      String
+  duration   Int
+  status     String   @default("pending")
+  resolution String?
+  width      Int?
+  height     Int?
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, projectId, id])
+  @@index([tenantId, projectId, sortOrder])
+  @@index([tenantId, status])
+}
+
+model VideoTask {
+  id             String
+  tenantId       String
+  projectId      Int
+  shotId         BigInt
+  shotTitle      String
+  provider       String
+  status         String   @default("pending")
+  result         String
+  providerTaskId String?
+  apiProfileId   String?
+  snapshot       Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, projectId, id])
+  @@index([tenantId, projectId, updatedAt])
+  @@index([tenantId, status])
+  @@index([providerTaskId])
+}
+
+model VideoAsset {
+  id             BigInt
+  tenantId       String
+  projectId      Int
+  shotId         BigInt
+  title          String
+  meta           String
+  gradient       String
+  videoUrl       String?
+  providerTaskId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, projectId, id])
+  @@index([tenantId, projectId, updatedAt])
+  @@index([tenantId, shotId])
+  @@index([providerTaskId])
 }
 
 model Material {
