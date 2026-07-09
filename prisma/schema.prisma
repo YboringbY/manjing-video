@@ -73,6 +73,8 @@ model Material {
   storagePath       String?
   seedanceAssetUrl  String?
   reviewedAssetUrl  String?
+  width             Int?
+  height            Int?
   source            String   @default("upload")
   status            String   @default("ready")
   scope             String   @default("project")

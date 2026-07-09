@@ -14,7 +14,7 @@ export type VideoAsset = { id: number; shotId: number; title: string; meta: stri
 export type MaterialStatus = "ready" | "processing" | "failed";
 export type MaterialSource = "upload" | "generated" | "prompt" | "link";
 export type MaterialScope = "project" | "team";
-export type MaterialAsset = { id: number; dbId?: number; name: string; url: string; kind: MaterialKind; role: MaterialRole; previewUrl?: string; seedanceAssetUrl?: string; reviewedAssetUrl?: string; storagePath?: string; source?: MaterialSource; status?: MaterialStatus; prompt?: string; scope?: MaterialScope; sourceProjectId?: number; sourceProjectName?: string; createdBy?: string };
+export type MaterialAsset = { id: number; dbId?: number; name: string; url: string; kind: MaterialKind; role: MaterialRole; previewUrl?: string; seedanceAssetUrl?: string; reviewedAssetUrl?: string; storagePath?: string; width?: number; height?: number; source?: MaterialSource; status?: MaterialStatus; prompt?: string; scope?: MaterialScope; sourceProjectId?: number; sourceProjectName?: string; createdBy?: string };
 export type AppState = { project: Project; shots: Shot[]; tasks: VideoTask[]; assets: VideoAsset[]; materials: MaterialAsset[]; assetGroupId?: string | number };
 export type ProjectStates = Record<number, AppState>;
 

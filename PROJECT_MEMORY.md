@@ -522,10 +522,23 @@ npx prisma migrate deploy
   - 前端 URL 素材保存不再尝试注册 `asset://` 外接引用，只把真实 URL 素材写入当前项目素材库数据库记录。
   - 视频任务前端轮询已增加 timer registry：同一任务只保留一个轮询 timer，完成、失败和页面卸载都会清理；失败重试延迟从 5 秒逐步退避到最高 30 秒。
   - 验证：`npm run build` 通过；`npx tsc --noEmit` 在构建后通过；本地 dev 首页返回 200；旧接口未登录返回 401，登录后返回 410。
+- 2026-07-09 生产视频失败率排查与修复：
+  - 排查确认当天 4 个新视频任务均为“创建成功、上游生成失败”，失败模型为 `doubao-seedance-2-0-260128`。
+  - 上游原始失败原因是参考图资源同步失败：`InvalidParameter.WidthTooSmall` 或 `InvalidParameter.HeightTooSmall`，火山要求参考图宽高均在 `300px - 6000px`。
+  - 当天失败素材尺寸包括 `360x202`、`202x360`、`360x270`、`360x200`，均有一边低于 300px。
+  - 新增轻量图片尺寸解析工具，支持 JPEG/PNG/WebP header 读取，不引入 `sharp` 等重依赖。
+  - 上传图片时返回并保存 `width/height`；小于 300px 的图片允许保存，但会提示“不建议直接用于视频生成”。
+  - `Material` 表新增 `width`、`height` 字段；素材库卡片会显示尺寸和“尺寸偏小”提示。
+  - 视频生成前端会拦截已知尺寸偏小的参考图；后端 `/api/video-tasks` 也会对本服务器 `/uploads/...` 图片读取本地文件尺寸并兜底拦截，避免继续提交给上游。
+  - `/api/video-tasks/status` 改为优先返回上游详细 `message`，不再只把 `task failed` 展示给用户。
+  - 审计日志补充视频创建字段：`duration / ratio / resolution / inputType / imageCount / videoCount / audioCount / promptLength`；小图拦截记为 `blocked`，上游状态失败记为 `video_task.status`。
+  - 生产发现 `c1a93687667...` 和 `663639d868...` 两张素材在 `Material` 表已删除，但仍残留在 `ProjectWorkspace.state.materials` 快照中；原因是素材仍处于数据库表和工作区 JSON 双存储阶段，删除时只删了表记录。
+  - `/api/materials` DELETE 已改为幂等：数据库记录已不存在时也返回成功，并清理同租户 `ProjectWorkspace.state.materials` 中 `dbId/id` 匹配的残留项；正常删除时也同步清理快照残留。
+  - 验证：`npm run build` 通过；`npx tsc --noEmit` 通过；本地已应用新增 `20260709043000_add_material_dimensions` migration。
 
 ## 当前部署状态
 
-- 最新 GitHub/生产 commit：`1c0d0ba Allow aifastnet API profile gateway`。本地另有未部署的 P1 安全稳定优化改动。
+- 最新 GitHub/生产 commit：`d27df97 Harden legacy asset routes and polling`。本地另有未部署的图片尺寸校验、上游 message 和审计日志增强改动。
 - 生产服务器 `/opt/manjing-video` 已拉取该 commit。
 - 生产 PostgreSQL 当前无待应用 migration。
 - 生产 `npm ci`、`npx prisma migrate deploy`、`npm run build`、`pm2 restart manjing-video --update-env` 已执行成功。

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentMembership } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { fetchWithTimeout } from "@/lib/http";
+import { isSmallReferenceImage, MIN_VIDEO_REFERENCE_IMAGE_SIDE, readLocalUploadImageDimensions } from "@/lib/image-dimensions";
 import { rateLimit } from "@/lib/rate-limit";
 import { resolveModelRoute, toPublicProfile } from "../api-profiles/store";
 
@@ -145,6 +146,11 @@ function validateMediaUrl(url: string) {
   }
 }
 
+async function findSmallLocalReferenceImages(urls: string[]) {
+  const checked = await Promise.all(urls.map(async url => ({ url, dimensions: await readLocalUploadImageDimensions(url) })));
+  return checked.filter(item => isSmallReferenceImage(item.dimensions));
+}
+
 function extractTaskId(result: FastGateTaskResponse) {
   return result.task_id || result.data?.task_id || result.id || result.data?.id;
 }
@@ -152,6 +158,38 @@ function extractTaskId(result: FastGateTaskResponse) {
 function extractError(result: FastGateTaskResponse) {
   if (typeof result.error === "string") return result.error;
   return result.error?.message || result.message || "创建 Seedance 任务失败";
+}
+
+function videoAuditMetadata(params: {
+  model: string;
+  provider: string;
+  profileId?: string;
+  duration?: number;
+  ratio?: string;
+  resolution?: string;
+  inputType?: string;
+  imageCount?: number;
+  videoCount?: number;
+  audioCount?: number;
+  promptLength?: number;
+  status?: number;
+  message?: string;
+}) {
+  return {
+    model: params.model,
+    provider: params.provider,
+    profileId: params.profileId,
+    duration: params.duration,
+    ratio: params.ratio,
+    resolution: params.resolution,
+    inputType: params.inputType,
+    imageCount: params.imageCount,
+    videoCount: params.videoCount,
+    audioCount: params.audioCount,
+    promptLength: params.promptLength,
+    status: params.status,
+    message: params.message
+  };
 }
 
 export async function GET(request: Request) {
@@ -248,6 +286,21 @@ export async function POST(request: Request) {
   if (body.input_type === "first_last_frame" && imageUrls.length < 2) {
     return NextResponse.json({ code: 400, message: "首尾帧生成需要同时提供首帧和尾帧图片。" }, { status: 400 });
   }
+  const inputType = imageUrls.length || videoUrls.length || audioUrls.length ? body.input_type || "reference" : "text_to_video";
+  const smallReferenceImages = await findSmallLocalReferenceImages(imageUrls);
+  if (smallReferenceImages.length) {
+    const details = smallReferenceImages.map(item => `${item.dimensions?.width}x${item.dimensions?.height}`).join("、");
+    const message = `参考图片尺寸过小（${details}）。视频参考图要求宽高都至少 ${MIN_VIDEO_REFERENCE_IMAGE_SIDE}px，请上传更高清图片后再生成。`;
+    await logAudit({
+      request,
+      actor: membership,
+      action: "video_task.create",
+      targetType: "video_task",
+      result: "blocked",
+      metadata: videoAuditMetadata({ model: requestedModel, provider: name, profileId: route?.profile.id, duration, ratio: normalizeRatio(shot.ratio), resolution: body.resolution || "720p", inputType, imageCount: imageUrls.length, videoCount: videoUrls.length, audioCount: audioUrls.length, promptLength: prompt.length, message })
+    });
+    return NextResponse.json({ code: 400, message }, { status: 400 });
+  }
   const payloadImageUrls = body.input_type === "first_last_frame" ? imageUrls.slice(0, 2) : imageUrls;
   const content = [
     { type: "text", text: prompt },
@@ -256,7 +309,6 @@ export async function POST(request: Request) {
     ...normalizeMedia(body.audios, 3, "audio")
   ];
 
-  const inputType = imageUrls.length || videoUrls.length || audioUrls.length ? body.input_type || "reference" : "text_to_video";
   const payload = isZJProvider(baseUrl) ? {
     model: requestedModel,
     prompt,
@@ -303,7 +355,7 @@ export async function POST(request: Request) {
       action: "video_task.create",
       targetType: "video_task",
       result: "failure",
-      metadata: { model: requestedModel, provider: name, message: error instanceof Error ? error.message : "视频生成上游请求失败。" }
+      metadata: videoAuditMetadata({ model: requestedModel, provider: name, profileId: route?.profile.id, duration, ratio: normalizeRatio(shot.ratio), resolution: body.resolution || "720p", inputType, imageCount: imageUrls.length, videoCount: videoUrls.length, audioCount: audioUrls.length, promptLength: prompt.length, message: error instanceof Error ? error.message : "视频生成上游请求失败。" })
     });
     return NextResponse.json({ code: 504, message: error instanceof Error ? error.message : "视频生成上游请求失败。" }, { status: 504 });
   }
@@ -320,7 +372,7 @@ export async function POST(request: Request) {
       action: "video_task.create",
       targetType: "video_task",
       result: "failure",
-      metadata: { model: requestedModel, provider: name, status: response.status, message: extractError(result) }
+      metadata: videoAuditMetadata({ model: requestedModel, provider: name, profileId: route?.profile.id, duration, ratio: normalizeRatio(shot.ratio), resolution: body.resolution || "720p", inputType, imageCount: imageUrls.length, videoCount: videoUrls.length, audioCount: audioUrls.length, promptLength: prompt.length, status: response.status, message: extractError(result) })
     });
     return NextResponse.json(
       {
@@ -339,14 +391,7 @@ export async function POST(request: Request) {
     targetType: "video_task",
     targetId: taskId,
     metadata: {
-      model: requestedModel,
-      provider: name,
-      profileId: route?.profile.id,
-      resolution: body.resolution || "720p",
-      inputType,
-      imageCount: imageUrls.length,
-      videoCount: videoUrls.length,
-      audioCount: audioUrls.length
+      ...videoAuditMetadata({ model: requestedModel, provider: name, profileId: route?.profile.id, duration, ratio: normalizeRatio(shot.ratio), resolution: body.resolution || "720p", inputType, imageCount: imageUrls.length, videoCount: videoUrls.length, audioCount: audioUrls.length, promptLength: prompt.length })
     }
   });
 

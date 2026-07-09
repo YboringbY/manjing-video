@@ -1,0 +1,2 @@
+ALTER TABLE "Material" ADD COLUMN "width" INTEGER;
+ALTER TABLE "Material" ADD COLUMN "height" INTEGER;

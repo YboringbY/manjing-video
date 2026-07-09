@@ -49,6 +49,7 @@ const ACTIVE_API_PROFILE_STORAGE_KEY = "manjing-video-active-api-profile";
 const defaultApiProfiles: ApiProfile[] = [];
 const PROJECT_TYPES = ["AI 漫剧", "AI 真人剧"] as const;
 const MAX_DATABASE_INT = 2147483647;
+const MIN_VIDEO_REFERENCE_IMAGE_SIDE = 300;
 
 const seedState: AppState = {
   project: { id: 1, name: "短剧团队 Demo", type: "AI 真人剧", script: "女主带着关键合同来到男主公司，两人在会议室正面对峙，揭开三年前误会的真相。" },
@@ -148,6 +149,14 @@ function mergeMaterials(current: MaterialAsset[], incoming: MaterialAsset[]) {
   });
 }
 
+function materialDimensionText(material: Pick<MaterialAsset, "width" | "height">) {
+  return material.width && material.height ? `${material.width}x${material.height}` : "";
+}
+
+function isSmallVideoReferenceImage(material: MaterialAsset) {
+  return material.kind === "image" && Boolean(material.width && material.height) && (Number(material.width) < MIN_VIDEO_REFERENCE_IMAGE_SIDE || Number(material.height) < MIN_VIDEO_REFERENCE_IMAGE_SIDE);
+}
+
 function projectStatesFromWorkspaces(workspaces: WorkspaceRecord[]) {
   return Object.fromEntries(workspaces.map(item => {
     const normalizedState = normalizeAppState(item.state);
@@ -196,7 +205,8 @@ function auditActionLabel(action: string) {
     "image.generate": "生成图片",
     "script.generate": "生成剧本",
     "material.delete": "删除素材",
-    "video_task.create": "创建视频任务"
+    "video_task.create": "创建视频任务",
+    "video_task.status": "同步视频状态"
   };
   return map[action] || action;
 }
@@ -1328,6 +1338,8 @@ export default function Home() {
         role,
         previewUrl: result.data.previewUrl || result.data.publicUrl,
         storagePath: result.data.storagePath,
+        width: result.data.width,
+        height: result.data.height,
         source: "upload",
         status: "ready",
         scope: shareUploadToTeam ? "team" : "project",
@@ -1341,7 +1353,9 @@ export default function Home() {
       setActiveAssetTab(kind);
       setActiveAssetScope("project");
       setMaterialName("");
-      setMaterialMessage(shareUploadToTeam ? "素材已上传到当前项目，并加入团队共享。" : "素材已上传到当前项目，可作为参考素材使用。");
+      const dimensionText = materialDimensionText(material);
+      const warning = result.data.warning ? ` ${result.data.warning}` : "";
+      setMaterialMessage(`${shareUploadToTeam ? "素材已上传到当前项目，并加入团队共享。" : "素材已上传到当前项目，可作为参考素材使用。"}${dimensionText ? ` 尺寸：${dimensionText}。` : ""}${warning}`);
     } catch (error) {
       setMaterialMessage(error instanceof Error ? error.message : "上传素材失败");
     } finally {
@@ -1541,6 +1555,14 @@ export default function Home() {
 
     const selectedProjectAssets = state.materials.filter(item => context.materialIds.includes(item.id) && materialApiUrl(item));
     const selectedExternalAssets = lizhenAssets.filter(item => context.externalAssetIds.includes(item.id));
+    const smallReferenceImages = selectedProjectAssets.filter(isSmallVideoReferenceImage);
+    if (smallReferenceImages.length) {
+      const names = smallReferenceImages.map(item => `${item.name}${materialDimensionText(item) ? `（${materialDimensionText(item)}）` : ""}`).join("、");
+      const message = `以下参考图尺寸小于 ${MIN_VIDEO_REFERENCE_IMAGE_SIDE}px，无法用于视频生成：${names}。请上传更高清图片，或先重新生成/放大图片后再使用。`;
+      setMaterialMessage(message);
+      alert(message);
+      return;
+    }
     if (context.omniReferenceEnabled && !selectedProjectAssets.length && !selectedExternalAssets.length) {
       alert("全能参考模式需要先选择至少 1 个可生成参考素材。");
       return;
@@ -2055,6 +2077,8 @@ export default function Home() {
         role: "reference_image" as MaterialRole,
         previewUrl: item.previewUrl || item.publicUrl,
         storagePath: item.storagePath,
+        width: imageWidth,
+        height: imageHeight,
         source: "generated",
         status: "ready",
         scope: "project",
@@ -2415,7 +2439,7 @@ export default function Home() {
                   {material.kind === "image" && materialPreviewUrl(material) ? <img src={materialPreviewUrl(material)} alt={material.name} /> : material.kind === "video" && materialPreviewUrl(material) ? <video src={materialPreviewUrl(material)} muted preload="metadata" /> : material.kind === "audio" && materialPreviewUrl(material) ? <span>音频</span> : <span>{material.kind === "sd2" ? "提示词" : material.kind}</span>}
                 </div>
                 {renamingMaterialId === material.id ? <div className="material-rename-row" onClick={event => event.stopPropagation()}><input value={renamingMaterialName} onChange={event => setRenamingMaterialName(event.target.value)} onKeyDown={event => { if (event.key === "Enter") saveMaterialName(material); if (event.key === "Escape") setRenamingMaterialId(null); }} autoFocus /><button className="btn-primary btn-small" onClick={() => saveMaterialName(material)}>保存</button><button className="btn-ghost btn-small" onClick={() => setRenamingMaterialId(null)}>取消</button></div> : <strong>{material.name}</strong>}
-                <p className="muted">{material.kind === "sd2" ? "提示词" : material.kind === "image" ? "图片" : material.kind === "video" ? "视频" : "音频"}{material.source === "generated" ? " / 生图" : material.source === "upload" ? " / 上传" : ""}{material.scope === "team" ? " / 团队共享" : " / 项目独享"}</p>
+                <p className="muted">{material.kind === "sd2" ? "提示词" : material.kind === "image" ? "图片" : material.kind === "video" ? "视频" : "音频"}{material.source === "generated" ? " / 生图" : material.source === "upload" ? " / 上传" : ""}{materialDimensionText(material) ? ` / ${materialDimensionText(material)}` : ""}{isSmallVideoReferenceImage(material) ? " / 尺寸偏小" : ""}{material.scope === "team" ? " / 团队共享" : " / 项目独享"}</p>
                 <span className={usable ? "reviewed-badge" : "local-only-badge"}>{usable ? "可用" : material.kind === "sd2" ? "提示词" : "处理中"}</span>
                 <div className="actions"><button className="btn-ghost btn-small" onClick={event => { event.stopPropagation(); openRenameMaterial(material); }}>重命名</button><button className="btn-ghost btn-small" onClick={event => { event.stopPropagation(); toggleMaterial(material.id); }}>{selectedMaterialIds.includes(material.id) ? "取消参考" : "选为参考"}</button><button className="btn-danger btn-small" onClick={event => { event.stopPropagation(); deleteMaterial(material.id); }}>删除</button></div>
               </div>
@@ -2431,7 +2455,7 @@ export default function Home() {
                   {material.kind === "image" && materialPreviewUrl(material) ? <img src={materialPreviewUrl(material)} alt={material.name} /> : material.kind === "video" && materialPreviewUrl(material) ? <video src={materialPreviewUrl(material)} muted preload="metadata" /> : material.kind === "audio" && materialPreviewUrl(material) ? <span>音频</span> : <span>{material.kind === "sd2" ? "提示词" : material.kind === "audio" ? "音频" : "素材"}</span>}
                 </div>
                 <strong>{material.name}</strong>
-                <p className="muted">{material.kind === "image" ? "图片" : material.kind === "video" ? "视频" : material.kind === "audio" ? "音频" : "提示词"} / 团队共享</p>
+                <p className="muted">{material.kind === "image" ? "图片" : material.kind === "video" ? "视频" : material.kind === "audio" ? "音频" : "提示词"}{materialDimensionText(material) ? ` / ${materialDimensionText(material)}` : ""}{isSmallVideoReferenceImage(material) ? " / 尺寸偏小" : ""} / 团队共享</p>
                 <span className="reviewed-badge">{imported ? "已在当前项目" : "可复用"}</span>
                 <p className="muted">来自 {material.sourceProjectName || "项目"} · {material.createdBy || "团队成员"}</p>
                 <div className="actions"><button className="btn-ghost btn-small" onClick={event => { event.stopPropagation(); toggleTeamSharedMaterial(material); }}>{selected ? "取消参考" : imported ? "选为参考" : "加入并参考"}</button></div>

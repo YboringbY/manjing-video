@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentMembership } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 import { fetchWithTimeout } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { readServerApiProfiles } from "../../api-profiles/store";
@@ -128,9 +129,19 @@ function extractError(result: FastGateStatusResponse) {
   const dataObject = Array.isArray(result.data) ? undefined : result.data;
   const output = result.output || dataObject?.output;
   const outputText = typeof output === "string" ? output : Array.isArray(output) && typeof output[0] === "string" ? output[0] : "";
-  const message = typeof result.error === "string" ? result.error : result.error?.message || dataObject?.error || result.message || failedOutputMessage(outputText);
+  const errorMessage = typeof result.error === "string" ? result.error : result.error?.message;
+  const detailedMessage = result.message && result.message !== "task failed" ? result.message : undefined;
+  const message = detailedMessage || dataObject?.error || errorMessage || result.message || failedOutputMessage(outputText);
   if (message?.includes("pre_consume_token_quota_failed") || message?.includes("token quota is not enough")) return "账户余额不足，当前额度不足以生成该视频，请充值后重试。";
   return message;
+}
+
+function upstreamHost(baseUrl: string) {
+  try {
+    return new URL(baseUrl).hostname;
+  } catch {
+    return baseUrl;
+  }
 }
 
 export async function POST(request: Request) {
@@ -203,6 +214,22 @@ export async function POST(request: Request) {
   const videoUrl = extractVideoUrl(matchedResult);
   const extractedError = extractError(matchedResult);
   const normalizedStatus = videoUrl ? "succeeded" : extractedError ? "failed" : normalizeStatus(rawStatus);
+  if (normalizedStatus === "failed") {
+    await logAudit({
+      request,
+      actor: membership,
+      action: "video_task.status",
+      targetType: "video_task",
+      targetId: body.task_id,
+      result: "failure",
+      metadata: {
+        status: rawStatus || normalizedStatus,
+        message: extractedError,
+        profileId: body.profile_id,
+        upstreamHost: upstreamHost(baseUrl)
+      }
+    });
+  }
 
   if (!finalResponse.ok) {
     if (finalResponse.status === 404) {

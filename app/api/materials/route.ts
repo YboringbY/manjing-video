@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { getCurrentMembership } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { prisma } from "@/lib/prisma";
@@ -27,6 +28,12 @@ function cleanNumber(value: unknown, fallback = 0) {
   return fallback;
 }
 
+function cleanDimension(value: unknown) {
+  const number = Number(value);
+  if (Number.isInteger(number) && number > 0 && number <= 100000) return number;
+  return undefined;
+}
+
 function publicMaterial(material: {
   id: number;
   projectId: number;
@@ -38,6 +45,8 @@ function publicMaterial(material: {
   storagePath: string | null;
   seedanceAssetUrl: string | null;
   reviewedAssetUrl: string | null;
+  width: number | null;
+  height: number | null;
   source: string;
   status: string;
   scope: string;
@@ -57,6 +66,8 @@ function publicMaterial(material: {
     storagePath: material.storagePath || undefined,
     seedanceAssetUrl: material.seedanceAssetUrl || undefined,
     reviewedAssetUrl: material.reviewedAssetUrl || undefined,
+    width: material.width || undefined,
+    height: material.height || undefined,
     source: material.source,
     status: material.status,
     scope: material.scope,
@@ -65,6 +76,41 @@ function publicMaterial(material: {
     sourceProjectName: material.sourceProjectName || undefined,
     createdBy: material.createdByName || undefined
   };
+}
+
+function removeMaterialFromWorkspaceState(state: unknown, materialId: number) {
+  if (!state || typeof state !== "object") return { state, removedCount: 0 };
+  const workspaceState = state as Record<string, unknown>;
+  const materials = workspaceState.materials;
+  if (!Array.isArray(materials)) return { state, removedCount: 0 };
+
+  const nextMaterials = materials.filter(item => {
+    if (!item || typeof item !== "object") return true;
+    const material = item as Record<string, unknown>;
+    const dbId = Number(material.dbId);
+    const localId = Number(material.id);
+    if (Number.isInteger(dbId) && dbId === materialId) return false;
+    if (!Number.isInteger(dbId) && Number.isInteger(localId) && localId === materialId) return false;
+    return true;
+  });
+  const removedCount = materials.length - nextMaterials.length;
+  if (!removedCount) return { state, removedCount: 0 };
+  return { state: { ...workspaceState, materials: nextMaterials }, removedCount };
+}
+
+async function removeMaterialFromWorkspaceSnapshots(tenantId: string, materialId: number) {
+  const workspaces = await prisma.projectWorkspace.findMany({ where: { tenantId } });
+  let removedCount = 0;
+  for (const workspace of workspaces) {
+    const result = removeMaterialFromWorkspaceState(workspace.state, materialId);
+    if (!result.removedCount) continue;
+    removedCount += result.removedCount;
+    await prisma.projectWorkspace.update({
+      where: { id: workspace.id },
+      data: { state: result.state as Prisma.InputJsonValue }
+    });
+  }
+  return removedCount;
 }
 
 export async function GET(request: Request) {
@@ -126,6 +172,8 @@ export async function POST(request: Request) {
       storagePath: cleanOptionalText(body.storagePath),
       seedanceAssetUrl: cleanOptionalText(body.seedanceAssetUrl),
       reviewedAssetUrl: cleanOptionalText(body.reviewedAssetUrl),
+      width: cleanDimension(body.width),
+      height: cleanDimension(body.height),
       source,
       status,
       scope,
@@ -179,7 +227,11 @@ export async function DELETE(request: Request) {
   if (!id) return NextResponse.json({ code: 400, message: "缺少素材 ID。" }, { status: 400 });
 
   const material = await prisma.material.findFirst({ where: { id, tenantId: membership.tenantId } });
-  if (!material) return NextResponse.json({ code: 404, message: "素材不存在或已被删除。" }, { status: 404 });
+  if (!material) {
+    const workspaceRemovedCount = await removeMaterialFromWorkspaceSnapshots(membership.tenantId, id);
+    await logAudit({ request, actor: membership, action: "material.delete", targetType: "material", targetId: id, metadata: { existed: false, workspaceRemovedCount } });
+    return NextResponse.json({ code: 0, data: { deleted: false, workspaceRemovedCount } });
+  }
 
   const isAdmin = ["super_admin", "tenant_admin"].includes(membership.role);
   const isOwner = material.createdById === membership.userId;
@@ -190,6 +242,7 @@ export async function DELETE(request: Request) {
   }
 
   await prisma.material.delete({ where: { id: material.id } });
-  await logAudit({ request, actor: membership, action: "material.delete", targetType: "material", targetId: material.id, metadata: { name: material.name, kind: material.kind, scope: material.scope, projectId: material.projectId } });
-  return NextResponse.json({ code: 0 });
+  const workspaceRemovedCount = await removeMaterialFromWorkspaceSnapshots(membership.tenantId, material.id);
+  await logAudit({ request, actor: membership, action: "material.delete", targetType: "material", targetId: material.id, metadata: { name: material.name, kind: material.kind, scope: material.scope, projectId: material.projectId, existed: true, workspaceRemovedCount } });
+  return NextResponse.json({ code: 0, data: { deleted: true, workspaceRemovedCount } });
 }

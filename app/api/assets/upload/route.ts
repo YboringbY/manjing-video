@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import { NextResponse } from "next/server";
 import { getCurrentMembership } from "@/lib/auth";
+import { imageDimensionWarning, readImageDimensions } from "@/lib/image-dimensions";
 import { logAudit } from "@/lib/audit";
 import { rateLimit } from "@/lib/rate-limit";
 
@@ -71,9 +72,12 @@ export async function POST(request: Request) {
   const filename = `${Date.now()}-${randomUUID()}${extensionFor(uploadFile)}`;
   const storagePath = path.join(targetDir, filename);
   const relativePath = `/uploads/projects/${projectId}/${kind}/${filename}`;
+  const buffer = Buffer.from(await uploadFile.arrayBuffer());
+  const dimensions = uploadFile.type.startsWith("image/") ? readImageDimensions(buffer, uploadFile.type) : undefined;
+  const warning = imageDimensionWarning(dimensions);
 
   await mkdir(targetDir, { recursive: true });
-  await writeFile(storagePath, Buffer.from(await uploadFile.arrayBuffer()));
+  await writeFile(storagePath, buffer);
 
   await logAudit({
     request,
@@ -87,6 +91,9 @@ export async function POST(request: Request) {
       name: String(formData.get("name") || uploadFile.name || "未命名素材"),
       mimeType: uploadFile.type,
       size: uploadFile.size,
+      width: dimensions?.width,
+      height: dimensions?.height,
+      warning,
       publicUrlConfigured: Boolean(process.env.ASSET_PUBLIC_BASE_URL || process.env.PUBLIC_ASSET_BASE_URL)
     }
   });
@@ -97,6 +104,9 @@ export async function POST(request: Request) {
       name: String(formData.get("name") || uploadFile.name || "未命名素材"),
       mimeType: uploadFile.type,
       size: uploadFile.size,
+      width: dimensions?.width,
+      height: dimensions?.height,
+      warning,
       storagePath,
       previewUrl: relativePath,
       publicUrl: publicUrlFor(relativePath)
