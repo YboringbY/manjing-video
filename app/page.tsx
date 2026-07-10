@@ -837,6 +837,7 @@ export default function Home() {
     setSelectedLizhenAssetIds([]);
     setGeneratedImages([]);
     setProjectModalOpen(false);
+    setActiveSection("overview");
     saveWorkspaceSnapshot(newProjectState).then(() => setWorkspaceSyncMessage("新项目已同步。")).catch(error => setWorkspaceSyncMessage(error instanceof Error ? error.message : "新项目同步失败。"));
   }
 
@@ -897,6 +898,11 @@ export default function Home() {
     setSelectedMaterialIds([]);
     setSelectedLizhenAssetIds([]);
     setGeneratedImages([]);
+  }
+
+  function enterProject(project: Project) {
+    switchProject(project);
+    setActiveSection("overview");
   }
 
   function saveScript() {
@@ -2238,7 +2244,7 @@ export default function Home() {
           projectStates={projectStates}
           visible={activeSection === "project-home"}
           onCreateProject={() => { setProjectName(""); setProjectType(PROJECT_TYPES[0]); setProjectModalOpen(true); }}
-          onSwitchProject={switchProject}
+          onSwitchProject={enterProject}
           onDeleteProject={openDeleteProject}
         />
 

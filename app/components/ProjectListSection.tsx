@@ -38,7 +38,7 @@ export function ProjectListSection({
               <small>{itemState?.shots.length || 0} 条分镜 · {itemState?.materials.length || 0} 个素材 · {itemState?.tasks.length || 0} 个任务</small>
             </button>
             <div className="project-home-card-actions">
-              <button className="btn-ghost btn-small" onClick={() => onSwitchProject(project)}>进入</button>
+              <button className="btn-ghost btn-small" onClick={() => onSwitchProject(project)}>进入概览</button>
               <button className="btn-danger btn-small" onClick={() => onDeleteProject(project)} disabled={projects.length <= 1}>删除</button>
             </div>
           </div>;
