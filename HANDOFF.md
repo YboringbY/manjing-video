@@ -1,111 +1,74 @@
 # 漫镜视频 Handoff
 
-更新时间：2026-07-04
+更新时间：2026-07-10
 
-## 当前上下文
+## 当前状态
 
-用户希望放慢节奏，本地验证一步，再进入下一步。当前不要主动部署服务器。
+- 项目路径：`/Users/keyang/Desktop/manjing_SaaS/manjing-video`
+- 本地开发：`http://localhost:5050`
+- 生产入口：`http://118.196.44.191`
+- 生产域名 `console.manjingstudio.com` 备案前不要恢复访问。
+- 最新生产提交：`166d0a2 Read workspace content from normalized tables`
+- 生产 PM2：`manjing-video` online。
 
-本地项目：
-
-```text
-/Users/keyang/Desktop/manjing_SaaS/manjing-video
-```
-
-本地服务：
-
-```text
-http://localhost:5050
-```
-
-启动：
+本地启动：
 
 ```bash
 npm run dev -- -p 5050
 ```
 
-如遇 `.next` chunk 错误：
+Next chunk/runtime 异常时：
 
 ```bash
 rm -rf .next
 npm run dev -- -p 5050
 ```
 
-## 当前产品状态
+## 产品主线
 
-- 内部团队使用，暂不开放注册。
-- 管理员创建账号并分配角色。
-- 角色为 `super_admin / tenant_admin / user`。
-- `super_admin` 是产品提供商最高权限，可见“模型渠道管理”。
-- `tenant_admin` 是租户管理员，可管理本租户普通用户。
-- `user` 只使用生产功能。
-
-默认账号：
+漫镜视频是短剧团队 AI 视频生产工作台，核心链路是：
 
 ```text
-admin / admin123456
-role: super_admin
+登录 -> 项目 -> 剧本 -> 分镜 -> 素材 -> 视频生成 -> 生成记录/预览/下载
 ```
 
-## 近期完成
+当前不开放自助注册，账号由管理员创建。
 
-- 人员管理改为传统三层角色。
-- 人员管理支持停用和启用。
-- 左侧导航增加“设置与管理”分组。
-- 新增“模型渠道管理”，替代旧“第三方 API Profile / 模型服务配置”。
-- 模型渠道列表优先，点击“新增渠道/编辑”才显示表单。
-- 渠道支持：
-  - Base URL
-  - API Key
-  - 视频模型 ID 列表
-  - 图片模型 ID 列表
-  - 并发数
-- 视频工作台模型下拉来自当前渠道的视频模型列表。
-- 生图工作台模型下拉来自当前渠道的图片模型列表。
-- 删除了“高并发视频生成已开启”等用户侧提示。
-- 删除了“按 task_id 恢复”调试入口。
-- 适配 `zjljzn.ltd` Seedance 中转。
-- 修复上游火山 TOS 视频 URL 无法预览/下载。
-- 明确当前生成视频未转存到我们自己的存储，只保存上游 URL。
+角色：
 
-## 模型渠道重点
+- `super_admin`：系统管理员，可管理模型渠道、成员、审计等。
+- `tenant_admin`：租户管理员，可管理本租户普通用户。
+- `user`：生产使用者。
 
-当前供应商适配：
+## 数据库状态
 
-```text
-https://zjljzn.ltd
-```
+已落表：
 
-Base URL 填 `https://zjljzn.ltd` 即可，后端会自动补路径：
+- `Tenant / User / Membership`
+- `ApiProfile`：模型渠道，API Key 加密落库。
+- `Material`：素材记录。
+- `Project`
+- `Shot`
+- `VideoTask`
+- `VideoAsset`
+- `AuditLog`
+- `ProjectWorkspace`：兼容工作区快照。
 
-- 创建：`/v1/videos/generations`
-- 查询：`/v1/videos/generations/{task_id}`
+重要现状：
 
-注意：
+- `ProjectWorkspace.state` 仍保留，当前属于兼容/过渡层。
+- `/api/workspaces` POST 仍会保存完整快照，同时同步 `Project / Shot / VideoTask / VideoAsset`。
+- `/api/workspaces` GET 已优先从规范化表组装 `project / shots / tasks / assets`，再返回给前端。
+- 当前处于“双写过渡期”，不要长期停留在这个状态。
 
-- `.data/api-profiles.json` 可能包含真实 API Key，不要打印。
-- 当前渠道配置仍是文件存储，后续应迁移到数据库并按租户隔离。
-- 并发数目前是前端提交前限制，不是后台队列系统。
+架构 review 共识：
 
-## 存储现状
+- 方向正确，但需要明确退役 JSON 快照的终点。
+- 优先补 `Material.projectId -> Project.id` 外键，减少孤儿素材风险。
+- 后续拆细粒度 API，减少整包保存和写放大。
+- `Project.id` 仍由客户端生成随机 Int，短期可接受，长期应改为数据库生成或 cuid。
 
-生成视频目前不在我们的服务器或本地存储中。
-
-流程：
-
-```text
-上游生成 -> 返回视频 URL -> 本系统保存 URL -> 代理预览/下载
-```
-
-只有用户点击下载后，文件才保存到用户电脑。本系统尚未做自动转存。
-
-后续应设计：
-
-```text
-生成完成 -> 拉取上游视频 -> 上传自有对象存储 -> 数据库保存自有 URL
-```
-
-## Git 与部署
+## 部署流程
 
 GitHub：
 
@@ -113,61 +76,69 @@ GitHub：
 https://github.com/YboringbY/manjing-video
 ```
 
-推荐工作流：
-
-```text
-本机开发 -> GitHub -> 服务器拉取 GitHub -> 构建运行
-```
-
-服务器：
-
-```text
-118.196.44.191
-root
-```
-
-部署目录曾为：
+生产目录：
 
 ```text
 /opt/manjing-video
 ```
 
-当前用户已要求开始提交和部署流程。
+部署常用流程：
 
-## 2026-07-08 待提交部署内容
+```bash
+git push origin main
+ssh -i /Users/keyang/Desktop/manjing_SaaS/manjing.pem root@118.196.44.191
+cd /opt/manjing-video
+git pull --ff-only
+npm ci
+set -a && . ./.env && set +a
+npx prisma migrate deploy
+npm run build
+pm2 restart manjing-video --update-env
+```
 
-本轮主要是安全和健壮性加固：
+注意：
 
-- 所有费用/上传/渠道相关 API 已加鉴权。
-- 模型渠道写操作要求管理员，普通用户不再看到真实渠道 URL。
-- 服务端不再接受客户端传入的 `api_profile.baseUrl/apiKey`，只使用服务端保存渠道。
-- 生产 `AUTH_SECRET` 必须配置；session payload 增加服务端过期校验。
-- 新增内存限流：
-  - 登录 10 次/分钟。
-  - 剧本 20 次/10 分钟/用户。
-  - 生图 120 次/10 分钟/用户。
-  - 视频创建 90 次/10 分钟/用户。
-  - 视频状态 240 次/分钟/用户。
-  - 视频代理 120 次/分钟/用户。
-  - 上传 40 次/10 分钟/用户。
-- 新增安全响应头和 CSP。
-- 新增生成输入长度限制。
-- 新增上游请求超时和远程图片 25MB 下载上限。
-- 工作区保存增加 `updatedAt` 乐观锁，避免多窗口静默覆盖。
-- 素材删除改为管理员/创建者权限，前端在服务端确认后再移除。
-- `/api/projects`、`/api/shots` 不再返回假成功，登录后返回 410。
+- 不要打印 `.env`、API Key、数据库密码、私钥。
+- Prisma CLI 在生产上需要显式加载 `.env`。
+- 备案前生产测试只用 IP。
 
-部署注意：
+## 近期完成
 
-- 生产域名 `console.manjingstudio.com` 备案前仍必须禁用，不要恢复域名 server block。
-- 生产入口继续使用 `http://118.196.44.191`。
-- 生产 `.env` 已检查存在 `AUTH_SECRET`，不要打印密钥内容。
-- 部署后验证：登录、项目同步、素材上传、生图、视频创建、状态同步、视频预览/下载。
+- `@ 插入到提示词` 已支持图片、视频、音频素材，并按光标位置插入。
+- 开始生成后不再清空视频提示词。
+- 首尾帧改为从已有参考图片中指定，不再显示单独上传首帧/尾帧入口。
+- 素材库支持图片放大、视频预览、音频播放。
+- 视频生成记录和结果按最新在前展示。
+- 项目、分镜、任务、视频结果已从 JSON 快照拆出规范化表。
+- 工作区读取已开始用规范化表回填状态。
 
 ## 下一步建议
 
-1. 让用户确认右上角身份显示、左侧“模型渠道管理”入口和页面布局。
-2. 验证当前渠道的并发数配置是否可见、可保存、可在生成时生效。
-3. 用 ZJLJZN 渠道生成一条 Seedance 任务，验证创建、同步、预览、下载。
-4. 讨论并设计数据库持久化：项目、分镜、素材、生成任务。
-5. 讨论对象存储方案：图片、参考素材、生成视频的长期存储。
+1. 补 `Material` 到 `Project` 的数据库外键和级联删除。
+2. 设计并逐步实现细粒度 API：
+   - 项目基础信息
+   - 剧本正文
+   - 分镜
+   - 视频任务
+   - 视频结果
+3. 把前端写入从整包 `/api/workspaces` 迁到细粒度 API，降低写放大。
+4. 明确 `ProjectWorkspace.state` 退役策略：只作为旧数据兼容/归档，不再作为实时业务真相。
+5. 继续处理客户反馈：
+   - 多场景总时长控制。
+   - 生成记录展示本次引用素材名称。
+   - 拖拽上传作为后续增强项。
+
+## 常用验证
+
+```bash
+npm run build
+npx tsc --noEmit
+```
+
+生产 smoke：
+
+```bash
+curl -I http://118.196.44.191/
+curl -i http://118.196.44.191/api/auth/me
+ssh -i /Users/keyang/Desktop/manjing_SaaS/manjing.pem root@118.196.44.191 "cd /opt/manjing-video && git rev-parse --short HEAD && pm2 status manjing-video --no-color"
+```

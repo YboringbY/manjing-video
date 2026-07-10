@@ -1,6 +1,6 @@
 # 漫镜视频项目记忆
 
-更新时间：2026-07-08
+更新时间：2026-07-10
 
 ## 项目定位
 
@@ -14,6 +14,55 @@
 - 选择模型渠道和模型 ID。
 - 调用 Seedance 2.0 生成视频。
 - 同步生成任务状态，预览或下载生成视频。
+
+## 2026-07-10 当前精简状态
+
+当前生产入口：
+
+```text
+http://118.196.44.191
+```
+
+备案完成前不要恢复 `console.manjingstudio.com` 的生产访问。
+
+最新已部署状态：
+
+- 最新生产提交：`166d0a2 Read workspace content from normalized tables`。
+- 生产 PM2 应用 `manjing-video` 在线。
+- 生产首页返回 `200 OK`。
+- `/api/auth/me` 未登录返回 JSON `401`，符合预期。
+- 生产 Prisma migration 已应用到 10 条。
+
+数据库演进状态：
+
+- 已完成 `Project / Material / Shot / VideoTask / VideoAsset / ApiProfile / AuditLog` 等核心表。
+- `ProjectWorkspace.state` 仍保留为兼容快照，不应长期作为主数据源。
+- `/api/workspaces` POST 当前仍会写 `ProjectWorkspace.state`，同时同步写规范化表。
+- `/api/workspaces` GET 已开始用规范化表回填 `project / shots / tasks / assets` 后返回给前端。
+- 当前架构处于“双写过渡期”：方向正确，但需要尽快推进到“规范化表为唯一业务事实，ProjectWorkspace 只做兼容/归档”。
+
+架构 review 后的下一步优先级：
+
+1. 补 `Material.projectId -> Project.id` 外键，项目删除时由数据库级联保证素材清理。
+2. 明确退役 `ProjectWorkspace.state` 的终点和阶段计划，避免双写长期存在。
+3. 拆细粒度 API：项目基础信息、剧本、分镜、视频任务、视频结果分别写表，减少整包保存和写放大。
+4. 逐步让前端从细粒度 API 读写，`ProjectWorkspace` 只作为旧数据兼容层。
+5. `Project.id` 仍由客户端生成随机 Int，40 人团队阶段可接受，但记录为后续技术债；更干净方向是数据库生成 ID 或 cuid。
+6. `VideoTask.shotId` 暂无复合外键约束，这是当前复合主键设计的取舍，先不主动修。
+
+近期客户反馈已处理：
+
+- `@ 插入到提示词` 已支持图片、视频、音频素材。
+- 点击开始生成后，视频提示词不再自动清空。
+- 视频工作台首尾帧从已有参考图片选择，不再给用户展示单独上传首帧/尾帧的中间思考。
+- 素材库支持图片放大、视频预览、音频播放。
+- 生成记录和视频结果保持最新在前。
+
+近期仍建议关注：
+
+- 多场景总时长控制：提示词包含“场景1/2、场景2/2”时，仍按用户选择的总时长生成一个完整视频。
+- 参考素材引用可视化：生成记录/分镜列表展示本次用到的素材名称。
+- 拖拽上传：后续增强项，先不作为近期主线。
 
 ## 本地项目状态
 
