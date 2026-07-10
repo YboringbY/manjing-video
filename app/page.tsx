@@ -94,7 +94,7 @@ function normalizeAppState(value: Partial<AppState> | undefined, fallback: AppSt
   };
 }
 
-function proxiedVideoUrl(url?: string, download = false, taskId?: string, profile?: ApiProfile) {
+function proxiedVideoUrl(url?: string, download = false, taskId?: string, profile?: Pick<ApiProfile, "id">) {
   if (!url && !taskId) return "";
   const params = new URLSearchParams();
   if (url) params.set("url", url);
@@ -313,6 +313,7 @@ export default function Home() {
   const [currentProjectId, setCurrentProjectId] = useState(emptyProjectState.project.id);
   const workspaceUpdatedAtRef = useRef<Record<number, string>>({});
   const generationPollTimersRef = useRef<Record<string, number>>({});
+  const videoSubmissionInFlightRef = useRef(false);
   const [storageReady, setStorageReady] = useState(false);
   const [activeSection, setActiveSection] = useState<WorkspaceSection>("overview");
   const [projectModalOpen, setProjectModalOpen] = useState(false);
@@ -330,6 +331,7 @@ export default function Home() {
   const [shotRatio, setShotRatio] = useState("9:16 竖屏短剧");
   const [shotDuration, setShotDuration] = useState(5);
   const [shotResolution, setShotResolution] = useState<Shot["resolution"]>("720p");
+  const [isVideoSubmitting, setIsVideoSubmitting] = useState(false);
   const [selectedMaterialIds, setSelectedMaterialIds] = useState<number[]>([]);
   const [firstFrameMaterialId, setFirstFrameMaterialId] = useState<number | null>(null);
   const [lastFrameMaterialId, setLastFrameMaterialId] = useState<number | null>(null);
@@ -1064,6 +1066,7 @@ export default function Home() {
   }
 
   function addShot(preset?: Partial<Pick<Shot, "title" | "prompt" | "ratio" | "duration" | "resolution">>, context = currentGenerationContext()) {
+    if (videoSubmissionInFlightRef.current) return;
     const nextTitle = (preset?.title ?? shotTitle).trim();
     const nextPrompt = (preset?.prompt ?? shotPrompt).trim();
     const nextRatio = preset?.ratio ?? shotRatio;
@@ -1541,10 +1544,10 @@ export default function Home() {
   }
 
   async function startGeneration(shotId: number, injectedShot?: Shot, context = currentGenerationContext()) {
+    if (videoSubmissionInFlightRef.current) return;
     const shot = injectedShot || state.shots.find(item => item.id === shotId);
     if (!shot) return;
 
-    const localTaskId = `MV-${String(Date.now()).slice(-6)}`;
     const localOnlyMaterials = state.materials.filter(item => context.materialIds.includes(item.id) && !materialApiUrl(item));
     if (localOnlyMaterials.length) {
       setMaterialMessage(`已选择 ${localOnlyMaterials.length} 个仅预览素材，无法用于生成：${localOnlyMaterials.map(item => item.name).join("、")}。请改用可生成素材。`);
@@ -1580,7 +1583,6 @@ export default function Home() {
       return;
     }
 
-    const selectedAssetCount = selectedProjectAssets.length + selectedExternalAssets.length;
     const modelForGeneration = context.videoModel || selectedVideoModel || activeApiProfile?.videoModels[0] || activeApiProfile?.model || "";
     const inputType = inferInputType(context);
     const snapshot: VideoTaskSnapshot = {
@@ -1596,12 +1598,11 @@ export default function Home() {
       omniReferenceEnabled: context.omniReferenceEnabled,
       inputType
     };
-    const task: VideoTask = { id: localTaskId, shotId: shot.id, shotTitle: shot.title, provider: "视频生成", status: "running", result: selectedAssetCount ? `任务已提交，按 ${shot.duration}s 生成，${context.omniReferenceEnabled ? "全能参考模式已启用，" : ""}正在使用 ${selectedAssetCount} 个参考素材。` : `任务已提交，按 ${shot.duration}s 生成。`, snapshot };
-
+    videoSubmissionInFlightRef.current = true;
+    setIsVideoSubmitting(true);
     setState(prev => ({
       ...prev,
-      shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "running" } : item),
-      tasks: [task, ...prev.tasks.filter(item => !(item.shotId === shotId && item.status === "running"))]
+      shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "running" } : item)
     }));
 
     const durationControlledShot = { ...shot, prompt: buildDurationControlledPrompt(shot.prompt, shot.duration) };
@@ -1611,17 +1612,27 @@ export default function Home() {
       const response = await fetch("/api/video-tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shot: context.omniReferenceEnabled ? { ...shotForGeneration, prompt: `${shotForGeneration.prompt}\n\n全能参考模式：已启用。请综合所有提交的图片、视频、音频参考素材，保持人物外貌、服装、场景、道具、动作节奏和画面风格一致。优先遵循 reference inputs，不要自行替换角色或背景。` } : shotForGeneration, provider: "seedance-2.0", model_id: modelForGeneration, resolution: shot.resolution || "720p", input_type: inputType, omni_reference: context.omniReferenceEnabled, ...buildMediaPayload(context) })
+        body: JSON.stringify({ project_id: currentProjectId, snapshot, shot: context.omniReferenceEnabled ? { ...shotForGeneration, prompt: `${shotForGeneration.prompt}\n\n全能参考模式：已启用。请综合所有提交的图片、视频、音频参考素材，保持人物外貌、服装、场景、道具、动作节奏和画面风格一致。优先遵循 reference inputs，不要自行替换角色或背景。` } : shotForGeneration, provider: "seedance-2.0", model_id: modelForGeneration, resolution: shot.resolution || "720p", input_type: inputType, omni_reference: context.omniReferenceEnabled, ...buildMediaPayload(context) })
       });
       const result = await readApiJson(response, "创建视频任务失败");
-      if (!response.ok || result.code !== 0 || !result.data?.task_id) throw new Error(result.message || "创建视频任务失败");
+      const serverTask = result.data?.task as VideoTask | undefined;
+      if (serverTask) {
+        setState(prev => ({
+          ...prev,
+          tasks: [serverTask, ...prev.tasks.filter(item => item.id !== serverTask.id && !(item.shotId === shotId && item.status === "running"))]
+        }));
+      }
+      if (!response.ok || result.code !== 0 || !result.data?.task_id || !serverTask) throw new Error(result.message || "创建视频任务失败");
       const providerTaskId = result.data.task_id as string;
-      const resolvedApiProfile = result.data.api_profile as ApiProfile | undefined;
       const selectedLizhenNames = selectedExternalAssets.map(item => item.asset_name).join("、");
-      setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, provider: "视频生成", providerTaskId, apiProfile: resolvedApiProfile, result: `任务已提交：${providerTaskId}${selectedLizhenNames ? `｜参考素材：${selectedLizhenNames}` : ""}` } : item) }));
-      pollGenerationStatus(shotId, localTaskId, providerTaskId, resolvedApiProfile?.id);
+      setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === serverTask.id ? { ...serverTask, result: `任务已提交：${providerTaskId}${selectedLizhenNames ? `｜参考素材：${selectedLizhenNames}` : ""}` } : item) }));
+      pollGenerationStatus(shotId, serverTask.id, providerTaskId);
     } catch (error) {
-      markGenerationFailed(shotId, localTaskId, error instanceof Error ? error.message : "创建视频任务失败");
+      setState(prev => ({ ...prev, shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "failed" } : item) }));
+      setUserActionMessage(error instanceof Error ? error.message : "创建视频任务失败");
+    } finally {
+      videoSubmissionInFlightRef.current = false;
+      setIsVideoSubmitting(false);
     }
   }
 
@@ -1631,49 +1642,50 @@ export default function Home() {
     delete generationPollTimersRef.current[localTaskId];
   }
 
-  function pollGenerationStatus(shotId: number, localTaskId: string, providerTaskId: string, profileId?: string, attempt = 0, failedAttempts = 0, startedAt = Date.now()) {
-    clearGenerationPoll(localTaskId);
+  function pollGenerationStatus(shotId: number, internalTaskId: string, providerTaskId: string, attempt = 0, failedAttempts = 0, startedAt = Date.now()) {
+    clearGenerationPoll(internalTaskId);
     const delayMs = Math.min(30000, 5000 + failedAttempts * 2000);
     const timer = window.setTimeout(async () => {
-      if (generationPollTimersRef.current[localTaskId] !== timer) return;
-      delete generationPollTimersRef.current[localTaskId];
+      if (generationPollTimersRef.current[internalTaskId] !== timer) return;
+      delete generationPollTimersRef.current[internalTaskId];
 
       const elapsedMs = Date.now() - startedAt;
       if (elapsedMs > 30 * 60 * 1000 || attempt >= 360 || failedAttempts >= 12) {
-        markGenerationFailed(shotId, localTaskId, "状态同步已超过安全重试上限，请稍后手动同步后台状态。");
+        markGenerationFailed(shotId, internalTaskId, "状态同步已超过安全重试上限，请稍后手动同步后台状态。");
         return;
       }
 
       try {
-        const response = await fetch("/api/video-tasks/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task_id: providerTaskId, profile_id: profileId }) });
+        const response = await fetch("/api/video-tasks/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project_id: currentProjectId, internal_task_id: internalTaskId }) });
         const result = await readApiJson(response, "查询视频任务失败");
         if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "查询视频任务失败");
-        const data = result.data as { status: string; video_url?: string; duration?: number; error?: string };
+        const data = result.data as { status: string; video_url?: string; duration?: number; error?: string; task?: VideoTask };
+        if (data.task) setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === internalTaskId ? data.task! : item) }));
         if (["pending", "submitted", "queued", "running", "processing"].includes(data.status)) {
-          setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, status: "running", result: `生成中：${data.status}｜任务ID：${providerTaskId}` } : item), shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "running" } : item) }));
-          pollGenerationStatus(shotId, localTaskId, providerTaskId, profileId, attempt + 1, 0, startedAt);
+          setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === internalTaskId ? { ...item, status: "running", result: `生成中：${data.status}｜任务ID：${providerTaskId}` } : item), shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "running" } : item) }));
+          pollGenerationStatus(shotId, internalTaskId, providerTaskId, attempt + 1, 0, startedAt);
           return;
         }
         if (data.status === "succeeded" && isHttpVideoUrl(data.video_url)) {
-          return completeGeneration(shotId, localTaskId, data.video_url, data.duration, providerTaskId);
+          return completeGeneration(shotId, internalTaskId, data.video_url, data.duration, providerTaskId);
         }
         if (data.status === "succeeded" && !data.video_url) {
-          setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, result: "生成已完成，正在等待视频地址同步" } : item) }));
-          pollGenerationStatus(shotId, localTaskId, providerTaskId, profileId, attempt + 1, 0, startedAt);
+          setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === internalTaskId ? { ...item, result: "生成已完成，正在等待视频地址同步" } : item) }));
+          pollGenerationStatus(shotId, internalTaskId, providerTaskId, attempt + 1, 0, startedAt);
           return;
         }
         if (["failed", "error", "cancelled", "canceled"].includes(data.status)) {
-          markGenerationFailed(shotId, localTaskId, data.error || "视频生成失败");
+          markGenerationFailed(shotId, internalTaskId, data.error || "视频生成失败");
           return;
         }
-        setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, result: `等待上游同步：${data.status || "unknown"}` } : item) }));
-        pollGenerationStatus(shotId, localTaskId, providerTaskId, profileId, attempt + 1, 0, startedAt);
+        setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === internalTaskId ? { ...item, result: `等待上游同步：${data.status || "unknown"}` } : item) }));
+        pollGenerationStatus(shotId, internalTaskId, providerTaskId, attempt + 1, 0, startedAt);
       } catch (error) {
-        setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, result: error instanceof Error ? `状态查询暂未成功，继续重试：${error.message}` : "状态查询暂未成功，继续重试" } : item) }));
-        pollGenerationStatus(shotId, localTaskId, providerTaskId, profileId, attempt + 1, failedAttempts + 1, startedAt);
+        setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === internalTaskId ? { ...item, result: error instanceof Error ? `状态查询暂未成功，继续重试：${error.message}` : "状态查询暂未成功，继续重试" } : item) }));
+        pollGenerationStatus(shotId, internalTaskId, providerTaskId, attempt + 1, failedAttempts + 1, startedAt);
       }
     }, delayMs);
-    generationPollTimersRef.current[localTaskId] = timer;
+    generationPollTimersRef.current[internalTaskId] = timer;
   }
 
   function completeGeneration(shotId: number, localTaskId: string, videoUrl: string, realDuration?: number, providerTaskId?: string) {
@@ -1684,26 +1696,23 @@ export default function Home() {
       const index = prev.shots.findIndex(item => item.id === shotId);
       const existingTask = prev.tasks.find(item => item.id === localTaskId);
       const asset: VideoAsset = { id: Date.now(), shotId, title: `镜头 #${String(index + 1).padStart(2, "0")} 可用片段`, meta: `${realDuration || shot.duration}秒 / ${shot.ratio.split(" ")[0]}`, gradient: randomGradient(), videoUrl, providerTaskId: providerTaskId || existingTask?.providerTaskId };
-      return { ...prev, shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "done" } : item), tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, status: "done", result: "已生成，可预览下载" } : item), assets: [asset, ...prev.assets.filter(item => item.shotId !== shotId)] };
+      return { ...prev, shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "done" } : item), tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, status: "done", result: "已生成，可预览下载", videoUrl, error: undefined } : item), assets: [asset, ...prev.assets.filter(item => item.shotId !== shotId)] };
     });
   }
 
   function markGenerationFailed(shotId: number, localTaskId: string, message: string) {
     clearGenerationPoll(localTaskId);
-    setState(prev => ({ ...prev, shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "failed" } : item), tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, status: "failed", result: message } : item), assets: prev.assets.filter(asset => asset.shotId !== shotId) }));
+    setState(prev => ({ ...prev, shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "failed" } : item), tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, status: "failed", result: message, error: message } : item), assets: prev.assets.filter(asset => asset.shotId !== shotId) }));
   }
 
   async function refreshTaskStatus(task: VideoTask) {
-    if (!task.providerTaskId) {
-      setUserActionMessage("这个任务没有后台任务 ID，无法同步。");
-      return;
-    }
     try {
-      setUserActionMessage(`正在同步后台任务：${task.providerTaskId}`);
-      const response = await fetch("/api/video-tasks/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task_id: task.providerTaskId, profile_id: task.apiProfile?.id }) });
+      setUserActionMessage(`正在同步生成任务：${task.id}`);
+      const response = await fetch("/api/video-tasks/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project_id: currentProjectId, internal_task_id: task.id, task_id: task.providerTaskId, profile_id: task.apiProfile?.id }) });
       const result = await readApiJson(response, "同步任务状态失败");
       if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "同步任务状态失败");
-      const data = result.data as { status: string; video_url?: string; duration?: number; error?: string };
+      const data = result.data as { status: string; video_url?: string; duration?: number; error?: string; task?: VideoTask };
+      if (data.task) setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === task.id ? data.task! : item) }));
       if (data.status === "succeeded" && isHttpVideoUrl(data.video_url)) {
         completeGeneration(task.shotId, task.id, data.video_url, data.duration, task.providerTaskId);
         setUserActionMessage("已从后台同步成功视频，任务状态已更新为完成。");
@@ -1737,7 +1746,7 @@ export default function Home() {
   }
 
   async function refreshAllTaskStatuses() {
-    const tasks = state.tasks.filter(task => task.providerTaskId && !task.id.startsWith("imported-"));
+    const tasks = state.tasks.filter(task => !task.id.startsWith("imported-") && ["pending", "running"].includes(task.status));
     try {
       for (const task of tasks) await refreshTaskStatus(task);
       setUserActionMessage(tasks.length ? `已同步 ${tasks.length} 条生成记录。` : "没有可同步的生成记录。");
@@ -1746,8 +1755,17 @@ export default function Home() {
     }
   }
 
-  function deleteShot(shotId: number) {
+  async function deleteShot(shotId: number) {
     if (!confirm("确定删除这条分镜及相关任务、资产吗？")) return;
+    try {
+      const params = new URLSearchParams({ project_id: String(currentProjectId), shot_id: String(shotId) });
+      const response = await fetch(`/api/video-tasks?${params.toString()}`, { method: "DELETE" });
+      const result = await readApiJson(response, "删除分镜关联任务失败");
+      if (!response.ok || result.code !== 0) throw new Error(result.message || "删除分镜关联任务失败");
+    } catch (error) {
+      setUserActionMessage(error instanceof Error ? error.message : "删除分镜关联任务失败");
+      return;
+    }
     setState(prev => ({ ...prev, shots: prev.shots.filter(shot => shot.id !== shotId), tasks: prev.tasks.filter(task => task.shotId !== shotId), assets: prev.assets.filter(asset => asset.shotId !== shotId) }));
   }
 
@@ -1755,10 +1773,19 @@ export default function Home() {
     setState(prev => ({ ...prev, shots: prev.shots.map(shot => shot.id === shotId ? { ...shot, ...patch } : shot) }));
   }
 
-  function deleteTask(taskId: string) {
+  async function deleteTask(taskId: string) {
+    const target = state.tasks.find(task => task.id === taskId);
+    if (!target) return;
+    try {
+      const params = new URLSearchParams({ project_id: String(currentProjectId), task_id: taskId });
+      const response = await fetch(`/api/video-tasks?${params.toString()}`, { method: "DELETE" });
+      const result = await readApiJson(response, "删除生成记录失败");
+      if (!response.ok || result.code !== 0) throw new Error(result.message || "删除生成记录失败");
+    } catch (error) {
+      setUserActionMessage(error instanceof Error ? error.message : "删除生成记录失败");
+      return;
+    }
     setState(prev => {
-      const target = prev.tasks.find(task => task.id === taskId);
-      if (!target) return prev;
       const remainingTasks = prev.tasks.filter(task => task.id !== taskId);
       const hasOtherTaskForShot = remainingTasks.some(task => task.shotId === target.shotId);
       return {
@@ -1854,7 +1881,10 @@ export default function Home() {
   const visibleImageResults = showAllImageResults ? generatedImages : generatedImages.slice(0, 5);
   const sortedShots = [...state.shots].sort((a, b) => b.id - a.id);
   const recentWorkbenchShots = sortedShots.slice(0, 3);
-  const sortedTasks = [...state.tasks];
+  const sortedTasks = [...state.tasks].sort((a, b) => {
+    const createdDiff = Date.parse(b.createdAt || "") - Date.parse(a.createdAt || "");
+    return Number.isFinite(createdDiff) && createdDiff !== 0 ? createdDiff : b.id.localeCompare(a.id);
+  });
   const taskRecordTabs: Array<[TaskRecordFilter, string, number]> = [
     ["all", "全部", sortedTasks.length],
     ["running", "生成中", sortedTasks.filter(task => task.status === "running" || task.status === "pending").length],
@@ -2359,7 +2389,7 @@ export default function Home() {
               </div>
               <div className="video-submit-row">
                 <button className="tool-chip" onClick={() => setMentionMenuOpen(open => !open)}>@ 素材</button>
-                <button className="video-generate-button" onClick={() => addShot()}>开始生成</button>
+                <button className="video-generate-button" onClick={() => addShot()} disabled={isVideoSubmitting}>{isVideoSubmitting ? "正在提交" : "开始生成"}</button>
               </div>
             </div>
           </div>
@@ -2501,6 +2531,7 @@ export default function Home() {
                 <tbody>
                   {visibleTasks.length ? visibleTasks.map(task => {
                     const taskAsset = state.assets.find(asset => asset.shotId === task.shotId && isHttpVideoUrl(asset.videoUrl));
+                    const taskVideoUrl = task.videoUrl || taskAsset?.videoUrl;
                     const taskVideoId = taskAsset?.providerTaskId || task.providerTaskId;
                     const canRegenerate = task.status !== "running";
                     return (
@@ -2514,13 +2545,13 @@ export default function Home() {
                         <td>{taskStatusTag(task.status)}</td>
                         <td>
                           {task.result}
-                          {taskAsset?.videoUrl && <div className="task-result-video"><video src={proxiedVideoUrl(taskAsset.videoUrl, false, taskVideoId, activeApiProfile)} controls preload="metadata" /><div className="task-video-actions"><a href={proxiedVideoUrl(taskAsset.videoUrl, false, taskVideoId, activeApiProfile)} target="_blank" rel="noreferrer">新窗口打开</a><a href={proxiedVideoUrl(taskAsset.videoUrl, true, taskVideoId, activeApiProfile)}>下载视频</a></div></div>}
+                          {taskVideoUrl && <div className="task-result-video"><video src={proxiedVideoUrl(taskVideoUrl, false, taskVideoId, task.apiProfile || activeApiProfile)} controls preload="metadata" /><div className="task-video-actions"><a href={proxiedVideoUrl(taskVideoUrl, false, taskVideoId, task.apiProfile || activeApiProfile)} target="_blank" rel="noreferrer">新窗口打开</a><a href={proxiedVideoUrl(taskVideoUrl, true, taskVideoId, task.apiProfile || activeApiProfile)}>下载视频</a></div></div>}
                         </td>
                         <td>
                           <div className="task-row-actions">
                             <button className="btn-ghost btn-small" onClick={() => rerunTask(task)} disabled={!canRegenerate}>直接重新生成</button>
                             <button className="btn-ghost btn-small" onClick={() => editRegeneration(task)} disabled={!canRegenerate}>编辑后重新生成</button>
-                            <button className="btn-danger btn-small" onClick={() => deleteTask(task.id)}>删除</button>
+                            <button className="btn-danger btn-small" onClick={() => deleteTask(task.id)} disabled={task.status === "running" || task.status === "pending"}>删除</button>
                           </div>
                         </td>
                       </tr>

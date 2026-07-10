@@ -1,10 +1,14 @@
+import { randomUUID } from "crypto";
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentMembership } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { fetchWithTimeout } from "@/lib/http";
 import { isSmallReferenceImage, MIN_VIDEO_REFERENCE_IMAGE_SIDE, readLocalUploadImageDimensions } from "@/lib/image-dimensions";
+import { prisma } from "@/lib/prisma";
 import { rateLimit } from "@/lib/rate-limit";
-import { resolveModelRoute, toPublicProfile } from "../api-profiles/store";
+import { publicVideoTask } from "@/lib/video-task";
+import { resolveModelRoute } from "../api-profiles/store";
 
 type MediaInput = {
   url: string;
@@ -14,8 +18,10 @@ type MediaInput = {
 type ApiProfile = { id?: string; name?: string; baseUrl?: string; apiKey?: string; model?: string; videoModels?: string[] };
 
 type GenerateVideoPayload = {
+  project_id?: number;
   profile_id?: string;
   model_id?: string;
+  snapshot?: Record<string, unknown>;
   shot?: {
     id?: number;
     title?: string;
@@ -67,6 +73,17 @@ const BASE_URL = process.env.SEEDANCE_BASE_URL || "https://api.aifastgate.com";
 const MODEL = process.env.SEEDANCE_MODEL || "doubao-seedance-2.0-fast";
 const MAX_VIDEO_PROMPT_LENGTH = 8000;
 const MAX_MEDIA_URL_LENGTH = 2048;
+const MAX_DATABASE_INT = 2147483647;
+
+function cleanProjectId(value: unknown) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 && number <= MAX_DATABASE_INT ? number : 0;
+}
+
+function cleanShotId(value: unknown) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? BigInt(number) : null;
+}
 
 function normalizeBaseUrl(value?: string) {
   return (value || BASE_URL).trim().replace(/\/$/, "");
@@ -192,54 +209,33 @@ function videoAuditMetadata(params: {
   };
 }
 
+async function failPersistedTask(params: { tenantId: string; projectId: number; taskId: string; shotId: bigint; message: string }) {
+  return prisma.$transaction(async tx => {
+    const task = await tx.videoTask.update({
+      where: { tenantId_projectId_id: { tenantId: params.tenantId, projectId: params.projectId, id: params.taskId } },
+      data: { status: "failed", result: params.message, error: params.message, completedAt: new Date() }
+    });
+    await tx.shot.updateMany({
+      where: { tenantId: params.tenantId, projectId: params.projectId, id: params.shotId },
+      data: { status: "failed" }
+    });
+    return task;
+  });
+}
+
 export async function GET(request: Request) {
   const membership = await getCurrentMembership();
   if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
+  const { searchParams } = new URL(request.url);
+  const projectId = cleanProjectId(searchParams.get("project_id"));
+  if (!projectId) return NextResponse.json({ code: 400, message: "缺少项目 ID。" }, { status: 400 });
 
-  const route = await resolveModelRoute("video");
-  const { apiKey, baseUrl } = resolveApiProfile(route?.profile);
-
-  if (!apiKey) {
-    return NextResponse.json(
-      { code: 500, message: "缺少视频生成 API Key，请先在 .env.local 或管理员 API Profile 中配置。" },
-      { status: 500 }
-    );
-  }
-
-  const listEndpoint = baseUrl.includes("/api/v3") ? `${baseUrl}/contents/generations/tasks` : isZJProvider(baseUrl) ? appendPath(baseUrl, "/v1/videos/generations") : `${baseUrl}/v1/video/generations`;
-  const response = await fetchWithTimeout(listEndpoint, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${apiKey}`
-    }
-  }, 30000);
-
-  const text = await response.text();
-  const result = text ? JSON.parse(text) as FastGateListResponse : {};
-
-  if (!response.ok) {
-    return NextResponse.json(
-      {
-        code: response.status,
-        message: "读取后台视频任务列表失败",
-        raw: result
-      },
-      { status: response.status }
-    );
-  }
-
-  const items = result.data || result.items || [];
-  return NextResponse.json({
-    code: 0,
-    data: items.map(item => ({
-      task_id: item.id,
-      status: item.status,
-      video_url: item.video_url || item.url || item.content?.video_url || item.content?.url || item.data?.[0]?.video_url || item.data?.[0]?.url,
-      prompt: item.prompt,
-      created_at: item.created_at,
-      error: typeof item.error === "string" ? item.error : item.error?.message
-    }))
+  const tasks = await prisma.videoTask.findMany({
+    where: { tenantId: membership.tenantId, projectId },
+    orderBy: { createdAt: "desc" },
+    take: 200
   });
+  return NextResponse.json({ code: 0, data: tasks.map(publicVideoTask) });
 }
 
 export async function POST(request: Request) {
@@ -270,6 +266,15 @@ export async function POST(request: Request) {
       { code: 400, message: "缺少分镜 prompt，无法创建视频生成任务。" },
       { status: 400 }
     );
+  }
+  const projectId = cleanProjectId(body.project_id);
+  const shotId = cleanShotId(shot.id);
+  if (!projectId || !shotId) {
+    return NextResponse.json({ code: 400, message: "缺少有效的项目或分镜 ID。" }, { status: 400 });
+  }
+  const project = await prisma.project.findFirst({ where: { id: projectId, tenantId: membership.tenantId } });
+  if (!project) {
+    return NextResponse.json({ code: 404, message: "当前项目尚未同步到服务器，请稍后重试。" }, { status: 404 });
   }
   const duration = normalizeDuration(shot.duration);
   const prompt = buildDurationControlledPrompt(shot.prompt, duration);
@@ -335,6 +340,51 @@ export async function POST(request: Request) {
     watermark: body.watermark ?? false
   };
 
+  const internalTaskId = randomUUID();
+  const snapshot = body.snapshot && typeof body.snapshot === "object" && !Array.isArray(body.snapshot)
+    ? body.snapshot as Prisma.InputJsonObject
+    : {
+        prompt: shot.prompt,
+        model: requestedModel,
+        ratio: shot.ratio || "9:16 竖屏短剧",
+        duration,
+        resolution: body.resolution || "720p",
+        materialIds: [],
+        externalAssetIds: [],
+        inputType
+      };
+  await prisma.$transaction(async tx => {
+    await tx.shot.upsert({
+      where: { tenantId_projectId_id: { tenantId: membership.tenantId, projectId, id: shotId } },
+      create: {
+        tenantId: membership.tenantId,
+        projectId,
+        id: shotId,
+        title: shot.title?.trim() || "未命名视频",
+        prompt: String(snapshot.prompt || shot.prompt),
+        ratio: shot.ratio?.trim() || "9:16 竖屏短剧",
+        duration,
+        status: "running",
+        resolution: body.resolution || "720p"
+      },
+      update: { status: "running" }
+    });
+    await tx.videoTask.create({
+      data: {
+        id: internalTaskId,
+        tenantId: membership.tenantId,
+        projectId,
+        shotId,
+        shotTitle: shot.title?.trim() || "未命名视频",
+        provider: name,
+        status: "pending",
+        result: "正在提交生成任务。",
+        apiProfileId: route?.profile.id,
+        snapshot
+      }
+    });
+  });
+
   const endpoint = baseUrl.includes("/api/v3") ? `${baseUrl}/contents/generations/tasks` : isZJProvider(baseUrl) ? appendPath(baseUrl, "/v1/videos/generations") : `${baseUrl}/v1/video/generations`;
 
   let response: Response;
@@ -349,15 +399,17 @@ export async function POST(request: Request) {
       body: JSON.stringify(payload)
     }, 60000);
   } catch (error) {
+    const message = error instanceof Error ? error.message : "视频生成上游请求失败。";
+    const failedTask = await failPersistedTask({ tenantId: membership.tenantId, projectId, taskId: internalTaskId, shotId, message });
     await logAudit({
       request,
       actor: membership,
       action: "video_task.create",
       targetType: "video_task",
       result: "failure",
-      metadata: videoAuditMetadata({ model: requestedModel, provider: name, profileId: route?.profile.id, duration, ratio: normalizeRatio(shot.ratio), resolution: body.resolution || "720p", inputType, imageCount: imageUrls.length, videoCount: videoUrls.length, audioCount: audioUrls.length, promptLength: prompt.length, message: error instanceof Error ? error.message : "视频生成上游请求失败。" })
+      metadata: videoAuditMetadata({ model: requestedModel, provider: name, profileId: route?.profile.id, duration, ratio: normalizeRatio(shot.ratio), resolution: body.resolution || "720p", inputType, imageCount: imageUrls.length, videoCount: videoUrls.length, audioCount: audioUrls.length, promptLength: prompt.length, message })
     });
-    return NextResponse.json({ code: 504, message: error instanceof Error ? error.message : "视频生成上游请求失败。" }, { status: 504 });
+    return NextResponse.json({ code: 504, message, data: { task: publicVideoTask(failedTask) } }, { status: 504 });
   }
 
   const text = await response.text();
@@ -366,23 +418,35 @@ export async function POST(request: Request) {
   const taskId = extractTaskId(result);
 
   if (!response.ok || !taskId) {
+    const message = extractError(result);
+    const failedTask = await failPersistedTask({ tenantId: membership.tenantId, projectId, taskId: internalTaskId, shotId, message });
     await logAudit({
       request,
       actor: membership,
       action: "video_task.create",
       targetType: "video_task",
       result: "failure",
-      metadata: videoAuditMetadata({ model: requestedModel, provider: name, profileId: route?.profile.id, duration, ratio: normalizeRatio(shot.ratio), resolution: body.resolution || "720p", inputType, imageCount: imageUrls.length, videoCount: videoUrls.length, audioCount: audioUrls.length, promptLength: prompt.length, status: response.status, message: extractError(result) })
+      metadata: videoAuditMetadata({ model: requestedModel, provider: name, profileId: route?.profile.id, duration, ratio: normalizeRatio(shot.ratio), resolution: body.resolution || "720p", inputType, imageCount: imageUrls.length, videoCount: videoUrls.length, audioCount: audioUrls.length, promptLength: prompt.length, status: response.status, message })
     });
     return NextResponse.json(
       {
-        code: response.status,
-        message: extractError(result),
-        raw: result
+        code: response.ok ? 400 : response.status,
+        message,
+        data: { task: publicVideoTask(failedTask) }
       },
       { status: response.ok ? 400 : response.status }
     );
   }
+
+  const persistedTask = await prisma.videoTask.update({
+    where: { tenantId_projectId_id: { tenantId: membership.tenantId, projectId, id: internalTaskId } },
+    data: {
+      providerTaskId: taskId,
+      status: "running",
+      result: `任务已提交：${taskId}`,
+      error: null
+    }
+  });
 
   await logAudit({
     request,
@@ -399,13 +463,59 @@ export async function POST(request: Request) {
     code: 0,
     data: {
       task_id: taskId,
+      internal_task_id: internalTaskId,
       provider: name,
-      api_profile: route?.profile ? toPublicProfile(route.profile) : undefined,
-      base_url: baseUrl,
+      profile_id: route?.profile.id,
       model: requestedModel,
       status: result.status || result.data?.status || "pending",
-      input: payload,
+      task: publicVideoTask(persistedTask),
       created_at: new Date().toISOString()
     }
   });
+}
+
+export async function DELETE(request: Request) {
+  const membership = await getCurrentMembership();
+  if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
+
+  const { searchParams } = new URL(request.url);
+  const projectId = cleanProjectId(searchParams.get("project_id"));
+  const taskId = searchParams.get("task_id")?.trim();
+  const shotId = cleanShotId(searchParams.get("shot_id"));
+  if (!projectId || (!taskId && !shotId)) {
+    return NextResponse.json({ code: 400, message: "缺少项目 ID 和任务/分镜 ID。" }, { status: 400 });
+  }
+
+  if (taskId) {
+    const task = await prisma.videoTask.findUnique({
+      where: { tenantId_projectId_id: { tenantId: membership.tenantId, projectId, id: taskId } }
+    });
+    if (!task) return NextResponse.json({ code: 0, data: { deleted: false } });
+    if (["pending", "running"].includes(task.status)) {
+      return NextResponse.json({ code: 409, message: "生成中的任务不能删除，请等待完成或失败后再处理。" }, { status: 409 });
+    }
+    await prisma.$transaction(async tx => {
+      if (task.providerTaskId) {
+        await tx.videoAsset.deleteMany({ where: { tenantId: membership.tenantId, projectId, providerTaskId: task.providerTaskId } });
+      }
+      await tx.videoTask.delete({ where: { tenantId_projectId_id: { tenantId: membership.tenantId, projectId, id: taskId } } });
+      const remaining = await tx.videoTask.count({ where: { tenantId: membership.tenantId, projectId, shotId: task.shotId } });
+      if (!remaining) {
+        await tx.shot.updateMany({ where: { tenantId: membership.tenantId, projectId, id: task.shotId }, data: { status: "pending" } });
+      }
+    });
+    await logAudit({ request, actor: membership, action: "video_task.delete", targetType: "video_task", targetId: task.id, metadata: { projectId, shotId: task.shotId.toString(), providerTaskId: task.providerTaskId } });
+    return NextResponse.json({ code: 0, data: { deleted: true } });
+  }
+
+  const tasks = await prisma.videoTask.findMany({ where: { tenantId: membership.tenantId, projectId, shotId: shotId! } });
+  if (tasks.some(task => ["pending", "running"].includes(task.status))) {
+    return NextResponse.json({ code: 409, message: "这条分镜仍有生成中的任务，暂时不能删除。" }, { status: 409 });
+  }
+  await prisma.$transaction(async tx => {
+    await tx.videoTask.deleteMany({ where: { tenantId: membership.tenantId, projectId, shotId: shotId! } });
+    await tx.videoAsset.deleteMany({ where: { tenantId: membership.tenantId, projectId, shotId: shotId! } });
+  });
+  await logAudit({ request, actor: membership, action: "video_task.delete_by_shot", targetType: "shot", targetId: shotId!.toString(), metadata: { projectId, deletedTasks: tasks.length } });
+  return NextResponse.json({ code: 0, data: { deleted: true, deletedTasks: tasks.length } });
 }

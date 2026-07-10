@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { getCurrentMembership } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { prisma } from "@/lib/prisma";
+import { publicVideoTask, safeNumberFromBigInt } from "@/lib/video-task";
 
 const MAX_DATABASE_INT = 2147483647;
 
@@ -50,11 +51,6 @@ function publicWorkspace(workspace: {
   };
 }
 
-function numberFromBigInt(value: bigint) {
-  const number = Number(value);
-  return Number.isSafeInteger(number) ? number : 0;
-}
-
 function baseStateObject(state: unknown) {
   return state && typeof state === "object" ? state as Record<string, unknown> : {};
 }
@@ -72,7 +68,7 @@ function hydrateWorkspace(workspace: WorkspaceRow, project?: ProjectContentRow) 
       script: project.script
     },
     shots: project.shots.map(shot => ({
-      id: numberFromBigInt(shot.id),
+      id: safeNumberFromBigInt(shot.id),
       title: shot.title,
       prompt: shot.prompt,
       ratio: shot.ratio,
@@ -82,20 +78,10 @@ function hydrateWorkspace(workspace: WorkspaceRow, project?: ProjectContentRow) 
       width: shot.width || undefined,
       height: shot.height || undefined
     })),
-    tasks: project.videoTasks.map(task => ({
-      id: task.id,
-      shotId: numberFromBigInt(task.shotId),
-      shotTitle: task.shotTitle,
-      provider: task.provider,
-      status: task.status,
-      result: task.result,
-      providerTaskId: task.providerTaskId || undefined,
-      apiProfile: task.apiProfileId ? { id: task.apiProfileId } : undefined,
-      snapshot: task.snapshot || undefined
-    })),
+    tasks: project.videoTasks.map(publicVideoTask),
     assets: project.videoAssets.map(asset => ({
-      id: numberFromBigInt(asset.id),
-      shotId: numberFromBigInt(asset.shotId),
+      id: safeNumberFromBigInt(asset.id),
+      shotId: safeNumberFromBigInt(asset.shotId),
       title: asset.title,
       meta: asset.meta,
       gradient: asset.gradient,
@@ -143,30 +129,21 @@ function nullableText(value: unknown) {
   return text || null;
 }
 
-function taskApiProfileId(task: Record<string, unknown>) {
-  const apiProfile = task.apiProfile;
-  if (!apiProfile || typeof apiProfile !== "object") return null;
-  return nullableText((apiProfile as Record<string, unknown>).id);
-}
-
 async function syncProjectContent(tx: Prisma.TransactionClient, tenantId: string, projectId: number, state: unknown) {
   const shots = stateArray(state, "shots");
-  const tasks = stateArray(state, "tasks");
   const assets = stateArray(state, "assets");
 
   const shotIds = shots.map(shot => cleanBigInt(shot.id)).filter((id): id is bigint => Boolean(id));
-  const taskIds = tasks.map(task => nullableText(task.id)).filter((id): id is string => Boolean(id));
   const assetIds = assets.map(asset => cleanBigInt(asset.id)).filter((id): id is bigint => Boolean(id));
 
   await tx.shot.deleteMany({ where: { tenantId, projectId, ...(shotIds.length ? { id: { notIn: shotIds } } : {}) } });
-  await tx.videoTask.deleteMany({ where: { tenantId, projectId, ...(taskIds.length ? { id: { notIn: taskIds } } : {}) } });
   await tx.videoAsset.deleteMany({ where: { tenantId, projectId, ...(assetIds.length ? { id: { notIn: assetIds } } : {}) } });
 
   for (let index = 0; index < shots.length; index += 1) {
     const shot = shots[index];
     const id = cleanBigInt(shot.id);
     if (!id) continue;
-    const data = {
+    const createData = {
       title: cleanText(shot.title, "未命名分镜"),
       prompt: String(shot.prompt || ""),
       ratio: cleanText(shot.ratio, "9:16 竖屏短剧"),
@@ -177,31 +154,11 @@ async function syncProjectContent(tx: Prisma.TransactionClient, tenantId: string
       height: shot.height == null ? null : cleanSmallInt(shot.height),
       sortOrder: index
     };
+    const { status: _status, ...updateData } = createData;
     await tx.shot.upsert({
       where: { tenantId_projectId_id: { tenantId, projectId, id } },
-      create: { tenantId, projectId, id, ...data },
-      update: data
-    });
-  }
-
-  for (const task of tasks) {
-    const id = nullableText(task.id);
-    if (!id) continue;
-    const snapshot = task.snapshot && typeof task.snapshot === "object" ? task.snapshot : undefined;
-    const data = {
-      shotId: cleanBigInt(task.shotId) || BigInt(0),
-      shotTitle: cleanText(task.shotTitle, "未命名视频"),
-      provider: cleanText(task.provider, "视频生成"),
-      status: cleanText(task.status, "pending"),
-      result: String(task.result || ""),
-      providerTaskId: nullableText(task.providerTaskId),
-      apiProfileId: taskApiProfileId(task),
-      snapshot
-    };
-    await tx.videoTask.upsert({
-      where: { tenantId_projectId_id: { tenantId, projectId, id } },
-      create: { tenantId, projectId, id, ...data },
-      update: data
+      create: { tenantId, projectId, id, ...createData },
+      update: updateData
     });
   }
 

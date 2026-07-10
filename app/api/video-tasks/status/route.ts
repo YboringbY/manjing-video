@@ -2,12 +2,16 @@ import { NextResponse } from "next/server";
 import { getCurrentMembership } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { fetchWithTimeout } from "@/lib/http";
+import { prisma } from "@/lib/prisma";
 import { rateLimit } from "@/lib/rate-limit";
+import { publicVideoTask, VideoTaskRecord } from "@/lib/video-task";
 import { readServerApiProfiles } from "../../api-profiles/store";
 
 type ApiProfile = { id?: string; name?: string; baseUrl?: string; apiKey?: string; model?: string };
 
 type StatusPayload = {
+  project_id?: number;
+  internal_task_id?: string;
   task_id?: string;
   profile_id?: string;
 };
@@ -50,6 +54,12 @@ type FastGateStatusResponse = {
 };
 
 const BASE_URL = process.env.SEEDANCE_BASE_URL || "https://api.aifastgate.com";
+const MAX_DATABASE_INT = 2147483647;
+
+function cleanProjectId(value: unknown) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 && number <= MAX_DATABASE_INT ? number : 0;
+}
 
 function isZJProvider(baseUrl: string) {
   try {
@@ -144,6 +154,32 @@ function upstreamHost(baseUrl: string) {
   }
 }
 
+async function persistTaskStatus(task: VideoTaskRecord, params: { status: string; rawStatus?: string; videoUrl?: string; error?: string }) {
+  const taskStatus = params.status === "succeeded" ? "done" : params.status === "failed" ? "failed" : "running";
+  const result = taskStatus === "done"
+    ? "已生成，可预览下载"
+    : taskStatus === "failed"
+      ? params.error || "视频生成失败"
+      : `生成中：${params.rawStatus || params.status || "pending"}`;
+  return prisma.$transaction(async tx => {
+    const updated = await tx.videoTask.update({
+      where: { tenantId_projectId_id: { tenantId: task.tenantId, projectId: task.projectId, id: task.id } },
+      data: {
+        status: taskStatus,
+        result,
+        videoUrl: params.videoUrl || task.videoUrl,
+        error: taskStatus === "failed" ? params.error || result : null,
+        completedAt: taskStatus === "done" || taskStatus === "failed" ? task.completedAt || new Date() : null
+      }
+    });
+    await tx.shot.updateMany({
+      where: { tenantId: task.tenantId, projectId: task.projectId, id: task.shotId },
+      data: { status: taskStatus }
+    });
+    return updated;
+  });
+}
+
 export async function POST(request: Request) {
   const membership = await getCurrentMembership();
   if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
@@ -151,9 +187,25 @@ export async function POST(request: Request) {
   if (limited) return limited;
 
   const body = await request.json() as StatusPayload;
-  const profiles = body.profile_id ? await readServerApiProfiles() : [];
-  const serverProfile = body.profile_id ? profiles.find(profile => profile.id === body.profile_id) : undefined;
-  if (body.profile_id && !serverProfile) return NextResponse.json({ code: 404, message: "当前选中的 API Profile 不存在，请重新选择后再同步。" }, { status: 404 });
+  const projectId = cleanProjectId(body.project_id);
+  const internalTaskId = body.internal_task_id?.trim();
+  let persistedTask: VideoTaskRecord | null = null;
+  if (internalTaskId) {
+    if (!projectId) return NextResponse.json({ code: 400, message: "缺少项目 ID。" }, { status: 400 });
+    persistedTask = await prisma.videoTask.findUnique({
+      where: { tenantId_projectId_id: { tenantId: membership.tenantId, projectId, id: internalTaskId } }
+    });
+    if (!persistedTask) return NextResponse.json({ code: 404, message: "生成任务不存在或已被删除。" }, { status: 404 });
+    if (persistedTask.status === "done" && persistedTask.videoUrl) {
+      return NextResponse.json({ code: 0, data: { task_id: persistedTask.providerTaskId, status: "succeeded", video_url: persistedTask.videoUrl, task: publicVideoTask(persistedTask) } });
+    }
+  }
+
+  const upstreamTaskId = persistedTask?.providerTaskId || body.task_id?.trim();
+  const profileId = persistedTask?.apiProfileId || body.profile_id?.trim();
+  const profiles = profileId ? await readServerApiProfiles() : [];
+  const serverProfile = profileId ? profiles.find(profile => profile.id === profileId) : undefined;
+  if (profileId && !serverProfile) return NextResponse.json({ code: 404, message: "这条任务使用的模型渠道已不存在，请联系管理员。" }, { status: 404 });
   const { apiKey, baseUrl } = resolveApiProfile(serverProfile);
 
   if (!apiKey) {
@@ -163,23 +215,23 @@ export async function POST(request: Request) {
     );
   }
 
-  if (!body.task_id) {
+  if (!upstreamTaskId) {
     return NextResponse.json(
-      { code: 400, message: "缺少 task_id。" },
+      { code: 400, message: "这条任务缺少上游任务 ID，无法同步状态。" },
       { status: 400 }
     );
   }
 
   const endpoints = baseUrl.includes("/api/v3") ? [
     `${baseUrl}/contents/generations/tasks?page=1&page_size=500`,
-    `${baseUrl}/contents/generations/tasks/${body.task_id}`
+    `${baseUrl}/contents/generations/tasks/${upstreamTaskId}`
   ] : isZJProvider(baseUrl) ? [
-    appendPath(baseUrl, `/v1/videos/generations/${body.task_id}`),
-    appendPath(baseUrl, `/v1/video/generations/${body.task_id}`)
+    appendPath(baseUrl, `/v1/videos/generations/${upstreamTaskId}`),
+    appendPath(baseUrl, `/v1/video/generations/${upstreamTaskId}`)
   ] : [
-    `${baseUrl}/v1/video/generations/${body.task_id}`,
-    `${baseUrl}/v1/tasks/${body.task_id}`,
-    `${baseUrl}/v1/video/tasks/${body.task_id}`
+    `${baseUrl}/v1/video/generations/${upstreamTaskId}`,
+    `${baseUrl}/v1/tasks/${upstreamTaskId}`,
+    `${baseUrl}/v1/video/tasks/${upstreamTaskId}`
   ];
 
   let response: Response | null = null;
@@ -207,7 +259,7 @@ export async function POST(request: Request) {
 
   let result: FastGateStatusResponse = {};
   try { result = text ? JSON.parse(text) as FastGateStatusResponse : {}; } catch { result = { message: text }; }
-  const matchedItem = result.items?.find(item => item.id === body.task_id || item.task_id === body.task_id);
+  const matchedItem = result.items?.find(item => item.id === upstreamTaskId || item.task_id === upstreamTaskId);
   const matchedResult = matchedItem ? { ...matchedItem } as FastGateStatusResponse : result;
   const dataObject = Array.isArray(matchedResult.data) ? undefined : matchedResult.data;
   const rawStatus = matchedResult.status || matchedResult.task_status || dataObject?.status || dataObject?.task_status || matchedResult.result?.status || dataObject?.result?.status;
@@ -220,12 +272,12 @@ export async function POST(request: Request) {
       actor: membership,
       action: "video_task.status",
       targetType: "video_task",
-      targetId: body.task_id,
+      targetId: upstreamTaskId,
       result: "failure",
       metadata: {
         status: rawStatus || normalizedStatus,
         message: extractedError,
-        profileId: body.profile_id,
+        profileId,
         upstreamHost: upstreamHost(baseUrl)
       }
     });
@@ -233,34 +285,39 @@ export async function POST(request: Request) {
 
   if (!finalResponse.ok) {
     if (finalResponse.status === 404) {
+      const updatedTask = persistedTask ? await persistTaskStatus(persistedTask, { status: "pending", rawStatus: "pending" }) : undefined;
       return NextResponse.json({
         code: 0,
         data: {
-          task_id: body.task_id,
+          task_id: upstreamTaskId,
           status: "pending",
           error: extractError(result) || "上游任务状态暂未可查，继续等待同步。",
-          raw: result
+          task: updatedTask ? publicVideoTask(updatedTask) : undefined
         }
       });
     }
+    if (persistedTask) await persistTaskStatus(persistedTask, { status: "pending", rawStatus: rawStatus || `http_${finalResponse.status}` });
     return NextResponse.json(
       {
         code: finalResponse.status,
-        message: extractError(result) || "查询 Seedance 任务状态失败",
-        raw: result
+        message: extractError(result) || "查询 Seedance 任务状态失败"
       },
       { status: finalResponse.status }
     );
   }
 
+  const updatedTask = persistedTask
+    ? await persistTaskStatus(persistedTask, { status: normalizedStatus, rawStatus, videoUrl, error: extractedError })
+    : undefined;
+
   return NextResponse.json({
     code: 0,
     data: {
-      task_id: matchedResult.id || matchedResult.task_id || dataObject?.id || dataObject?.task_id || body.task_id,
+      task_id: matchedResult.id || matchedResult.task_id || dataObject?.id || dataObject?.task_id || upstreamTaskId,
       status: normalizedStatus,
       video_url: videoUrl,
       error: extractedError,
-      raw: matchedResult
+      task: updatedTask ? publicVideoTask(updatedTask) : undefined
     }
   });
 }

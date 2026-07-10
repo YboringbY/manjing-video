@@ -121,6 +121,9 @@ model VideoTask {
   providerTaskId String?
   apiProfileId   String?
   snapshot       Json?
+  videoUrl       String?
+  error          String?
+  completedAt    DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
