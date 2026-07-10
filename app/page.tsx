@@ -1883,7 +1883,8 @@ export default function Home() {
   const recentWorkbenchShots = sortedShots.slice(0, 3);
   const sortedTasks = [...state.tasks].sort((a, b) => {
     const createdDiff = Date.parse(b.createdAt || "") - Date.parse(a.createdAt || "");
-    return Number.isFinite(createdDiff) && createdDiff !== 0 ? createdDiff : b.id.localeCompare(a.id);
+    if (Number.isFinite(createdDiff) && createdDiff !== 0) return createdDiff;
+    return b.id.localeCompare(a.id);
   });
   const taskRecordTabs: Array<[TaskRecordFilter, string, number]> = [
     ["all", "全部", sortedTasks.length],
@@ -2527,7 +2528,7 @@ export default function Home() {
             </div>
             <div className="table-wrap">
               <table className="table">
-                <thead><tr><th>任务 ID</th><th>关联分镜</th><th>参数</th><th>进度</th><th>结果</th><th>操作</th></tr></thead>
+                <thead><tr><th>提交时间</th><th>关联分镜</th><th>参数</th><th>进度</th><th>结果</th><th>操作</th></tr></thead>
                 <tbody>
                   {visibleTasks.length ? visibleTasks.map(task => {
                     const taskAsset = state.assets.find(asset => asset.shotId === task.shotId && isHttpVideoUrl(asset.videoUrl));
@@ -2536,7 +2537,7 @@ export default function Home() {
                     const canRegenerate = task.status !== "running";
                     return (
                       <tr key={task.id}>
-                        <td>{task.id}</td>
+                        <td><div>{task.createdAt ? new Date(task.createdAt).toLocaleString() : "历史记录"}</div><small className="muted">{task.id}</small></td>
                         <td>
                           <div>#{String(task.shotId).padStart(2, "0")} {task.shotTitle}</div>
                           <small className="muted">{taskSnapshotText(task)}</small>

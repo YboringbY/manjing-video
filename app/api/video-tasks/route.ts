@@ -232,7 +232,7 @@ export async function GET(request: Request) {
 
   const tasks = await prisma.videoTask.findMany({
     where: { tenantId: membership.tenantId, projectId },
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: 200
   });
   return NextResponse.json({ code: 0, data: tasks.map(publicVideoTask) });

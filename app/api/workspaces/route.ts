@@ -194,7 +194,7 @@ export async function GET() {
       where: { tenantId: membership.tenantId },
       include: {
         shots: { orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] },
-        videoTasks: { orderBy: { updatedAt: "desc" } },
+        videoTasks: { orderBy: [{ createdAt: "desc" }, { id: "desc" }] },
         videoAssets: { orderBy: { updatedAt: "desc" } }
       }
     })

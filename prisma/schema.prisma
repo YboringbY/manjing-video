@@ -129,6 +129,7 @@ model VideoTask {
   project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@id([tenantId, projectId, id])
+  @@index([tenantId, projectId, createdAt])
   @@index([tenantId, projectId, updatedAt])
   @@index([tenantId, status])
   @@index([providerTaskId])
