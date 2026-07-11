@@ -2,6 +2,16 @@
 
 更新时间：2026-07-11
 
+# 2026-07-12 P0/P1 生产发布
+
+- 用户在查看生产变更单后明确批准，将生产从 `1b8534a` 更新到 `b628a95 Refactor P1 frontend and video workflows`。
+- 使用新版 `scripts/deploy.sh` 执行：生产工作区干净，fast-forward 成功，`npm ci` 无漏洞，Prisma Client 生成和 `npm run build` 通过。
+- `npm run db:preflight` 显示 17 条 migration 均已应用、待执行 migration 为 0；没有 schema 或业务数据修改。
+- 发布前数据库备份：`/data/backups/manjing-video-db-pre-deploy-20260712-011336.dump`，63KB，PostgreSQL custom archive，`pg_restore -l` 可读取 111 个目录项。
+- 停机前捕获业务数量和主键指纹，`prisma migrate deploy` 确认无待执行迁移，发布后守恒检查通过：1 个项目、1 个工作区、10 个素材、10 个素材关联、15 个分镜、20 个任务、3 个视频资产，所有指纹不变。
+- 生产 PM2 `manjing-video` online，公网首页返回 200，匿名 `/api/auth/me` 返回 401，生产 Git 工作区干净。
+- 部署时未提供临时生产 smoke 凭证，因此自动化的登录后只读 smoke 被跳过；仍需用户在真实浏览器确认登录、项目内容、素材和视频预览。历史 PM2 Server Action 探测错误最后更新时间早于本次发布，不是新版本持续错误。
+
 # 2026-07-11 P1 代码结构与状态权威优化
 
 - 前端继续拆分 `app/page.tsx`：登录页、人员管理、审计日志分别迁到 `LoginPage`、`MembersSection`、`AuditLogsSection`，主页面从 2731 行降到 2647 行。
@@ -10,7 +20,7 @@
 - 浏览器 `localStorage` 只保存项目兼容元数据；读取和写入缓存时都清空 `shots / tasks / assets / materials`，规范化数据库 API 是这些业务数据的唯一权威来源。
 - `scripts/core-api-integration.mjs` 增加超范围数据库 ID 必须返回 400 的回归检查。
 - 验证通过：`git diff --check`、`npx tsc --noEmit`、清理 `.next` 后 `npm run build`、`npm run test:core-api`。集成测试覆盖严格 ID、项目/分镜 409、共享素材、任务评价和视频资产生命周期，临时数据已自动清理。
-- 本轮 P1 代码将提交并推送到 GitHub `main`，但不部署生产。当前生产仍为 `1b8534a Show restored production projects`；P0 提交 `39926bc` 与本轮 P1 都尚未部署。任何发布必须先向用户提交环境、影响、备份、停机和回滚方案并获得明确批准。
+- P1 已作为 `b628a95` 推送并于 2026-07-12 按生产安全流程部署；发布详情见上一节。后续任何发布仍必须先向用户提交环境、影响、备份、停机和回滚方案并获得明确批准。
 
 ## 2026-07-11 P0 稳定性自动化
 

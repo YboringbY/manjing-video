@@ -1,6 +1,14 @@
 # 漫镜视频 Handoff
 
-更新时间：2026-07-11
+更新时间：2026-07-12
+
+## 2026-07-12 P0/P1 生产发布
+
+- 生产已从 `1b8534a` 更新到 `b628a95 Refactor P1 frontend and video workflows`。
+- 待执行 migration 为 0；发布前后业务数量与主键指纹完全一致：项目 1、工作区 1、素材 10、素材关联 10、分镜 15、任务 20、视频资产 3。
+- 已验证备份 `/data/backups/manjing-video-db-pre-deploy-20260712-011336.dump`，63KB、PostgreSQL custom archive、111 个目录项。
+- PM2 online，公网首页 200，匿名鉴权 401，生产工作区干净。
+- 登录后的自动化生产 smoke 因未提供临时凭证而跳过；需要在真实浏览器完成登录、项目内容、素材与视频预览验收。
 
 ## P0 稳定性自动化
 
@@ -18,7 +26,7 @@
 - 已把视频创建 payload 与状态解析抽到 `lib/video-generation.ts`、`lib/video-status.ts`，视频创建/状态路由分别缩减到 340/205 行。
 - localStorage 不再缓存分镜、任务、视频资产和素材业务副本，服务端规范化表保持唯一权威。
 - 本地 `git diff --check`、TypeScript、生产构建和核心 API 集成均通过；临时测试数据已清理。
-- P1 代码提交仅进入 GitHub `main`，尚未部署；P0 提交 `39926bc` 也尚未部署。
+- P0/P1 已于 2026-07-12 部署到生产 `b628a95`。
 
 ## 生产数据事故与强制规则
 
