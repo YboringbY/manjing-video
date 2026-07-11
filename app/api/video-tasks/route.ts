@@ -8,6 +8,8 @@ import { isSmallReferenceImage, MIN_VIDEO_REFERENCE_IMAGE_SIDE, readLocalUploadI
 import { prisma } from "@/lib/prisma";
 import { rateLimit } from "@/lib/rate-limit";
 import { publicVideoTask } from "@/lib/video-task";
+import { isPublicMediaUrl } from "@/lib/media-url";
+import { isZJVideoProvider, normalizeProviderBaseUrl, videoCreateEndpoint } from "@/lib/providers/video";
 import { resolveModelRoute } from "../api-profiles/store";
 
 type MediaInput = {
@@ -72,7 +74,6 @@ type FastGateListResponse = {
 const BASE_URL = process.env.SEEDANCE_BASE_URL || "https://api.aifastgate.com";
 const MODEL = process.env.SEEDANCE_MODEL || "doubao-seedance-2.0-fast";
 const MAX_VIDEO_PROMPT_LENGTH = 8000;
-const MAX_MEDIA_URL_LENGTH = 2048;
 const MAX_DATABASE_INT = 2147483647;
 
 function cleanProjectId(value: unknown) {
@@ -85,29 +86,11 @@ function cleanShotId(value: unknown) {
   return Number.isSafeInteger(number) && number > 0 ? BigInt(number) : null;
 }
 
-function normalizeBaseUrl(value?: string) {
-  return (value || BASE_URL).trim().replace(/\/$/, "");
-}
-
-function isZJProvider(baseUrl: string) {
-  try {
-    return new URL(baseUrl).hostname === "zjljzn.ltd";
-  } catch {
-    return baseUrl.includes("zjljzn.ltd");
-  }
-}
-
-function appendPath(baseUrl: string, path: string) {
-  const normalized = baseUrl.replace(/\/$/, "");
-  if (normalized.endsWith("/v1")) return `${normalized}${path.replace(/^\/v1/, "")}`;
-  return `${normalized}${path}`;
-}
-
 function resolveApiProfile(profile?: ApiProfile) {
   const videoModels = Array.isArray(profile?.videoModels) ? profile.videoModels.map(item => item.trim()).filter(Boolean) : [];
   return {
     apiKey: profile?.apiKey?.trim() || process.env.SEEDANCE_API_KEY || "",
-    baseUrl: normalizeBaseUrl(profile?.baseUrl),
+    baseUrl: normalizeProviderBaseUrl(profile?.baseUrl, BASE_URL),
     videoModels,
     model: profile?.model?.trim() || videoModels[0] || MODEL,
     name: profile?.name?.trim() || "默认 AIfastgate"
@@ -151,16 +134,6 @@ function normalizeMedia(items: MediaInput[] | undefined, limit: number, type: "i
 
 function normalizeMediaUrls(items: MediaInput[] | undefined, limit: number) {
   return (items || []).map(item => item.url.trim()).filter(Boolean).slice(0, limit);
-}
-
-function validateMediaUrl(url: string) {
-  if (url.length > MAX_MEDIA_URL_LENGTH) return false;
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 async function findSmallLocalReferenceImages(urls: string[]) {
@@ -245,51 +218,66 @@ export async function POST(request: Request) {
   if (limited) return limited;
 
   const body = await request.json() as GenerateVideoPayload;
+  const rejectRequest = async (message: string, status = 400, result: "blocked" | "failure" = "blocked") => {
+    await logAudit({
+      request,
+      actor: membership,
+      action: "video_task.create",
+      targetType: "video_task",
+      result,
+      metadata: {
+        stage: "validation",
+        model: body.model_id?.trim(),
+        projectId: body.project_id,
+        shotId: body.shot?.id,
+        promptLength: body.shot?.prompt?.length || 0,
+        imageCount: body.images?.length || 0,
+        videoCount: body.videos?.length || 0,
+        audioCount: body.audios?.length || 0,
+        message
+      }
+    });
+    return NextResponse.json({ code: status, message }, { status });
+  };
   const route = await resolveModelRoute("video", body.model_id);
   if (body.model_id && !route) {
-    return NextResponse.json({ code: 400, message: "当前没有启用的渠道支持所选视频模型，请在模型渠道管理中补充后重试。" }, { status: 400 });
+    return rejectRequest("当前没有启用的渠道支持所选视频模型，请在模型渠道管理中补充后重试。");
   }
   const { apiKey, baseUrl, model, name } = resolveApiProfile(route?.profile);
   const requestedModel = body.model_id?.trim() || route?.model || model;
 
   if (!apiKey) {
-    return NextResponse.json(
-      { code: 500, message: "缺少视频生成 API Key，请先在 .env.local 或管理员 API Profile 中配置。" },
-      { status: 500 }
-    );
+    return rejectRequest("缺少视频生成 API Key，请先在管理员模型渠道中配置。", 500, "failure");
   }
 
   const shot = body.shot;
 
   if (!shot?.prompt) {
-    return NextResponse.json(
-      { code: 400, message: "缺少分镜 prompt，无法创建视频生成任务。" },
-      { status: 400 }
-    );
+    return rejectRequest("缺少分镜提示词，无法创建视频生成任务。");
   }
   const projectId = cleanProjectId(body.project_id);
   const shotId = cleanShotId(shot.id);
   if (!projectId || !shotId) {
-    return NextResponse.json({ code: 400, message: "缺少有效的项目或分镜 ID。" }, { status: 400 });
+    return rejectRequest("缺少有效的项目或分镜 ID。");
   }
   const project = await prisma.project.findFirst({ where: { id: projectId, tenantId: membership.tenantId } });
   if (!project) {
-    return NextResponse.json({ code: 404, message: "当前项目尚未同步到服务器，请稍后重试。" }, { status: 404 });
+    return rejectRequest("当前项目尚未同步到服务器，请稍后重试。", 404);
   }
   const duration = normalizeDuration(shot.duration);
   const prompt = buildDurationControlledPrompt(shot.prompt, duration);
   if (prompt.length > MAX_VIDEO_PROMPT_LENGTH) {
-    return NextResponse.json({ code: 400, message: `视频提示词最多 ${MAX_VIDEO_PROMPT_LENGTH} 字，请精简后再生成。` }, { status: 400 });
+    return rejectRequest(`视频提示词最多 ${MAX_VIDEO_PROMPT_LENGTH} 字，请精简后再生成。`);
   }
 
   const imageUrls = normalizeMediaUrls(body.images, 9);
   const videoUrls = normalizeMediaUrls(body.videos, 3);
   const audioUrls = normalizeMediaUrls(body.audios, 3);
-  if (![...imageUrls, ...videoUrls, ...audioUrls].every(validateMediaUrl)) {
-    return NextResponse.json({ code: 400, message: "参考素材必须是可访问的 http/https URL。" }, { status: 400 });
+  if (![...imageUrls, ...videoUrls, ...audioUrls].every(isPublicMediaUrl)) {
+    return rejectRequest("参考素材必须使用上游可访问的公网 http/https URL；本机、局域网或相对路径不能用于生成。");
   }
   if (body.input_type === "first_last_frame" && imageUrls.length < 2) {
-    return NextResponse.json({ code: 400, message: "首尾帧生成需要同时提供首帧和尾帧图片。" }, { status: 400 });
+    return rejectRequest("首尾帧生成需要同时提供首帧和尾帧图片。");
   }
   const inputType = imageUrls.length || videoUrls.length || audioUrls.length ? body.input_type || "reference" : "text_to_video";
   const smallReferenceImages = await findSmallLocalReferenceImages(imageUrls);
@@ -314,7 +302,7 @@ export async function POST(request: Request) {
     ...normalizeMedia(body.audios, 3, "audio")
   ];
 
-  const payload = isZJProvider(baseUrl) ? {
+  const payload = isZJVideoProvider(baseUrl) ? {
     model: requestedModel,
     prompt,
     input_type: inputType,
@@ -385,7 +373,7 @@ export async function POST(request: Request) {
     });
   });
 
-  const endpoint = baseUrl.includes("/api/v3") ? `${baseUrl}/contents/generations/tasks` : isZJProvider(baseUrl) ? appendPath(baseUrl, "/v1/videos/generations") : `${baseUrl}/v1/video/generations`;
+  const endpoint = videoCreateEndpoint(baseUrl);
 
   let response: Response;
   try {

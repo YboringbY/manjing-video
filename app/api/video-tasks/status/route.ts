@@ -5,6 +5,7 @@ import { fetchWithTimeout } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { rateLimit } from "@/lib/rate-limit";
 import { publicVideoTask, VideoTaskRecord } from "@/lib/video-task";
+import { normalizeProviderBaseUrl, normalizeVideoStatus, videoStatusEndpoints } from "@/lib/providers/video";
 import { readServerApiProfiles } from "../../api-profiles/store";
 
 type ApiProfile = { id?: string; name?: string; baseUrl?: string; apiKey?: string; model?: string };
@@ -61,33 +62,11 @@ function cleanProjectId(value: unknown) {
   return Number.isInteger(number) && number > 0 && number <= MAX_DATABASE_INT ? number : 0;
 }
 
-function isZJProvider(baseUrl: string) {
-  try {
-    return new URL(baseUrl).hostname === "zjljzn.ltd";
-  } catch {
-    return baseUrl.includes("zjljzn.ltd");
-  }
-}
-
-function appendPath(baseUrl: string, path: string) {
-  const normalized = baseUrl.replace(/\/$/, "");
-  if (normalized.endsWith("/v1")) return `${normalized}${path.replace(/^\/v1/, "")}`;
-  return `${normalized}${path}`;
-}
-
 function resolveApiProfile(profile?: ApiProfile) {
   return {
     apiKey: profile?.apiKey?.trim() || process.env.SEEDANCE_API_KEY || "",
-    baseUrl: (profile?.baseUrl?.trim() || BASE_URL).replace(/\/$/, "")
+    baseUrl: normalizeProviderBaseUrl(profile?.baseUrl, BASE_URL)
   };
-}
-
-function normalizeStatus(value?: string) {
-  const status = (value || "pending").toLowerCase();
-  if (["succeeded", "success", "completed", "done"].includes(status)) return "succeeded";
-  if (["failed", "error", "cancelled"].includes(status)) return "failed";
-  if (["running", "processing", "in_progress"].includes(status)) return "running";
-  return "pending";
 }
 
 function isHttpUrl(value?: string) {
@@ -176,6 +155,32 @@ async function persistTaskStatus(task: VideoTaskRecord, params: { status: string
       where: { tenantId: task.tenantId, projectId: task.projectId, id: task.shotId },
       data: { status: taskStatus }
     });
+    if (taskStatus === "done" && params.videoUrl) {
+      const existingAsset = task.providerTaskId
+        ? await tx.videoAsset.findFirst({ where: { tenantId: task.tenantId, projectId: task.projectId, providerTaskId: task.providerTaskId } })
+        : null;
+      const snapshot = task.snapshot && typeof task.snapshot === "object" && !Array.isArray(task.snapshot)
+        ? task.snapshot as Record<string, unknown>
+        : {};
+      const assetData = {
+        shotId: task.shotId,
+        title: `${task.shotTitle} · 可用片段`,
+        meta: `${Number(snapshot.duration || 0) || "-"}秒 / ${String(snapshot.ratio || "-").split(" ")[0]}`,
+        gradient: "linear-gradient(135deg, #1f2937, #111827)",
+        videoUrl: params.videoUrl,
+        providerTaskId: task.providerTaskId
+      };
+      if (existingAsset) {
+        await tx.videoAsset.update({
+          where: { tenantId_projectId_id: { tenantId: task.tenantId, projectId: task.projectId, id: existingAsset.id } },
+          data: assetData
+        });
+      } else {
+        await tx.videoAsset.create({
+          data: { tenantId: task.tenantId, projectId: task.projectId, ...assetData }
+        });
+      }
+    }
     return updated;
   });
 }
@@ -222,17 +227,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const endpoints = baseUrl.includes("/api/v3") ? [
-    `${baseUrl}/contents/generations/tasks?page=1&page_size=500`,
-    `${baseUrl}/contents/generations/tasks/${upstreamTaskId}`
-  ] : isZJProvider(baseUrl) ? [
-    appendPath(baseUrl, `/v1/videos/generations/${upstreamTaskId}`),
-    appendPath(baseUrl, `/v1/video/generations/${upstreamTaskId}`)
-  ] : [
-    `${baseUrl}/v1/video/generations/${upstreamTaskId}`,
-    `${baseUrl}/v1/tasks/${upstreamTaskId}`,
-    `${baseUrl}/v1/video/tasks/${upstreamTaskId}`
-  ];
+  const endpoints = videoStatusEndpoints(baseUrl, upstreamTaskId);
 
   let response: Response | null = null;
   let text = "";
@@ -265,7 +260,7 @@ export async function POST(request: Request) {
   const rawStatus = matchedResult.status || matchedResult.task_status || dataObject?.status || dataObject?.task_status || matchedResult.result?.status || dataObject?.result?.status;
   const videoUrl = extractVideoUrl(matchedResult);
   const extractedError = extractError(matchedResult);
-  const normalizedStatus = videoUrl ? "succeeded" : extractedError ? "failed" : normalizeStatus(rawStatus);
+  const normalizedStatus = videoUrl ? "succeeded" : extractedError ? "failed" : normalizeVideoStatus(rawStatus);
   if (normalizedStatus === "failed") {
     await logAudit({
       request,

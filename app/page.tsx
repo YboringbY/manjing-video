@@ -4,7 +4,8 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ProjectListSection } from "./components/ProjectListSection";
 import { ProjectOverviewSection } from "./components/ProjectOverviewSection";
 import { Sidebar } from "./components/Sidebar";
-import { ApiProfile, AppState, AspectRatio, ImageQuality, LibraryFilter, MaterialAsset, MaterialKind, MaterialRole, MemberRole, ProfileSection, Project, ProjectStates, Shot, ShotStatus, TaskStatus, VideoAsset, VideoTask, VideoTaskSnapshot, VisualAsset, WorkspaceSection } from "./components/types";
+import { ApiProfile, AppState, AspectRatio, ImageQuality, LibraryFilter, MaterialAsset, MaterialKind, MaterialRole, MemberRole, ProfileSection, Project, ProjectStates, Shot, ShotStatus, TaskStatus, VideoAsset, VideoTask, VideoTaskSnapshot, WorkspaceSection } from "./components/types";
+import { isPublicMediaUrl } from "@/lib/media-url";
 
 type AuthUser = {
   id: string;
@@ -22,7 +23,6 @@ type AuthUsers = Record<string, AuthUser>;
 type WorkspaceRecord = { projectId: number; state: Partial<AppState>; updatedAt?: string };
 type GenerationContext = {
   materialIds: number[];
-  externalAssetIds: string[];
   firstFrameMaterialId?: number;
   lastFrameMaterialId?: number;
   omniReferenceEnabled: boolean;
@@ -84,7 +84,10 @@ function normalizeAppState(value: Partial<AppState> | undefined, fallback: AppSt
       id: safeProjectId(value?.project?.id, fallback.project.id),
       name: value?.project?.name || fallback.project.name,
       type: value?.project?.type || fallback.project.type,
-      script: value?.project?.script || ""
+      script: value?.project?.script || "",
+      version: value?.project?.version,
+      updatedAt: value?.project?.updatedAt,
+      materialCount: value?.project?.materialCount
     },
     shots: Array.isArray(value?.shots) ? value.shots : [],
     tasks: Array.isArray(value?.tasks) ? value.tasks : [],
@@ -152,11 +155,15 @@ function isSmallVideoReferenceImage(material: MaterialAsset) {
 }
 
 function projectStatesFromWorkspaces(workspaces: WorkspaceRecord[]) {
-  return Object.fromEntries(workspaces.map(item => {
+  return Object.fromEntries(workspaces.filter(item => !isLegacySeedProject(item.state.project)).map(item => {
     const normalizedState = normalizeAppState(item.state);
     const projectId = safeProjectId(normalizedState.project.id || item.projectId);
     return [projectId, { ...normalizedState, project: { ...normalizedState.project, id: projectId } }];
   })) as ProjectStates;
+}
+
+function workspaceStateForSync(value: AppState): AppState {
+  return { ...value, shots: [], tasks: [], assets: [], materials: [] };
 }
 
 function getStoredUsers(): Record<string, AuthUser> {
@@ -363,9 +370,7 @@ export default function Home() {
   const [renamingMaterialId, setRenamingMaterialId] = useState<number | null>(null);
   const [renamingMaterialName, setRenamingMaterialName] = useState("");
   const [previewingMaterial, setPreviewingMaterial] = useState<MaterialAsset | null>(null);
-  const [lizhenAssets, setLizhenAssets] = useState<VisualAsset[]>([]);
   const [serverTeamMaterials, setServerTeamMaterials] = useState<MaterialAsset[]>([]);
-  const [selectedLizhenAssetIds, setSelectedLizhenAssetIds] = useState<string[]>([]);
   const [workspaceSyncReady, setWorkspaceSyncReady] = useState(false);
   const [workspaceSyncMessage, setWorkspaceSyncMessage] = useState("");
   const [showFullScript, setShowFullScript] = useState(false);
@@ -379,7 +384,7 @@ export default function Home() {
   const [showAllImageResults, setShowAllImageResults] = useState(false);
   const [showAllTasks, setShowAllTasks] = useState(false);
   const [taskRecordFilter, setTaskRecordFilter] = useState<TaskRecordFilter>("all");
-  const [showAllLizhenAssets, setShowAllLizhenAssets] = useState(false);
+  const [showAllTeamMaterials, setShowAllTeamMaterials] = useState(false);
   const [memberRoleDraft, setMemberRoleDraft] = useState<MemberRole>("user");
   const [memberAccountDraft, setMemberAccountDraft] = useState("");
   const [memberNameDraft, setMemberNameDraft] = useState("");
@@ -533,8 +538,13 @@ export default function Home() {
         const result = await readApiJson(response, "加载项目工作区失败");
         if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "加载项目工作区失败");
         if (cancelled) return;
-        const workspaces = result.data as WorkspaceRecord[];
+        const workspaces = (result.data as WorkspaceRecord[]).filter(item => !isLegacySeedProject(item.state.project));
         if (!workspaces.length) {
+          setState(emptyProjectState);
+          setProjectStates(emptyProjectStates);
+          setProjects(emptyProjects);
+          setCurrentProjectId(emptyProjectState.project.id);
+          setScriptInput("");
           setWorkspaceSyncReady(true);
           return;
         }
@@ -574,7 +584,12 @@ export default function Home() {
         if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "加载素材失败");
         if (cancelled) return;
         const serverMaterials = result.data as MaterialAsset[];
-        setState(prev => ({ ...prev, materials: mergeMaterials(prev.materials, serverMaterials) }));
+        const serverMaterialIds = new Set(serverMaterials.map(material => material.id));
+        setState(prev => ({ ...prev, materials: serverMaterials }));
+        setGeneratedImages(serverMaterials.filter(material => material.kind === "image" && material.source === "generated"));
+        setSelectedMaterialIds(prev => prev.filter(id => serverMaterialIds.has(id)));
+        setFirstFrameMaterialId(prev => prev && serverMaterialIds.has(prev) ? prev : null);
+        setLastFrameMaterialId(prev => prev && serverMaterialIds.has(prev) ? prev : null);
       } catch {
         if (!cancelled) setMaterialMessage(prev => prev || "素材库暂时无法同步数据库记录。");
       }
@@ -686,7 +701,7 @@ export default function Home() {
         const response = await fetch("/api/workspaces", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ projectId: currentProjectId, name: state.project.name, state, lastUpdatedAt: workspaceUpdatedAtRef.current[currentProjectId] })
+          body: JSON.stringify({ projectId: currentProjectId, name: state.project.name, state: workspaceStateForSync(state), lastUpdatedAt: workspaceUpdatedAtRef.current[currentProjectId] })
         });
         const result = await readApiJson(response, "保存项目工作区失败");
         if (!response.ok || result.code !== 0) throw new Error(result.message || "保存项目工作区失败");
@@ -697,7 +712,7 @@ export default function Home() {
       }
     }, 800);
     return () => window.clearTimeout(timer);
-  }, [authReady, currentUser, storageReady, workspaceSyncReady, currentProjectId, state]);
+  }, [authReady, currentUser, storageReady, workspaceSyncReady, currentProjectId, state.project.name, state.project.type, state.project.script, state.assetGroupId]);
 
   async function upsertMember() {
     if (!currentUser) return alert("请先登录管理员账号。");
@@ -806,7 +821,7 @@ export default function Home() {
     const response = await fetch("/api/workspaces", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ projectId: nextState.project.id, name: nextState.project.name, state: nextState, lastUpdatedAt: workspaceUpdatedAtRef.current[nextState.project.id] })
+      body: JSON.stringify({ projectId: nextState.project.id, name: nextState.project.name, state: workspaceStateForSync(nextState), lastUpdatedAt: workspaceUpdatedAtRef.current[nextState.project.id] })
     });
     const result = await readApiJson(response, "保存项目工作区失败");
     if (!response.ok || result.code !== 0) throw new Error(result.message || "保存项目工作区失败");
@@ -823,8 +838,21 @@ export default function Home() {
     };
   }
 
-  function saveProject() {
-    const newProjectState = createBlankProject(projectName, projectType);
+  async function saveProject() {
+    let newProjectState = createBlankProject(projectName, projectType);
+    try {
+      const response = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newProjectState.project)
+      });
+      const result = await readApiJson(response, "创建项目失败");
+      if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "创建项目失败");
+      newProjectState = { ...newProjectState, project: { ...newProjectState.project, ...result.data } };
+    } catch (error) {
+      setUserActionMessage(error instanceof Error ? error.message : "创建项目失败");
+      return;
+    }
     const nextProjects = [newProjectState.project, ...projects];
     const nextProjectStates = { ...projectStates, [currentProjectId]: state, [newProjectState.project.id]: newProjectState };
     setProjects(nextProjects);
@@ -834,7 +862,6 @@ export default function Home() {
     persistWorkspace(newProjectState, nextProjectStates, nextProjects, newProjectState.project.id);
     setScriptInput("");
     setSelectedMaterialIds([]);
-    setSelectedLizhenAssetIds([]);
     setGeneratedImages([]);
     setProjectModalOpen(false);
     setActiveSection("overview");
@@ -867,7 +894,6 @@ export default function Home() {
     setState(nextState);
     setScriptInput(nextState.project.script);
     setSelectedMaterialIds([]);
-    setSelectedLizhenAssetIds([]);
     setGeneratedImages([]);
     setDeleteProjectTarget(null);
     setDeleteProjectName("");
@@ -896,7 +922,6 @@ export default function Home() {
     setScriptInput(nextState.project.script);
     setProjectSwitcherOpen(false);
     setSelectedMaterialIds([]);
-    setSelectedLizhenAssetIds([]);
     setGeneratedImages([]);
   }
 
@@ -905,10 +930,21 @@ export default function Home() {
     setActiveSection("overview");
   }
 
-  function saveScript() {
+  async function saveScript() {
     const script = scriptInput.trim();
-    const nextState = { ...state, project: { ...state.project, script } };
-    const nextProjects = projects.map(project => project.id === currentProjectId ? { ...project, script } : project);
+    const response = await fetch("/api/projects", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: currentProjectId, version: state.project.version || 1, script })
+    });
+    const result = await readApiJson(response, "保存剧本失败");
+    if (!response.ok || result.code !== 0 || !result.data) {
+      setScriptOptimizationNote(result.message || "保存剧本失败，请刷新后重试。");
+      return;
+    }
+    const savedProject = { ...state.project, ...result.data } as Project;
+    const nextState = { ...state, project: savedProject };
+    const nextProjects = projects.map(project => project.id === currentProjectId ? savedProject : project);
     const nextProjectStates = { ...projectStates, [currentProjectId]: nextState };
     setState(nextState);
     setProjects(nextProjects);
@@ -1063,7 +1099,6 @@ export default function Home() {
   function currentGenerationContext(): GenerationContext {
     return {
       materialIds: [...selectedMaterialIds],
-      externalAssetIds: [...selectedLizhenAssetIds],
       firstFrameMaterialId: firstFrameMaterialId || undefined,
       lastFrameMaterialId: lastFrameMaterialId || undefined,
       omniReferenceEnabled,
@@ -1090,19 +1125,30 @@ export default function Home() {
   }
 
 
-  function splitExistingShot(shot: Shot) {
+  async function splitExistingShot(shot: Shot) {
     const splitShots = splitLongPromptIntoShots(shot.title.replace(/｜\d+$/, ""), shot.prompt, shot.ratio, Math.max(12, shot.duration));
     if (splitShots.length <= 1) {
       alert("这条分镜没有足够内容可拆分，请补充更完整的动作和台词，或使用 0-3秒/3-6秒 时间轴格式。");
       return;
     }
+    const response = await fetch("/api/shots", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: currentProjectId, replaceShotId: shot.id, shots: splitShots })
+    });
+    const result = await readApiJson(response, "拆分分镜失败");
+    if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) {
+      setUserActionMessage(result.message || "拆分分镜失败");
+      return;
+    }
+    const savedShots = result.data as Shot[];
     setState(prev => ({
       ...prev,
-      shots: prev.shots.flatMap(item => item.id === shot.id ? splitShots : [item]),
+      shots: prev.shots.flatMap(item => item.id === shot.id ? savedShots : [item]),
       tasks: prev.tasks.filter(task => task.shotId !== shot.id),
       assets: prev.assets.filter(asset => asset.shotId !== shot.id)
     }));
-    splitShots.forEach((item, index) => window.setTimeout(() => startGeneration(item.id, item), index * 800));
+    savedShots.forEach((item, index) => window.setTimeout(() => startGeneration(item.id, item), index * 800));
   }
 
   function generateShotOrSplit(shot: Shot) {
@@ -1115,11 +1161,21 @@ export default function Home() {
     return { id: Date.now(), title: `镜头 01｜完整${duration}秒镜头`, prompt, ratio: "9:16 竖屏短剧", duration, status: "pending" as ShotStatus };
   }
 
-  function importBatchShots() {
+  async function importBatchShots() {
     const targetDuration = estimateTotalDuration(batchPromptInput) || batchTargetDuration;
     const shots = splitPromptLikeEditor(batchPromptInput, "9:16 竖屏短剧", targetDuration);
     const nextShots = shots.length ? shots : [createSinglePromptShot(batchPromptInput, batchTargetDuration)];
-    setState(prev => ({ ...prev, shots: [...prev.shots, ...nextShots] }));
+    const response = await fetch("/api/shots", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: currentProjectId, shots: nextShots })
+    });
+    const result = await readApiJson(response, "保存分镜失败");
+    if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) {
+      setUserActionMessage(result.message || "保存分镜失败");
+      return;
+    }
+    setState(prev => ({ ...prev, shots: [...prev.shots, ...(result.data as Shot[])] }));
     setBatchPromptInput("");
     setBatchModalOpen(false);
   }
@@ -1288,6 +1344,10 @@ export default function Home() {
       alert("请填写可访问的素材链接。");
       return;
     }
+    if (!isPublicMediaUrl(url)) {
+      setMaterialMessage("请输入上游可访问的公网 http/https URL；本机、局域网和相对路径只能用于预览。");
+      return;
+    }
 
     const materialDraft: MaterialAsset = {
       id: Date.now(),
@@ -1345,7 +1405,6 @@ export default function Home() {
         kind,
         role,
         previewUrl: result.data.previewUrl || result.data.publicUrl,
-        storagePath: result.data.storagePath,
         width: result.data.width,
         height: result.data.height,
         source: "upload",
@@ -1363,7 +1422,10 @@ export default function Home() {
       setMaterialName("");
       const dimensionText = materialDimensionText(material);
       const warning = result.data.warning ? ` ${result.data.warning}` : "";
-      setMaterialMessage(`${shareUploadToTeam ? "素材已上传到当前项目，并加入团队共享。" : "素材已上传到当前项目，可作为参考素材使用。"}${dimensionText ? ` 尺寸：${dimensionText}。` : ""}${warning}`);
+      const generationMessage = isPublicMediaUrl(material.url)
+        ? shareUploadToTeam ? "素材已上传到当前项目，并加入团队共享。" : "素材已上传到当前项目，可作为参考素材使用。"
+        : "素材已上传并可本地预览；当前开发环境没有公网素材地址，暂不能作为生成参考。";
+      setMaterialMessage(`${generationMessage}${dimensionText ? ` 尺寸：${dimensionText}。` : ""}${warning}`);
     } catch (error) {
       setMaterialMessage(error instanceof Error ? error.message : "上传素材失败");
     } finally {
@@ -1377,7 +1439,11 @@ export default function Home() {
     if (!material) return;
     if (material?.dbId) {
       try {
-        const response = await fetch(`/api/materials?id=${material.dbId}`, { method: "DELETE" });
+        const isImportedTeamMaterial = material.scope === "team" && material.sourceProjectId !== currentProjectId;
+        const endpoint = isImportedTeamMaterial
+          ? `/api/materials/links?projectId=${currentProjectId}&materialId=${material.dbId}`
+          : `/api/materials?id=${material.dbId}`;
+        const response = await fetch(endpoint, { method: "DELETE" });
         const result = await readApiJson(response, "删除素材失败");
         if (!response.ok || result.code !== 0) throw new Error(result.message || "删除素材失败");
       } catch (error) {
@@ -1387,8 +1453,10 @@ export default function Home() {
     }
     setSelectedMaterialIds(prev => prev.filter(id => id !== materialId));
     setState(prev => ({ ...prev, materials: prev.materials.filter(material => material.id !== materialId) }));
-    if (material.scope === "team") setServerTeamMaterials(prev => prev.filter(item => item.id !== material.id));
-    setMaterialMessage("素材已删除，并已从 @ 引用中移除。");
+    if (material.scope === "team" && material.sourceProjectId === currentProjectId) setServerTeamMaterials(prev => prev.filter(item => item.id !== material.id));
+    setMaterialMessage(material.scope === "team" && material.sourceProjectId !== currentProjectId
+      ? "共享素材已从当前项目移除，团队素材本身仍然保留。"
+      : "素材已删除，并已从 @ 引用中移除。");
   }
 
   function openRenameMaterial(material: MaterialAsset) {
@@ -1427,21 +1495,28 @@ export default function Home() {
     if (selectedMaterialIds.includes(id)) {
       if (firstFrameMaterialId === id) setFirstFrameMaterialId(null);
       if (lastFrameMaterialId === id) setLastFrameMaterialId(null);
+      setSelectedMaterialIds(prev => prev.filter(item => item !== id));
+      return;
     }
-    setSelectedMaterialIds(prev => prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]);
+    const material = state.materials.find(item => item.id === id);
+    if (!material || !materialApiUrl(material)) {
+      setMaterialMessage("这个素材只有本地预览地址，不能提交给视频模型。请使用带公网 URL 的素材。");
+      return;
+    }
+    setSelectedMaterialIds(prev => [...prev, id]);
   }
 
   function selectFrameReference(slot: "first" | "last", material: MaterialAsset) {
+    if (!materialApiUrl(material)) {
+      setMaterialMessage("这张图片只有本地预览地址，不能作为首尾帧提交给视频模型。");
+      return;
+    }
     if (slot === "first") {
       setFirstFrameMaterialId(prev => prev === material.id ? null : material.id);
     } else {
       setLastFrameMaterialId(prev => prev === material.id ? null : material.id);
     }
     setSelectedMaterialIds(prev => prev.includes(material.id) ? prev : [...prev, material.id]);
-  }
-
-  function toggleLizhenAsset(id: string) {
-    setSelectedLizhenAssetIds(prev => prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]);
   }
 
   function openReferencePicker(role: MaterialRole) {
@@ -1466,7 +1541,8 @@ export default function Home() {
   }
 
   function materialApiUrl(item: MaterialAsset) {
-    return item.reviewedAssetUrl || item.seedanceAssetUrl || item.url;
+    const candidate = item.reviewedAssetUrl || item.seedanceAssetUrl || item.url;
+    return isPublicMediaUrl(candidate) ? candidate : undefined;
   }
 
   function materialPreviewUrl(item: MaterialAsset) {
@@ -1485,7 +1561,7 @@ export default function Home() {
     return <span className={`reference-type-badge ${material.kind}`}>{compact ? label.slice(0, 1) : label}</span>;
   }
 
-  function toggleTeamSharedMaterial(material: MaterialAsset) {
+  async function toggleTeamSharedMaterial(material: MaterialAsset) {
     const existing = state.materials.find(item => item.id === material.id);
     if (existing) {
       toggleMaterial(existing.id);
@@ -1494,17 +1570,34 @@ export default function Home() {
     const importedMaterial: MaterialAsset = {
       ...material,
       scope: "team",
-      sourceProjectId: material.sourceProjectId || currentProjectId,
+      sourceProjectId: material.sourceProjectId,
       sourceProjectName: material.sourceProjectName || state.project.name
     };
+    if (material.dbId) {
+      try {
+        const response = await fetch("/api/materials/links", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId: currentProjectId, materialId: material.dbId })
+        });
+        const result = await readApiJson(response, "关联共享素材失败");
+        if (!response.ok || result.code !== 0) throw new Error(result.message || "关联共享素材失败");
+      } catch (error) {
+        setMaterialMessage(error instanceof Error ? error.message : "关联共享素材失败。");
+        return;
+      }
+    }
     setState(prev => ({ ...prev, materials: [importedMaterial, ...prev.materials] }));
-    setSelectedMaterialIds(prev => prev.includes(importedMaterial.id) ? prev : [...prev, importedMaterial.id]);
-    setMaterialMessage("共享素材已加入当前项目，并选为参考。");
+    if (materialApiUrl(importedMaterial)) {
+      setSelectedMaterialIds(prev => prev.includes(importedMaterial.id) ? prev : [...prev, importedMaterial.id]);
+      setMaterialMessage("共享素材已加入当前项目，并选为参考。");
+    } else {
+      setMaterialMessage("共享素材已加入当前项目，但它没有公网 URL，只能预览，不能作为生成参考。");
+    }
   }
 
   function buildMediaPayload(context = currentGenerationContext()) {
     const selected = state.materials.filter(item => context.materialIds.includes(item.id));
-    const selectedLizhenAssets = lizhenAssets.filter(item => context.externalAssetIds.includes(item.id));
     const firstFrame = state.materials.find(item => item.id === context.firstFrameMaterialId && item.kind === "image" && materialApiUrl(item));
     const lastFrame = state.materials.find(item => item.id === context.lastFrameMaterialId && item.kind === "image" && materialApiUrl(item));
     if (firstFrame && lastFrame) {
@@ -1519,29 +1612,24 @@ export default function Home() {
     }
     return {
       images: [
-        ...selected.filter(item => item.kind === "image" && item.role === "reference_image" && materialApiUrl(item)).map(item => ({ url: materialApiUrl(item), role: item.role })),
-        ...selectedLizhenAssets.filter(item => item.类型 === "图片").map(item => ({ url: item.asset_url, role: "reference_image" }))
+        ...selected.filter(item => item.kind === "image" && item.role === "reference_image" && materialApiUrl(item)).map(item => ({ url: materialApiUrl(item), role: item.role }))
       ],
       videos: [
-        ...selected.filter(item => item.kind === "video" && materialApiUrl(item)).map(item => ({ url: materialApiUrl(item), role: item.role })),
-        ...selectedLizhenAssets.filter(item => item.类型 === "视频").map(item => ({ url: item.asset_url, role: "reference_video" }))
+        ...selected.filter(item => item.kind === "video" && materialApiUrl(item)).map(item => ({ url: materialApiUrl(item), role: item.role }))
       ],
       audios: [
-        ...selected.filter(item => item.kind === "audio" && materialApiUrl(item)).map(item => ({ url: materialApiUrl(item), role: item.role })),
-        ...selectedLizhenAssets.filter(item => item.类型 === "音频").map(item => ({ url: item.asset_url, role: "reference_audio" }))
+        ...selected.filter(item => item.kind === "audio" && materialApiUrl(item)).map(item => ({ url: materialApiUrl(item), role: item.role }))
       ]
     };
   }
 
   function buildShotWithReferencePrompt(shot: Shot, context = currentGenerationContext()): Shot {
     const selectedInternalAssets = state.materials.filter(item => context.materialIds.includes(item.id) && item.kind === "image" && materialApiUrl(item));
-    const selectedExternalAssets = lizhenAssets.filter(item => context.externalAssetIds.includes(item.id) && item.类型 === "图片");
-    if (!selectedInternalAssets.length && !selectedExternalAssets.length) return shot;
+    if (!selectedInternalAssets.length) return shot;
     const internalLines = selectedInternalAssets.map(item => `- ${item.name}：严格参考素材 ${materialApiUrl(item)} 的人物/场景/道具外观，不要重新设计外貌。`);
-    const externalLines = selectedExternalAssets.map(item => `- ${item.asset_name}：严格参考共享素材的人物/场景/道具外观，不要重新设计外貌。`);
     return {
       ...shot,
-      prompt: `${shot.prompt}\n\n真实参考素材绑定：\n${[...internalLines, ...externalLines].join("\n")}\n生成要求：画面中的同名角色、场景和道具必须优先保持与对应参考素材一致，尤其人物脸型、五官、发型、年龄感、服装气质要保持一致；禁止生成与参考素材不一致的新人物。`
+      prompt: `${shot.prompt}\n\n真实参考素材绑定：\n${internalLines.join("\n")}\n生成要求：画面中的同名角色、场景和道具必须优先保持与对应参考素材一致，尤其人物脸型、五官、发型、年龄感、服装气质要保持一致；禁止生成与参考素材不一致的新人物。`
     };
   }
 
@@ -1562,7 +1650,6 @@ export default function Home() {
     }
 
     const selectedProjectAssets = state.materials.filter(item => context.materialIds.includes(item.id) && materialApiUrl(item));
-    const selectedExternalAssets = lizhenAssets.filter(item => context.externalAssetIds.includes(item.id));
     const smallReferenceImages = selectedProjectAssets.filter(isSmallVideoReferenceImage);
     if (smallReferenceImages.length) {
       const names = smallReferenceImages.map(item => `${item.name}${materialDimensionText(item) ? `（${materialDimensionText(item)}）` : ""}`).join("、");
@@ -1571,7 +1658,7 @@ export default function Home() {
       alert(message);
       return;
     }
-    if (context.omniReferenceEnabled && !selectedProjectAssets.length && !selectedExternalAssets.length) {
+    if (context.omniReferenceEnabled && !selectedProjectAssets.length) {
       alert("全能参考模式需要先选择至少 1 个可生成参考素材。");
       return;
     }
@@ -1598,7 +1685,10 @@ export default function Home() {
       duration: shot.duration,
       resolution: shot.resolution || "720p",
       materialIds: [...context.materialIds],
-      externalAssetIds: [...context.externalAssetIds],
+      externalAssetIds: [],
+      references: [
+        ...selectedProjectAssets.map(material => ({ id: material.id, name: material.name, kind: material.kind }))
+      ],
       firstFrameMaterialId: context.firstFrameMaterialId,
       lastFrameMaterialId: context.lastFrameMaterialId,
       omniReferenceEnabled: context.omniReferenceEnabled,
@@ -1630,8 +1720,7 @@ export default function Home() {
       }
       if (!response.ok || result.code !== 0 || !result.data?.task_id || !serverTask) throw new Error(result.message || "创建视频任务失败");
       const providerTaskId = result.data.task_id as string;
-      const selectedLizhenNames = selectedExternalAssets.map(item => item.asset_name).join("、");
-      setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === serverTask.id ? { ...serverTask, result: `任务已提交：${providerTaskId}${selectedLizhenNames ? `｜参考素材：${selectedLizhenNames}` : ""}` } : item) }));
+      setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === serverTask.id ? { ...serverTask, result: `任务已提交：${providerTaskId}` } : item) }));
       pollGenerationStatus(shotId, serverTask.id, providerTaskId);
     } catch (error) {
       setState(prev => ({ ...prev, shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "failed" } : item) }));
@@ -1764,10 +1853,10 @@ export default function Home() {
   async function deleteShot(shotId: number) {
     if (!confirm("确定删除这条分镜及相关任务、资产吗？")) return;
     try {
-      const params = new URLSearchParams({ project_id: String(currentProjectId), shot_id: String(shotId) });
-      const response = await fetch(`/api/video-tasks?${params.toString()}`, { method: "DELETE" });
-      const result = await readApiJson(response, "删除分镜关联任务失败");
-      if (!response.ok || result.code !== 0) throw new Error(result.message || "删除分镜关联任务失败");
+      const params = new URLSearchParams({ projectId: String(currentProjectId), shotId: String(shotId) });
+      const response = await fetch(`/api/shots?${params.toString()}`, { method: "DELETE" });
+      const result = await readApiJson(response, "删除分镜失败");
+      if (!response.ok || result.code !== 0) throw new Error(result.message || "删除分镜失败");
     } catch (error) {
       setUserActionMessage(error instanceof Error ? error.message : "删除分镜关联任务失败");
       return;
@@ -1775,8 +1864,22 @@ export default function Home() {
     setState(prev => ({ ...prev, shots: prev.shots.filter(shot => shot.id !== shotId), tasks: prev.tasks.filter(task => task.shotId !== shotId), assets: prev.assets.filter(asset => asset.shotId !== shotId) }));
   }
 
-  function updateShotParams(shotId: number, patch: Partial<Pick<Shot, "ratio" | "duration" | "resolution" | "width" | "height">>) {
+  async function updateShotParams(shotId: number, patch: Partial<Pick<Shot, "ratio" | "duration" | "resolution" | "width" | "height">>) {
+    const current = state.shots.find(shot => shot.id === shotId);
+    if (!current) return;
     setState(prev => ({ ...prev, shots: prev.shots.map(shot => shot.id === shotId ? { ...shot, ...patch } : shot) }));
+    const response = await fetch("/api/shots", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: currentProjectId, shotId, version: current.version || 1, ...patch })
+    });
+    const result = await readApiJson(response, "更新分镜失败");
+    if (!response.ok || result.code !== 0 || !result.data) {
+      setUserActionMessage(result.message || "更新分镜失败，请刷新后重试。");
+      if (result.data) setState(prev => ({ ...prev, shots: prev.shots.map(shot => shot.id === shotId ? result.data as Shot : shot) }));
+      return;
+    }
+    setState(prev => ({ ...prev, shots: prev.shots.map(shot => shot.id === shotId ? result.data as Shot : shot) }));
   }
 
   async function deleteTask(taskId: string) {
@@ -1821,7 +1924,6 @@ export default function Home() {
     setShotResolution(nextResolution);
     if (snapshot?.model) setSelectedVideoModel(snapshot.model);
     setSelectedMaterialIds(snapshot?.materialIds || []);
-    setSelectedLizhenAssetIds(snapshot?.externalAssetIds || []);
     setFirstFrameMaterialId(snapshot?.firstFrameMaterialId || null);
     setLastFrameMaterialId(snapshot?.lastFrameMaterialId || null);
     setOmniReferenceEnabled(Boolean(snapshot?.omniReferenceEnabled));
@@ -1850,7 +1952,6 @@ export default function Home() {
     const snapshot = task.snapshot;
     addShot(preset, {
       materialIds: snapshot?.materialIds || [],
-      externalAssetIds: snapshot?.externalAssetIds || [],
       firstFrameMaterialId: snapshot?.firstFrameMaterialId,
       lastFrameMaterialId: snapshot?.lastFrameMaterialId,
       omniReferenceEnabled: Boolean(snapshot?.omniReferenceEnabled),
@@ -1861,12 +1962,48 @@ export default function Home() {
   function taskSnapshotText(task: VideoTask) {
     const snapshot = task.snapshot;
     if (!snapshot) return "历史任务未记录完整参数";
-    const refs = snapshot.materialIds.length + snapshot.externalAssetIds.length;
+    const refs = snapshot.materialIds.length + (snapshot.externalAssetIds || []).length;
     const inputLabel = snapshot.inputType === "first_last_frame" ? "首尾帧" : refs ? "参考素材" : "纯文本";
     return `${snapshot.duration}s / ${snapshot.ratio.split(" ")[0]} / ${snapshot.resolution || "720p"} / ${inputLabel}${refs ? ` ${refs} 个` : ""}`;
   }
 
-  function deleteVideoAsset(assetId: number) {
+  function taskReferenceText(task: VideoTask) {
+    const references = task.snapshot?.references || [];
+    return references.length ? references.map(reference => reference.name).join("、") : "";
+  }
+
+  async function submitTaskFeedback(task: VideoTask, rating: "satisfied" | "unsatisfied") {
+    const feedback = window.prompt(rating === "satisfied" ? "可选：记录这条视频表现好的地方" : "请简要记录需要改进的地方", task.feedback || "");
+    if (feedback === null) return;
+    const response = await fetch("/api/video-tasks/feedback", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: currentProjectId, taskId: task.id, rating, feedback })
+    });
+    const result = await readApiJson(response, "保存视频评价失败");
+    if (!response.ok || result.code !== 0 || !result.data) {
+      setUserActionMessage(result.message || "保存视频评价失败");
+      return;
+    }
+    setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === task.id ? result.data as VideoTask : item) }));
+    setUserActionMessage("视频评价已保存。");
+  }
+
+  function reuseGeneratedImage(item: MaterialAsset) {
+    setImageWorkbenchPrompt(item.prompt || "");
+    if (item.width) setImageWidth(item.width);
+    if (item.height) setImageHeight(item.height);
+    setMaterialMessage("已恢复这张图片的提示词和尺寸，可调整后重新生成。");
+  }
+
+  async function deleteVideoAsset(assetId: number) {
+    const params = new URLSearchParams({ projectId: String(currentProjectId), assetId: String(assetId) });
+    const response = await fetch(`/api/video-assets?${params.toString()}`, { method: "DELETE" });
+    const result = await readApiJson(response, "删除视频资产失败");
+    if (!response.ok || result.code !== 0) {
+      setUserActionMessage(result.message || "删除视频资产失败");
+      return;
+    }
     setState(prev => ({ ...prev, assets: prev.assets.filter(asset => asset.id !== assetId) }));
   }
 
@@ -1929,10 +2066,8 @@ export default function Home() {
   const pickerMaterials = pickerGroup
     ? state.materials.filter(item => item.kind === pickerGroup.kind && item.role === pickerGroup.role)
     : [];
-  const selectedExternalReferences = lizhenAssets.filter(item => selectedLizhenAssetIds.includes(item.id));
   const omniReferenceItems = [
-    ...usableProjectReferences.map(item => ({ id: `material-${item.id}`, name: item.name, kind: item.kind, url: materialApiUrl(item), previewUrl: item.previewUrl })),
-    ...selectedExternalReferences.map(item => ({ id: `external-${item.id}`, name: item.asset_name, kind: item.类型, url: item.asset_url, previewUrl: "" }))
+    ...usableProjectReferences.map(item => ({ id: `material-${item.id}`, name: item.name, kind: item.kind, url: materialApiUrl(item), previewUrl: item.previewUrl }))
   ];
   function videoRecordForShot(shotId: number) {
     const asset = state.assets.find(item => item.shotId === shotId && isHttpVideoUrl(item.videoUrl));
@@ -1945,8 +2080,8 @@ export default function Home() {
     const keywordMatched = !keyword || `${material.name} ${material.sourceProjectName || ""} ${material.createdBy || ""}`.toLowerCase().includes(keyword);
     return typeMatched && keywordMatched;
   });
-  const visibleTeamSharedMaterials = showAllLizhenAssets ? filteredTeamSharedMaterials : filteredTeamSharedMaterials.slice(0, 5);
-  const hiddenLizhenAssetCount = Math.max(filteredTeamSharedMaterials.length - 5, 0);
+  const visibleTeamSharedMaterials = showAllTeamMaterials ? filteredTeamSharedMaterials : filteredTeamSharedMaterials.slice(0, 5);
+  const hiddenTeamMaterialCount = Math.max(filteredTeamSharedMaterials.length - 5, 0);
   const currentUserRecord = currentUser ? authUsers[currentUser] : null;
   const currentUserRole = currentUserRecord?.role || "user";
   const currentUserCanManageMembers = canManageMembers(currentUserRole);
@@ -1979,7 +2114,6 @@ export default function Home() {
     const nextProjects = [emptyProjectState.project];
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ state: emptyProjectState, projectStates: nextProjectStates, projects: nextProjects, currentProjectId: emptyProjectState.project.id }));
     setSelectedMaterialIds([]);
-    setSelectedLizhenAssetIds([]);
     setGeneratedImages([]);
     setProjectStates(nextProjectStates);
     setProjects(nextProjects);
@@ -2037,7 +2171,11 @@ export default function Home() {
       shotPromptRef.current?.focus();
       shotPromptRef.current?.setSelectionRange(nextCursor, nextCursor);
     }, 0);
-    if (materialApiUrl(material)) setSelectedMaterialIds(prev => prev.includes(material.id) ? prev : [...prev, material.id]);
+    if (materialApiUrl(material)) {
+      setSelectedMaterialIds(prev => prev.includes(material.id) ? prev : [...prev, material.id]);
+    } else {
+      setMaterialMessage(`“${material.name}”已插入提示词，但它只有本地预览地址，不会作为参考素材提交。`);
+    }
     setMentionMenuOpen(false);
   }
 
@@ -2105,14 +2243,13 @@ export default function Home() {
       });
       const result = await readApiJson(response, "图片生成失败");
       if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "图片生成失败");
-      const images: MaterialAsset[] = result.data.map((item: { name?: string; publicUrl: string; previewUrl?: string; storagePath?: string }, index: number) => ({
+      const images: MaterialAsset[] = result.data.map((item: { name?: string; publicUrl: string; previewUrl?: string }, index: number) => ({
         id: Date.now() + index,
         name: item.name || `生图结果 ${index + 1}`,
         url: item.publicUrl,
         kind: "image" as MaterialKind,
         role: "reference_image" as MaterialRole,
         previewUrl: item.previewUrl || item.publicUrl,
-        storagePath: item.storagePath,
         width: imageWidth,
         height: imageHeight,
         source: "generated",
@@ -2128,7 +2265,10 @@ export default function Home() {
       setState(prev => ({ ...prev, materials: [...savedImages, ...prev.materials] }));
       setActiveAssetTab("image");
       setActiveAssetScope("project");
-      setMaterialMessage(`已生成 ${savedImages.length} 张图片，并保存到当前项目素材库。`);
+      const generationReadyCount = savedImages.filter(image => materialApiUrl(image)).length;
+      setMaterialMessage(generationReadyCount
+        ? `已生成 ${savedImages.length} 张图片，并保存到当前项目素材库。`
+        : `已生成 ${savedImages.length} 张图片并保存，可本地预览；当前开发环境没有公网素材地址，暂不能作为视频参考。`);
     } catch (error) {
       setGeneratedImages([]);
       setMaterialMessage(error instanceof Error ? error.message : "图片生成失败");
@@ -2384,7 +2524,7 @@ export default function Home() {
               </div>}
             </div>
             <textarea ref={shotPromptRef} className="video-prompt-editor" value={shotPrompt} onChange={event => setShotPrompt(event.target.value)} placeholder="描述视频内容，可点击 @ 选择参考素材并插入素材名称，例如：@林凡 在教室门口回头，镜头缓慢推进。" />
-            {omniReferenceEnabled && <div className="omni-reference-panel"><div className="omni-reference-head"><span className="live-dot" /><strong>全能参考模式已开启</strong><em>{omniReferenceItems.length ? `${omniReferenceItems.length} 个参考素材将随任务提交` : "等待绑定参考素材"}</em></div><div className="omni-reference-strip">{omniReferenceItems.length ? omniReferenceItems.map((item, index) => <div className="omni-ref-chip" key={item.id}>{item.previewUrl && item.kind === "image" ? <img src={item.previewUrl} alt={item.name} /> : <span className={`reference-type-badge ${item.kind === "视频" ? "video" : item.kind === "音频" ? "audio" : item.kind}`}>{String(item.kind).slice(0, 2)}</span>}<b>参考{index + 1}</b><small>{item.name}</small></div>) : <div className="omni-empty">请先在素材库选择可生成素材。</div>}</div>{localOnlyReferences.length > 0 && <p className="omni-warning">已忽略 {localOnlyReferences.length} 个仅预览素材；这类素材暂时不能随任务提交。</p>}</div>}
+            {omniReferenceEnabled && <div className="omni-reference-panel"><div className="omni-reference-head"><span className="live-dot" /><strong>全能参考模式已开启</strong><em>{omniReferenceItems.length ? `${omniReferenceItems.length} 个参考素材将随任务提交` : "等待绑定参考素材"}</em></div><div className="omni-reference-strip">{omniReferenceItems.length ? omniReferenceItems.map((item, index) => <div className="omni-ref-chip" key={item.id}>{item.previewUrl && item.kind === "image" ? <img src={item.previewUrl} alt={item.name} /> : <span className={`reference-type-badge ${item.kind}`}>{String(item.kind).slice(0, 2)}</span>}<b>参考{index + 1}</b><small>{item.name}</small></div>) : <div className="omni-empty">请先在素材库选择可生成素材。</div>}</div>{localOnlyReferences.length > 0 && <p className="omni-warning">已忽略 {localOnlyReferences.length} 个仅预览素材；这类素材暂时不能随任务提交。</p>}</div>}
             {mentionMenuOpen && <div className="video-mention-popover"><div className="mention-panel-head"><strong>可选参考素材</strong><span>点击素材插入到提示词；只有“可生成”素材会随任务提交</span></div><div className="mention-panel-list">{mentionMaterials.length ? mentionMaterials.map(material => { const usable = Boolean(materialApiUrl(material)); const selected = selectedMaterialIds.includes(material.id); return <div key={material.id} className={`mention-item ${selected ? "selected" : ""}`}><button onClick={() => insertMention(material)}><div className="mention-thumb">{referenceThumb(material)}</div><div className="mention-meta"><strong>{material.name}</strong><span>{usable ? "可生成" : "仅预览"}</span></div></button><button className="btn-ghost btn-small" onClick={() => toggleMaterial(material.id)}>{selected ? "取消参考" : "选为参考"}</button><button className="btn-danger btn-small" onClick={() => deleteMaterial(material.id)}>删除</button></div>; }) : <div className="mention-empty">素材库里还没有可引用素材。</div>}</div></div>}
             <div className="video-composer-toolbar">
               <div className="video-settings-grid">
@@ -2424,14 +2564,14 @@ export default function Home() {
         </section>
 
         <section id="image-workbench" className="image-workbench card" style={sectionStyle("image-workbench")}>
-          <div className="image-head"><div><h2>生图工作台</h2><p className="muted">填写提示词、选择模型与尺寸，生成图片素材后可用于视频生成参考。</p></div><div className="actions"><button className="btn-ghost btn-small" onClick={() => alert("生成记录功能已预留")}>记录</button><button className="btn-ghost btn-small" onClick={() => alert("参数面板已在当前页面展开")}>参数</button></div></div>
+          <div className="image-head"><div><h2>生图工作台</h2><p className="muted">填写提示词、选择模型与尺寸，生成图片素材后可用于视频生成参考。</p></div></div>
           <div className="image-form-block"><label>提示词</label><div className="image-prompt-tools"><button className="btn-ghost btn-small" onClick={() => setImageWorkbenchPrompt(shotPrompt)}>复用当前分镜提示词</button><button className="btn-ghost btn-small" onClick={() => setImageWorkbenchPrompt("电影感角色参考图，精致五官，统一服装设定，干净背景，适合短剧分镜制作")}>套用示例</button></div><textarea className="image-prompt" value={imageWorkbenchPrompt} onChange={event => setImageWorkbenchPrompt(event.target.value)} placeholder="描述画面主体、风格、构图、光线和用途" /></div>
           <div className="image-form-block"><label>参考图</label><div className="reference-box"><span>暂无参考图</span><input type="file" accept="image/*" onChange={addLocalPreview} /><button className="btn-ghost btn-small" onClick={() => document.getElementById("material-assets")?.scrollIntoView({ behavior: "smooth" })}>去素材库选择</button></div></div>
           <div className="image-settings-grid"><div><label>模型</label><select value={imageModel} onChange={event => setImageModel(event.target.value)}>{activeImageModels.map(model => <option key={model} value={model}>{model}</option>)}</select></div><div><label>质量</label><div className="segmented">{(["auto", "high", "medium", "low"] as ImageQuality[]).map(item => <button key={item} className={imageQuality === item ? "active" : ""} onClick={() => setImageQuality(item)}>{item === "auto" ? "自动" : item === "high" ? "高" : item === "medium" ? "中" : "低"}</button>)}</div></div><div><label>尺寸</label><div className="size-row"><input type="number" value={imageWidth} onChange={event => setImageWidth(Number(event.target.value))} /><span>×</span><input type="number" value={imageHeight} onChange={event => setImageHeight(Number(event.target.value))} /></div></div></div>
           <div className="image-form-block"><label>宽高比</label><div className="ratio-grid">{(["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16", "auto"] as AspectRatio[]).map(item => <button key={item} className={imageRatio === item ? "active" : ""} onClick={() => updateImageRatio(item)}><span className="ratio-icon">▭</span>{item}</button>)}</div></div>
           <div className="image-form-block"><label>生成张数</label><div className="count-grid">{[1,2,3,4,5,6,7,8,9,10].map(count => <button key={count} className={imageCount === count ? "active" : ""} onClick={() => setImageCount(count)}>{count} 张</button>)}</div></div>
           <button className="btn-primary image-generate" disabled={isImageGenerating} onClick={generateImages}>{isImageGenerating ? "生成中..." : "开始生成"}</button>
-          <div className="image-results"><h2>生成结果</h2>{visibleImageResults.length ? <div className="material-grid">{visibleImageResults.map(item => <div className="material-card" key={item.id}><div className="material-preview">{item.previewUrl ? <img src={item.previewUrl} alt={item.name} /> : <span>图片</span>}</div><strong>{item.name}</strong><p className="muted">{imageModel} / {imageQuality} / {imageRatio}</p><span className="reviewed-badge">已入素材库</span></div>)}</div> : <div className="empty-result"><div className="empty-ico">▧</div><strong>还没有生成图片</strong><p className="muted">填写提示词并点击“开始生成”，成功后会自动保存到素材库。</p></div>}{hiddenImageResultCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllImageResults(prev => !prev)}>{showAllImageResults ? "收起" : `展开全部 ${hiddenImageResultCount}`}</button>}</div>
+          <div className="image-results"><h2>生成结果</h2>{visibleImageResults.length ? <div className="material-grid">{visibleImageResults.map(item => <div className="material-card" key={item.id}><div className="material-preview" onClick={event => openMaterialPreview(event, item)}>{item.previewUrl ? <img src={item.previewUrl} alt={item.name} /> : <span>图片</span>}</div><strong>{item.name}</strong><p className="muted">{item.width && item.height ? `${item.width}x${item.height}` : imageRatio}</p><div className="task-video-actions"><span className="reviewed-badge">已入素材库</span><button className="btn-ghost btn-small" onClick={() => reuseGeneratedImage(item)}>复用参数</button></div></div>)}</div> : <div className="empty-result"><div className="empty-ico">▧</div><strong>还没有生成图片</strong><p className="muted">填写提示词并点击“开始生成”，成功后会自动保存到素材库。</p></div>}{hiddenImageResultCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllImageResults(prev => !prev)}>{showAllImageResults ? "收起" : `展开全部 ${hiddenImageResultCount}`}</button>}</div>
         </section>
 
         <div style={sectionStyle("material-assets")}>
@@ -2500,7 +2640,7 @@ export default function Home() {
             {!visibleTeamSharedMaterials.length && <div className="empty">暂无共享素材。上传素材时勾选“同时加入团队共享”，角色、车辆、场景、道具、音乐等内容就可以在多个项目复用。</div>}
           </div>}
           {activeAssetScope === "project" && hiddenAssetCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllAssets(prev => !prev)}>{showAllAssets ? "收起" : `展开全部 ${hiddenAssetCount}`}</button>}
-          {activeAssetScope === "shared" && hiddenLizhenAssetCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllLizhenAssets(prev => !prev)}>{showAllLizhenAssets ? "收起" : `展开全部 ${hiddenLizhenAssetCount}`}</button>}
+          {activeAssetScope === "shared" && hiddenTeamMaterialCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllTeamMaterials(prev => !prev)}>{showAllTeamMaterials ? "收起" : `展开全部 ${hiddenTeamMaterialCount}`}</button>}
         </section>
 
         {activeAssetScope === "project" && activeAssetTab !== "sd2" && <section className="card" style={{ marginTop: 18 }}>
@@ -2547,6 +2687,7 @@ export default function Home() {
                         <td>
                           <div>#{String(task.shotId).padStart(2, "0")} {task.shotTitle}</div>
                           <small className="muted">{taskSnapshotText(task)}</small>
+                          {taskReferenceText(task) && <small className="muted">引用：{taskReferenceText(task)}</small>}
                         </td>
                         <td>{task.provider}</td>
                         <td>{taskStatusTag(task.status)}</td>
@@ -2558,6 +2699,8 @@ export default function Home() {
                           <div className="task-row-actions">
                             <button className="btn-ghost btn-small" onClick={() => rerunTask(task)} disabled={!canRegenerate}>直接重新生成</button>
                             <button className="btn-ghost btn-small" onClick={() => editRegeneration(task)} disabled={!canRegenerate}>编辑后重新生成</button>
+                            {task.status === "done" && <button className={`btn-ghost btn-small ${task.rating === "satisfied" ? "active" : ""}`} onClick={() => submitTaskFeedback(task, "satisfied")}>满意</button>}
+                            {task.status === "done" && <button className={`btn-ghost btn-small ${task.rating === "unsatisfied" ? "active" : ""}`} onClick={() => submitTaskFeedback(task, "unsatisfied")}>需改进</button>}
                             <button className="btn-danger btn-small" onClick={() => deleteTask(task.id)} disabled={task.status === "running" || task.status === "pending"}>删除</button>
                           </div>
                         </td>

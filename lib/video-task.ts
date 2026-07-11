@@ -20,6 +20,8 @@ export function publicVideoTask(task: VideoTaskRecord) {
     snapshot: task.snapshot || undefined,
     videoUrl: task.videoUrl || undefined,
     error: task.error || undefined,
+    rating: task.rating || undefined,
+    feedback: task.feedback || undefined,
     createdAt: task.createdAt.toISOString(),
     updatedAt: task.updatedAt.toISOString(),
     completedAt: task.completedAt?.toISOString()

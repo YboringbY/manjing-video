@@ -107,7 +107,6 @@ export async function POST(request: Request) {
       width: dimensions?.width,
       height: dimensions?.height,
       warning,
-      storagePath,
       previewUrl: relativePath,
       publicUrl: publicUrlFor(relativePath)
     }

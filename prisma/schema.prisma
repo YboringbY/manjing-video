@@ -19,34 +19,35 @@ enum MemberStatus {
 }
 
 model Tenant {
-  id          String       @id @default(cuid())
-  name        String
-  slug        String       @unique
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  memberships Membership[]
-  projects    Project[]
-  materials   Material[]
-  workspaces  ProjectWorkspace[]
-  auditLogs   AuditLog[]
-  apiProfiles ApiProfile[]
+  id               String             @id @default(cuid())
+  name             String
+  slug             String             @unique
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  memberships      Membership[]
+  projects         Project[]
+  materials        Material[]
+  projectMaterials ProjectMaterial[]
+  workspaces       ProjectWorkspace[]
+  auditLogs        AuditLog[]
+  apiProfiles      ApiProfile[]
 }
 
 model User {
-  id           String       @id @default(cuid())
-  account      String       @unique
-  passwordHash String
-  displayName  String
-  email        String?
-  phone        String?
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-  memberships  Membership[]
-  createdProjects Project[] @relation("ProjectCreatedBy")
-  updatedProjects Project[] @relation("ProjectUpdatedBy")
-  materials    Material[]
-  workspaces   ProjectWorkspace[]
-  auditLogs    AuditLog[]
+  id              String             @id @default(cuid())
+  account         String             @unique
+  passwordHash    String
+  displayName     String
+  email           String?
+  phone           String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  memberships     Membership[]
+  createdProjects Project[]          @relation("ProjectCreatedBy")
+  updatedProjects Project[]          @relation("ProjectUpdatedBy")
+  materials       Material[]
+  workspaces      ProjectWorkspace[]
+  auditLogs       AuditLog[]
 }
 
 model Membership {
@@ -65,22 +66,25 @@ model Membership {
 }
 
 model Project {
-  id            Int      @id
-  tenantId      String
-  name          String
-  type          String   @default("AI 漫剧")
-  script        String   @default("")
-  status        String   @default("active")
-  createdById   String?
-  updatedById   String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy     User?    @relation("ProjectCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy     User?    @relation("ProjectUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-  shots         Shot[]
-  videoTasks    VideoTask[]
-  videoAssets   VideoAsset[]
+  id              Int               @id
+  tenantId        String
+  name            String
+  type            String            @default("AI 漫剧")
+  script          String            @default("")
+  status          String            @default("active")
+  version         Int               @default(1)
+  createdById     String?
+  updatedById     String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy       User?             @relation("ProjectCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy       User?             @relation("ProjectUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  shots           Shot[]
+  videoTasks      VideoTask[]
+  videoAssets     VideoAsset[]
+  sourceMaterials Material[]        @relation("MaterialSourceProject")
+  materialLinks   ProjectMaterial[]
 
   @@index([tenantId, updatedAt])
   @@index([createdById])
@@ -100,6 +104,7 @@ model Shot {
   width      Int?
   height     Int?
   sortOrder  Int      @default(0)
+  version    Int      @default(1)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -116,17 +121,19 @@ model VideoTask {
   shotId         BigInt
   shotTitle      String
   provider       String
-  status         String   @default("pending")
+  status         String    @default("pending")
   result         String
   providerTaskId String?
   apiProfileId   String?
   snapshot       Json?
   videoUrl       String?
   error          String?
+  rating         String?
+  feedback       String?
   completedAt    DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  project        Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@id([tenantId, projectId, id])
   @@index([tenantId, projectId, createdAt])
@@ -136,7 +143,7 @@ model VideoTask {
 }
 
 model VideoAsset {
-  id             BigInt
+  id             BigInt   @default(autoincrement())
   tenantId       String
   projectId      Int
   shotId         BigInt
@@ -156,9 +163,9 @@ model VideoAsset {
 }
 
 model Material {
-  id                Int      @id @default(autoincrement())
+  id                Int               @id @default(autoincrement())
   tenantId          String
-  projectId         Int
+  projectId         Int?
   name              String
   kind              String
   role              String
@@ -169,22 +176,38 @@ model Material {
   reviewedAssetUrl  String?
   width             Int?
   height            Int?
-  source            String   @default("upload")
-  status            String   @default("ready")
-  scope             String   @default("project")
+  source            String            @default("upload")
+  status            String            @default("ready")
+  scope             String            @default("project")
   prompt            String?
   sourceProjectId   Int?
   sourceProjectName String?
   createdById       String?
   createdByName     String?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy         User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy         User?             @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  sourceProject     Project?          @relation("MaterialSourceProject", fields: [projectId], references: [id], onDelete: SetNull)
+  projectLinks      ProjectMaterial[]
 
   @@index([tenantId, projectId, createdAt])
   @@index([tenantId, scope, createdAt])
   @@index([createdById])
+}
+
+model ProjectMaterial {
+  tenantId   String
+  projectId  Int
+  materialId Int
+  createdAt  DateTime @default(now())
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  material   Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, projectId, materialId])
+  @@index([tenantId, projectId, createdAt])
+  @@index([materialId])
 }
 
 model ProjectWorkspace {
@@ -228,25 +251,25 @@ model AuditLog {
 }
 
 model ApiProfile {
-  id                String   @id
-  tenantId          String
-  name              String
-  baseUrl           String
-  encryptedApiKey   String
-  model             String?
-  textModels        Json
-  scriptModels      Json?
-  videoModels       Json
-  imageModels       Json
-  priority          Int      @default(100)
-  enabled           Boolean  @default(true)
-  concurrencyLimit  Int      @default(1)
-  active            Boolean  @default(false)
-  createdAtMillis   BigInt?
-  updatedAtMillis   BigInt?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id               String   @id
+  tenantId         String
+  name             String
+  baseUrl          String
+  encryptedApiKey  String
+  model            String?
+  textModels       Json
+  scriptModels     Json?
+  videoModels      Json
+  imageModels      Json
+  priority         Int      @default(100)
+  enabled          Boolean  @default(true)
+  concurrencyLimit Int      @default(1)
+  active           Boolean  @default(false)
+  createdAtMillis  BigInt?
+  updatedAtMillis  BigInt?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, name, baseUrl])
   @@index([tenantId, active])

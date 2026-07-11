@@ -2,6 +2,16 @@
 
 更新时间：2026-07-10
 
+## 晚间中断恢复
+
+- 当前工作树有一批本地未提交、未部署改动，主线是结束 `ProjectWorkspace.state` 业务数组双写，改用项目/分镜/任务/视频资产/素材关联的规范化表和细粒度 API。
+- 新增 5 条 migration：移除旧工作区业务数组、项目素材关联、项目/分镜版本、任务评价、视频资产自增 ID。
+- 已修复恢复审查发现的项目 version 丢失、无 Workspace 的规范化项目不返回、IPv6 内网 URL 漏拦截、客户端伪造 `storagePath` 可触发文件删除、供应商 `/v1/v1` 路径重复等问题。
+- 本地 17 条 migration 已全部应用；Prisma validate/generate、TypeScript、生产 build 均通过。
+- 已用临时数据实测项目/分镜 409 乐观锁、团队素材跨项目生命周期、文件路径安全和 IPv4/IPv6 内网 URL 拦截，临时业务数据均已清理。
+- 本地开发服务运行在 `http://localhost:5050`。
+- 生产仍是 `166d0a2`。提交或部署前先 review 全部未提交 diff；生产部署前必须备份数据库，因为 migration 会清空旧工作区 JSON 的业务数组并删除精确匹配的旧 Demo 项目。
+
 ## 当前状态
 
 - 项目路径：`/Users/keyang/Desktop/manjing_SaaS/manjing-video`

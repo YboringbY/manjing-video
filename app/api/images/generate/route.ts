@@ -7,6 +7,7 @@ import { logAudit } from "@/lib/audit";
 import { fetchWithTimeout, readLimitedResponseBuffer } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { resolveModelRoute } from "../../api-profiles/store";
+import { appendProviderPath, normalizeProviderBaseUrl } from "@/lib/providers/video";
 
 type ImageGeneratePayload = {
   model?: string;
@@ -41,15 +42,6 @@ const IMAGE_EXTENSION_BY_TYPE: Record<string, string> = {
   "image/gif": ".gif"
 };
 
-function normalizeBaseUrl(value?: string) {
-  return (value || DEFAULT_BASE_URL).trim().replace(/\/$/, "");
-}
-
-function appendPath(baseUrl: string, routePath: string) {
-  if (baseUrl.endsWith("/v1")) return `${baseUrl}${routePath.replace(/^\/v1/, "")}`;
-  return `${baseUrl}${routePath}`;
-}
-
 function publicUrlFor(relativePath: string) {
   const baseUrl = process.env.ASSET_PUBLIC_BASE_URL || process.env.PUBLIC_ASSET_BASE_URL || "";
   if (!baseUrl) return relativePath;
@@ -76,7 +68,6 @@ async function saveImageBuffer(buffer: Buffer, projectId: string, extension: str
   await writeFile(storagePath, buffer);
 
   return {
-    storagePath,
     previewUrl: relativePath,
     publicUrl: publicUrlFor(relativePath)
   };
@@ -116,7 +107,7 @@ export async function POST(request: Request) {
   const profile = route?.profile;
 
   const apiKey = profile?.apiKey || process.env.IMAGE_API_KEY || process.env.OPENAI_API_KEY || "";
-  const baseUrl = normalizeBaseUrl(profile?.baseUrl);
+  const baseUrl = normalizeProviderBaseUrl(profile?.baseUrl, DEFAULT_BASE_URL);
   const model = body.model || route?.model || DEFAULT_MODEL;
 
   if (!apiKey) {
@@ -125,7 +116,7 @@ export async function POST(request: Request) {
 
   let response: Response;
   try {
-    response = await fetchWithTimeout(appendPath(baseUrl, "/v1/images/generations"), {
+    response = await fetchWithTimeout(appendProviderPath(baseUrl, "/v1/images/generations"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

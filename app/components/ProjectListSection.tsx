@@ -35,7 +35,7 @@ export function ProjectListSection({
               <span>{project.id === currentProjectId ? "当前编辑" : "点击进入"}</span>
               <strong>{project.name}</strong>
               <em>{project.type}</em>
-              <small>{itemState?.shots.length || 0} 条分镜 · {itemState?.materials.length || 0} 个素材 · {itemState?.tasks.length || 0} 个任务</small>
+              <small>{itemState?.shots.length || 0} 条分镜 · {itemState?.project.materialCount ?? itemState?.materials.length ?? 0} 个素材 · {itemState?.tasks.length || 0} 个任务</small>
             </button>
             <div className="project-home-card-actions">
               <button className="btn-ghost btn-small" onClick={() => onSwitchProject(project)}>进入概览</button>

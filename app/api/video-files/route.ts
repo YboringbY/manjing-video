@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentMembership } from "@/lib/auth";
 import { fetchWithTimeout } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { normalizeProviderBaseUrl, videoRecoveryEndpoints } from "@/lib/providers/video";
 import { readServerApiProfiles } from "../api-profiles/store";
 
 const BASE_URL = process.env.SEEDANCE_BASE_URL || "https://api.aifastgate.com";
@@ -74,22 +75,8 @@ function safeTargetUrl(rawUrl: string, allowTrustedHttps = false) {
 function resolveApiProfile(profile?: ApiProfile) {
   return {
     apiKey: profile?.apiKey?.trim() || process.env.SEEDANCE_API_KEY || "",
-    baseUrl: (profile?.baseUrl?.trim() || BASE_URL).replace(/\/$/, "")
+    baseUrl: normalizeProviderBaseUrl(profile?.baseUrl, BASE_URL)
   };
-}
-
-function isZJProvider(baseUrl: string) {
-  try {
-    return new URL(baseUrl).hostname === "zjljzn.ltd";
-  } catch {
-    return baseUrl.includes("zjljzn.ltd");
-  }
-}
-
-function appendPath(baseUrl: string, path: string) {
-  const normalized = baseUrl.replace(/\/$/, "");
-  if (normalized.endsWith("/v1")) return `${normalized}${path.replace(/^\/v1/, "")}`;
-  return `${normalized}${path}`;
 }
 
 async function fetchVideo(url: string, apiKey?: string, allowTrustedHttps = false) {
@@ -103,7 +90,7 @@ async function fetchVideo(url: string, apiKey?: string, allowTrustedHttps = fals
 
 async function latestVideoUrl(taskId: string, apiKey: string | undefined, baseUrl: string) {
   if (!apiKey) return "";
-  const endpoints = baseUrl.includes("/api/v3") ? [`${baseUrl}/contents/generations/tasks/${taskId}`, `${baseUrl}/contents/generations/tasks`] : isZJProvider(baseUrl) ? [appendPath(baseUrl, `/v1/videos/generations/${taskId}`), appendPath(baseUrl, `/v1/video/generations/${taskId}`)] : [`${baseUrl}/v1/video/generations/${taskId}`];
+  const endpoints = videoRecoveryEndpoints(baseUrl, taskId);
   for (const endpoint of endpoints) {
     const response = await fetchWithTimeout(endpoint, {
       headers: { Authorization: `Bearer ${apiKey}` },

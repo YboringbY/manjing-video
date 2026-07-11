@@ -2,6 +2,47 @@
 
 更新时间：2026-07-10
 
+## 2026-07-10 晚间中断恢复记录
+
+当前有一批**本地未提交、未部署**的架构与产品优化。浏览器窗口关闭后已根据工作区 diff 恢复上下文并完成校验，不要把它误认为生产现状。
+
+本批改动主线：
+
+- `ProjectWorkspace.state` 不再保存 `shots / tasks / assets / materials` 实时副本，只保留项目兼容状态；读取时由规范化表组装。
+- `/api/projects` 和 `/api/shots` 已改为真实细粒度 CRUD，并通过 `version` 做乐观锁；前端已保留服务端返回的项目版本，避免刷新后固定拿版本 1 写入。
+- 新增 `ProjectMaterial` 关联表和 `/api/materials/links`，团队共享素材可以关联多个项目；删除源项目不会删除仍被其他项目引用的团队素材。
+- 素材删除会清理无人引用的本地物理文件。内部 `storagePath` 不再接受客户端输入，也不再通过上传、素材、生图接口返回；路径只从当前项目受控 `/uploads/projects/{projectId}/...` URL 推导。
+- 视频任务完成后由服务端写入 `VideoAsset`；`VideoAsset.id` 改为数据库自增。新增视频结果删除 API 和任务满意/需改进评价 API。
+- 生成记录展示本次引用素材名称；生图结果支持恢复提示词和尺寸后重新生成。
+- 删除废弃 `/api/assets`、`/api/assets/groups`、`/api/user/balance` 路由，当前访问返回 404。
+- 抽取 `lib/providers/video.ts`，统一视频供应商创建、查询、恢复端点；修复 Base URL 已含 `/v1` 时重复拼接的问题。
+- 新增公网媒体 URL 校验，IPv4 私网、IPv6 loopback/ULA/link-local/IPv4-mapped 私网地址都会在调用上游前拦截。
+
+本批新增 migration：
+
+- `20260710194000_remove_legacy_workspace_payload`
+- `20260710195000_add_project_material_links`
+- `20260710201000_add_project_shot_versions`
+- `20260710203000_add_video_task_feedback`
+- `20260710204000_add_video_asset_sequence`
+
+本地验证结果：
+
+- 本地 PostgreSQL 16 已恢复运行，17 条 migration 全部已应用，无待执行 migration。
+- `npx prisma validate`、`npx prisma generate`、`npx tsc --noEmit` 通过。
+- `npm run build` 通过，共 23 个 App Router 路由。
+- 临时项目实测项目/分镜乐观锁：正常更新升到 version 2，旧 version 写入返回 409，测试数据已删除。
+- 团队素材实测：跨项目关联成功；删除源项目后目标项目和团队库仍保留；解除关联和最终删除正常，测试数据已删除。
+- 文件安全实测：伪造 `storagePath` 不会删除已有文件；正常上传文件删除素材后物理文件被清理；API 不再泄露绝对路径。
+- 视频素材 URL 实测：`192.168.x.x`、`::1`、`fc00::/7`、IPv4-mapped loopback 均返回 400。
+- 本地开发服务当前运行在 `http://localhost:5050`。
+
+部署前注意：
+
+- 这批 migration 会清空旧工作区 JSON 中的规范化业务数组，并删除名称和 ID 精确匹配的旧 Demo 项目；生产部署前必须先做数据库备份。
+- 生产仍是 `166d0a2`，本批代码尚未 commit/push/deploy。
+- 部署前还应手动复测登录后项目切换、剧本保存、分镜编辑、素材上传/共享、任务状态同步、视频预览下载和任务评价。
+
 ## 项目定位
 
 漫镜视频是面向短剧团队的 AI 视频生产工作台。当前处于本地快速迭代 MVP，目标是先跑通内部团队使用流程，再逐步演进为 SaaS 多租户产品。
