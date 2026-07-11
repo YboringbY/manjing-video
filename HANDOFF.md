@@ -11,6 +11,15 @@
 - 部署脚本已串联备份、预检、停机、守恒检查、migration、重启和健康检查。
 - 每次发布必须完成 `docs/P0_RELEASE_CHECKLIST.md`，最终验收必须查看真实浏览器页面。
 
+## P1 代码优化
+
+- 已拆出登录、人员管理和审计日志组件，`app/page.tsx` 从 2731 行降到 2647 行。
+- 已统一项目、分镜、素材和视频任务 API 输入校验；超出 PostgreSQL Int 范围的 ID 必须拒绝，不能映射为其他 ID。
+- 已把视频创建 payload 与状态解析抽到 `lib/video-generation.ts`、`lib/video-status.ts`，视频创建/状态路由分别缩减到 340/205 行。
+- localStorage 不再缓存分镜、任务、视频资产和素材业务副本，服务端规范化表保持唯一权威。
+- 本地 `git diff --check`、TypeScript、生产构建和核心 API 集成均通过；临时测试数据已清理。
+- P1 代码提交仅进入 GitHub `main`，尚未部署；P0 提交 `39926bc` 也尚未部署。
+
 ## 生产数据事故与强制规则
 
 - `20260710194000_remove_legacy_workspace_payload` 误把生产项目 `id=1 / 短剧团队 Demo` 当演示数据删除，导致 1 个项目、15 个分镜、20 个任务、3 个视频资产、10 个素材短暂不可用。
@@ -39,7 +48,7 @@
 - 本地开发：`http://localhost:5050`
 - 生产入口：`http://118.196.44.191`
 - 生产域名 `console.manjingstudio.com` 备案前不要恢复访问。
-- 最新生产提交：`c7ffc16 Normalize project workflows and material lifecycle`
+- 最新生产提交：`1b8534a Show restored production projects`
 - 生产 PM2：`manjing-video` online。
 
 本地启动：
@@ -144,19 +153,11 @@ pm2 restart manjing-video --update-env
 
 ## 下一步建议
 
-1. 补 `Material` 到 `Project` 的数据库外键和级联删除。
-2. 设计并逐步实现细粒度 API：
-   - 项目基础信息
-   - 剧本正文
-   - 分镜
-   - 视频任务
-   - 视频结果
-3. 把前端写入从整包 `/api/workspaces` 迁到细粒度 API，降低写放大。
-4. 明确 `ProjectWorkspace.state` 退役策略：只作为旧数据兼容/归档，不再作为实时业务真相。
-5. 继续处理客户反馈：
-   - 多场景总时长控制。
-   - 生成记录展示本次引用素材名称。
-   - 拖拽上传作为后续增强项。
+1. 继续拆分 `app/page.tsx`：优先拆素材库、生图工作台、视频工作台和生成记录，并逐步提取业务 hooks。
+2. 明确并完成 `ProjectWorkspace.state` 兼容元数据的最终退役，不再扩大其职责。
+3. 为 `lib/api-input.ts`、`lib/video-generation.ts`、`lib/video-status.ts` 建立独立单元测试运行方式。
+4. 继续处理客户反馈：生成记录展示引用素材名称、拖拽上传、同 seed/随机 seed 控制。
+5. 配置非交互式 ESLint CLI，纳入日常构建验证。
 
 ## 常用验证
 

@@ -4,6 +4,9 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ProjectListSection } from "./components/ProjectListSection";
 import { ProjectOverviewSection } from "./components/ProjectOverviewSection";
 import { Sidebar } from "./components/Sidebar";
+import { LoginPage } from "./components/LoginPage";
+import { MembersSection } from "./components/MembersSection";
+import { AuditLogsSection } from "./components/AuditLogsSection";
 import { ApiProfile, AppState, AspectRatio, ImageQuality, LibraryFilter, MaterialAsset, MaterialKind, MaterialRole, MemberRole, ProfileSection, Project, ProjectStates, Shot, ShotStatus, TaskStatus, VideoAsset, VideoTask, VideoTaskSnapshot, WorkspaceSection } from "./components/types";
 import { isPublicMediaUrl } from "@/lib/media-url";
 
@@ -162,6 +165,14 @@ function workspaceStateForSync(value: AppState): AppState {
   return { ...value, shots: [], tasks: [], assets: [], materials: [] };
 }
 
+function projectStatesForCache(states: ProjectStates) {
+  return Object.fromEntries(Object.entries(states).map(([id, value]) => [id, workspaceStateForSync(value)])) as ProjectStates;
+}
+
+function workspaceCachePayload(state: AppState, projectStates: ProjectStates, projects: Project[], currentProjectId: number) {
+  return { state: workspaceStateForSync(state), projectStates: projectStatesForCache(projectStates), projects, currentProjectId };
+}
+
 function getStoredUsers(): Record<string, AuthUser> {
   if (typeof window === "undefined") return {};
   try {
@@ -181,46 +192,6 @@ function roleLabel(role: MemberRole) {
   return "用户";
 }
 
-function roleScope(role: MemberRole) {
-  if (role === "super_admin") return "平台配置、租户管理与全部功能";
-  if (role === "tenant_admin") return "本租户成员管理与生产功能";
-  return "项目生产功能";
-}
-
-function auditActionLabel(action: string) {
-  const map: Record<string, string> = {
-    "auth.login": "登录",
-    "api_profile.create": "新增渠道",
-    "api_profile.update": "编辑渠道",
-    "api_profile.activate": "切换渠道",
-    "api_profile.delete": "删除渠道",
-    "user.create": "新增成员",
-    "user.update": "更新成员",
-    "user.disable": "停用成员",
-    "project.delete": "删除项目",
-    "asset.upload": "上传素材",
-    "image.generate": "生成图片",
-    "script.generate": "生成剧本",
-    "material.delete": "删除素材",
-    "video_task.create": "创建视频任务",
-    "video_task.status": "同步视频状态"
-  };
-  return map[action] || action;
-}
-
-function auditResultTag(result: string) {
-  if (result === "success") return <span className="tag done">成功</span>;
-  if (result === "blocked") return <span className="tag pending">拦截</span>;
-  return <span className="tag pending">失败</span>;
-}
-
-function compactAuditMetadata(metadata?: Record<string, unknown> | null) {
-  if (!metadata) return "-";
-  const entries = Object.entries(metadata).filter(([, value]) => value !== undefined && value !== null && value !== "");
-  if (!entries.length) return "-";
-  return entries.slice(0, 4).map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`).join(" · ");
-}
-
 function canManageMembers(role: MemberRole) {
   return role === "super_admin" || role === "tenant_admin";
 }
@@ -233,12 +204,6 @@ function assignableRoles(role: MemberRole): MemberRole[] {
   if (role === "super_admin") return ["tenant_admin", "user"];
   if (role === "tenant_admin") return ["user"];
   return [];
-}
-
-function canManageTargetMember(operatorRole: MemberRole, targetRole: MemberRole) {
-  if (operatorRole === "super_admin") return true;
-  if (operatorRole === "tenant_admin") return targetRole === "user";
-  return false;
 }
 
 function normalizeApiProfiles(saved: ApiProfile[]) {
@@ -647,11 +612,11 @@ export default function Home() {
     }
     try {
       const parsed = JSON.parse(saved);
-      const nextState = normalizeAppState(parsed.state || parsed);
+      const nextState = workspaceStateForSync(normalizeAppState(parsed.state || parsed));
       const savedProjectStates = parsed.projectStates || { [nextState.project.id]: nextState };
       const nextProjectStates: ProjectStates = Object.fromEntries(
         Object.values(savedProjectStates).map(item => {
-          const normalizedState = normalizeAppState(item as Partial<AppState>);
+          const normalizedState = workspaceStateForSync(normalizeAppState(item as Partial<AppState>));
           return [normalizedState.project.id, normalizedState];
         })
       );
@@ -687,7 +652,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!storageReady || typeof window === "undefined") return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ state, projectStates, projects, currentProjectId }));
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(workspaceCachePayload(state, projectStates, projects, currentProjectId)));
   }, [state, projectStates, projects, currentProjectId, storageReady]);
 
   useEffect(() => {
@@ -804,12 +769,7 @@ export default function Home() {
 
   function persistWorkspace(nextState: AppState, nextProjectStates: ProjectStates, nextProjects: Project[], nextCurrentProjectId: number) {
     if (!storageReady) return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      state: nextState,
-      projectStates: nextProjectStates,
-      projects: nextProjects,
-      currentProjectId: nextCurrentProjectId
-    }));
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(workspaceCachePayload(nextState, nextProjectStates, nextProjects, nextCurrentProjectId)));
   }
 
   async function saveWorkspaceSnapshot(nextState: AppState) {
@@ -2108,7 +2068,7 @@ export default function Home() {
     if (!confirm("确定清空本地项目缓存并重置为空白项目吗？")) return;
     const nextProjectStates = { [emptyProjectState.project.id]: emptyProjectState };
     const nextProjects = [emptyProjectState.project];
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ state: emptyProjectState, projectStates: nextProjectStates, projects: nextProjects, currentProjectId: emptyProjectState.project.id }));
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(workspaceCachePayload(emptyProjectState, nextProjectStates, nextProjects, emptyProjectState.project.id)));
     setSelectedMaterialIds([]);
     setGeneratedImages([]);
     setProjectStates(nextProjectStates);
@@ -2326,33 +2286,7 @@ export default function Home() {
   }
 
   if (showLoginPage) {
-    return (
-      <div className="login-shell">
-        <section className="login-marketing">
-          <div className="login-glow" />
-          <div className="login-copy">
-            <div className="login-brand"><div className="login-logo">漫</div>漫镜视频</div>
-            <h1>一镜成片。<br />高效开拍。</h1>
-            <p>让剧本、分镜、素材与 AI 生成汇入同一条创作管线，快速完成短剧视频生产。</p>
-            <div className="login-tags"><span>团队协作</span><span>实时生成</span><span>智能分镜</span><span>专业管线</span></div>
-          </div>
-        </section>
-        <section className="login-panel-wrap">
-          <div className="login-card">
-            <div className="login-card-logo">M</div>
-            <h2>账号登录</h2>
-            <div className="login-form">
-              <label>账号</label>
-              <div className="login-input"><input value={loginAccount} onChange={event => setLoginAccount(event.target.value)} placeholder="输入您的账号" /></div>
-              <div className="login-label-row"><label>密码</label><button onClick={() => setAuthMessage("请联系管理员重置密码。")}>忘记密码?</button></div>
-              <div className="login-input login-password-input"><input type={showLoginPassword ? "text" : "password"} value={loginPassword} onChange={event => setLoginPassword(event.target.value)} placeholder="输入您的密码" onKeyDown={event => { if (event.key === "Enter") submitAuth(); }} /><button type="button" aria-label={showLoginPassword ? "隐藏密码" : "显示密码"} onClick={() => setShowLoginPassword(visible => !visible)}>{showLoginPassword ? "◉" : "◎"}</button></div>
-              {authMessage && <p className="login-message">{authMessage}</p>}
-              <button type="button" className="login-submit" onClick={submitAuth} disabled={isLoggingIn}>{isLoggingIn ? "正在进入..." : "进入工作空间"} <span>→</span></button>
-            </div>
-          </div>
-        </section>
-      </div>
-    );
+    return <LoginPage account={loginAccount} password={loginPassword} showPassword={showLoginPassword} message={authMessage} isLoggingIn={isLoggingIn} onAccountChange={setLoginAccount} onPasswordChange={setLoginPassword} onTogglePassword={() => setShowLoginPassword(visible => !visible)} onForgotPassword={() => setAuthMessage("请联系管理员重置密码。")} onSubmit={submitAuth} />;
   }
 
   return (
@@ -2393,27 +2327,9 @@ export default function Home() {
           onSelectSection={setActiveSection}
         />
 
-        <section className="card" style={sectionStyle("members")}>
-          <div className="asset-workspace-head"><div><h2>人员管理</h2><p className="muted">系统管理员管理平台配置；管理员维护本租户成员；用户负责日常生产操作。</p></div><button className="btn-primary" onClick={openNewMemberEditor} disabled={!currentUserCanManageMembers}>新增人员</button></div>
-          <div className="member-role-grid"><div className="member-role-card"><strong>系统管理员</strong><p>产品提供商最高权限，管理平台 API 配置和后续租户能力。</p></div><div className="member-role-card"><strong>管理员</strong><p>租户管理员，维护本租户成员和团队生产流程。</p></div><div className="member-role-card"><strong>用户</strong><p>使用剧本、素材、分镜、视频生成和资产查看功能。</p></div></div>
-          <div className="table-wrap" style={{ marginTop: 18 }}><table className="table"><thead><tr><th>账号</th><th>显示名</th><th>角色</th><th>状态</th><th>权限范围</th><th>操作</th></tr></thead><tbody>{Object.values(authUsers).map(user => <tr key={user.account}><td>{user.account}</td><td>{user.displayName || user.account}</td><td>{roleLabel(user.role)}</td><td><span className={user.status === "active" ? "tag done" : "tag pending"}>{user.status === "active" ? "启用" : "停用"}</span></td><td>{roleScope(user.role)}</td><td><button className="btn-ghost btn-small" disabled={!currentUserCanManageMembers || !canManageTargetMember(currentUserRole, user.role) || user.status !== "active"} onClick={() => openEditMemberEditor(user)}>编辑</button><button className={user.status === "active" ? "btn-danger btn-small" : "btn-ghost btn-small"} disabled={!currentUserCanManageMembers || !canManageTargetMember(currentUserRole, user.role) || (user.account === currentUser && user.status === "active")} onClick={() => updateMemberStatus(user.account, user.status === "active" ? "disabled" : "active")}>{user.status === "active" ? "停用" : "启用"}</button></td></tr>)}</tbody></table></div>
-          {memberEditorOpen && <div className="api-profile-panel">
-            <div className="asset-workspace-head"><div><h2>{editingMemberAccount ? "编辑人员" : "新增人员"}</h2><p className="muted">新人员需要设置初始密码；编辑已有人员时密码可留空。</p></div><button className="btn-ghost btn-small" onClick={closeMemberEditor}>取消</button></div>
-            <div className="script-core-grid"><div><label>成员账号</label><input value={memberAccountDraft} disabled={Boolean(editingMemberAccount)} onChange={event => setMemberAccountDraft(event.target.value)} placeholder="例如 zhangsan" /></div><div><label>显示名称</label><input value={memberNameDraft} onChange={event => setMemberNameDraft(event.target.value)} placeholder="输入显示名称" /></div><div><label>初始/重置密码</label><input type="password" value={memberPasswordDraft} onChange={event => setMemberPasswordDraft(event.target.value)} placeholder="新成员必填；编辑成员可留空" /></div><div><label>成员角色</label><select value={memberRoleDraft} onChange={event => setMemberRoleDraft(event.target.value as MemberRole)}>{memberRoleOptions.map(role => <option key={role} value={role}>{roleLabel(role)}</option>)}</select></div></div>
-            <div className="actions"><button className="btn-primary" onClick={upsertMember} disabled={!currentUserCanManageMembers}>保存人员</button><button className="btn-ghost" onClick={closeMemberEditor}>取消</button></div>
-          </div>}
-        </section>
+        <MembersSection visible={activeSection === "members"} users={Object.values(authUsers)} currentAccount={currentUser} currentRole={currentUserRole} canManageMembers={currentUserCanManageMembers} editorOpen={memberEditorOpen} editingAccount={editingMemberAccount} accountDraft={memberAccountDraft} nameDraft={memberNameDraft} passwordDraft={memberPasswordDraft} roleDraft={memberRoleDraft} roleOptions={memberRoleOptions} onOpenEditor={openNewMemberEditor} onEditUser={user => openEditMemberEditor(user as AuthUser)} onStatusChange={updateMemberStatus} onCloseEditor={closeMemberEditor} onSave={upsertMember} onAccountDraftChange={setMemberAccountDraft} onNameDraftChange={setMemberNameDraft} onPasswordDraftChange={setMemberPasswordDraft} onRoleDraftChange={setMemberRoleDraft} />
 
-        <section className="card" style={sectionStyle("audit-logs")}>
-          <div className="asset-workspace-head"><div><h2>审计日志</h2><p className="muted">记录登录、成员、渠道、项目、素材和生成调用等关键操作。</p></div><button className="btn-primary" onClick={fetchAuditLogs} disabled={isAuditLogsLoading}>{isAuditLogsLoading ? "刷新中..." : "刷新"}</button></div>
-          <div className="script-core-grid" style={{ marginTop: 12 }}>
-            <div><label>操作者账号</label><input value={auditLogFilter} onChange={event => setAuditLogFilter(event.target.value)} placeholder="可选，输入账号筛选" /></div>
-            <div><label>结果</label><select value={auditLogResultFilter} onChange={event => setAuditLogResultFilter(event.target.value)}><option value="">全部</option><option value="success">成功</option><option value="failure">失败</option><option value="blocked">拦截</option></select></div>
-            <div className="actions" style={{ alignItems: "end" }}><button className="btn-ghost" onClick={fetchAuditLogs} disabled={isAuditLogsLoading}>应用筛选</button></div>
-          </div>
-          {auditLogMessage && <div className="api-active-banner">{auditLogMessage}</div>}
-          <div className="table-wrap" style={{ marginTop: 14 }}><table className="table"><thead><tr><th>时间</th><th>操作者</th><th>操作</th><th>对象</th><th>结果</th><th>IP</th><th>摘要</th></tr></thead><tbody>{auditLogs.length ? auditLogs.map(log => <tr key={log.id}><td>{new Date(log.createdAt).toLocaleString()}</td><td>{log.actorAccount || "-"}</td><td>{auditActionLabel(log.action)}</td><td>{log.targetType}{log.targetId ? ` · ${log.targetId}` : ""}</td><td>{auditResultTag(log.result)}</td><td>{log.ip || "-"}</td><td className="muted">{compactAuditMetadata(log.metadata)}</td></tr>) : <tr><td colSpan={7}><div className="empty">暂无审计记录。</div></td></tr>}</tbody></table></div>
-        </section>
+        <AuditLogsSection visible={activeSection === "audit-logs"} logs={auditLogs} message={auditLogMessage} actorFilter={auditLogFilter} resultFilter={auditLogResultFilter} loading={isAuditLogsLoading} onActorFilterChange={setAuditLogFilter} onResultFilterChange={setAuditLogResultFilter} onRefresh={fetchAuditLogs} />
 
         <section className="card" style={sectionStyle("channel-management")}>
           <div className="asset-workspace-head"><div><h2>模型渠道管理</h2><p className="muted">工作台只选择模型；同一模型可由多个渠道提供，系统按启用状态和手动优先级选择调用渠道。</p></div><button className="btn-primary" onClick={openNewApiProfileEditor}>新增渠道</button></div>

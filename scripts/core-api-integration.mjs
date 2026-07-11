@@ -59,6 +59,14 @@ try {
   cookie = login.response.headers.get("set-cookie")?.split(";")[0] || "";
   assert(cookie, "Test login did not return a cookie.");
 
+  const oversizedProject = await json("/api/projects", "POST", {
+    id: 2147483648,
+    name: "integration-invalid-id",
+    type: "AI 漫剧",
+    script: ""
+  });
+  assert(oversizedProject.response.status === 400, "Oversized database ID was not rejected.");
+
   await createProject(projectA, "integration-source");
   await createProject(projectB, "integration-target");
 
@@ -141,7 +149,7 @@ try {
   const taskDelete = await request(`/api/video-tasks?project_id=${projectA}&task_id=${taskId}`, { method: "DELETE" });
   assert(taskDelete.response.status === 200 && taskDelete.body.data?.deleted, "Video task deletion failed.");
 
-  console.log(JSON.stringify({ ok: true, projectOptimisticLock: true, shotOptimisticLock: true, materialLifecycle: true, taskAssetLifecycle: true }));
+  console.log(JSON.stringify({ ok: true, strictDatabaseIds: true, projectOptimisticLock: true, shotOptimisticLock: true, materialLifecycle: true, taskAssetLifecycle: true }));
 } finally {
   if (materialId) await request(`/api/materials?id=${materialId}`, { method: "DELETE" }).catch(() => undefined);
   if (cookie) {

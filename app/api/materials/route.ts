@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { cleanText, databaseInt, optionalText } from "@/lib/api-input";
 import { getCurrentMembership } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { removeStoredMaterialFile, storedMaterialPathForUrl } from "@/lib/material-files";
@@ -9,25 +10,6 @@ const ROLES = new Set(["reference_image", "first_frame", "last_frame", "referenc
 const SOURCES = new Set(["upload", "generated", "prompt", "link"]);
 const STATUSES = new Set(["ready", "processing", "failed"]);
 const SCOPES = new Set(["project", "team"]);
-const MAX_DATABASE_INT = 2147483647;
-
-function cleanText(value: unknown, fallback = "") {
-  const text = String(value || "").trim();
-  return text || fallback;
-}
-
-function cleanOptionalText(value: unknown) {
-  const text = String(value || "").trim();
-  return text || undefined;
-}
-
-function cleanNumber(value: unknown, fallback = 0) {
-  const number = Number(value);
-  if (Number.isInteger(number) && number > 0 && number <= MAX_DATABASE_INT) return number;
-  if (Number.isFinite(number) && number > MAX_DATABASE_INT) return 1000000000 + (Math.abs(Math.trunc(number)) % 1000000000);
-  return fallback;
-}
-
 function cleanDimension(value: unknown) {
   const number = Number(value);
   if (Number.isInteger(number) && number > 0 && number <= 100000) return number;
@@ -82,7 +64,7 @@ export async function GET(request: Request) {
   if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
 
   const { searchParams } = new URL(request.url);
-  const projectId = cleanNumber(searchParams.get("projectId"), 0);
+  const projectId = databaseInt(searchParams.get("projectId"));
   const scope = cleanText(searchParams.get("scope"));
 
   if (scope === "team") {
@@ -112,7 +94,7 @@ export async function POST(request: Request) {
   if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
 
   const body = await request.json();
-  const projectId = cleanNumber(body.projectId, 0);
+  const projectId = databaseInt(body.projectId);
   const name = cleanText(body.name, "未命名素材");
   const kind = cleanText(body.kind, "image");
   const role = cleanText(body.role, "reference_image");
@@ -120,7 +102,7 @@ export async function POST(request: Request) {
   const source = cleanText(body.source, "upload");
   const status = cleanText(body.status, "ready");
   const scope = cleanText(body.scope, "project");
-  const previewUrl = cleanOptionalText(body.previewUrl);
+  const previewUrl = optionalText(body.previewUrl);
 
   if (!projectId) return NextResponse.json({ code: 400, message: "缺少项目 ID。" }, { status: 400 });
   if (!url) return NextResponse.json({ code: 400, message: "缺少素材地址。" }, { status: 400 });
@@ -141,16 +123,16 @@ export async function POST(request: Request) {
         url,
         previewUrl,
         storagePath: storedMaterialPathForUrl(previewUrl || url, projectId),
-        seedanceAssetUrl: cleanOptionalText(body.seedanceAssetUrl),
-        reviewedAssetUrl: cleanOptionalText(body.reviewedAssetUrl),
+        seedanceAssetUrl: optionalText(body.seedanceAssetUrl),
+        reviewedAssetUrl: optionalText(body.reviewedAssetUrl),
         width: cleanDimension(body.width),
         height: cleanDimension(body.height),
         source,
         status,
         scope,
-        prompt: cleanOptionalText(body.prompt),
-        sourceProjectId: cleanNumber(body.sourceProjectId, projectId),
-        sourceProjectName: cleanOptionalText(body.sourceProjectName),
+        prompt: optionalText(body.prompt),
+        sourceProjectId: databaseInt(body.sourceProjectId, projectId),
+        sourceProjectName: optionalText(body.sourceProjectName),
         createdById: membership.userId,
         createdByName: membership.user.displayName
       }
@@ -167,7 +149,7 @@ export async function PATCH(request: Request) {
   if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
 
   const body = await request.json();
-  const id = cleanNumber(body.id, 0);
+  const id = databaseInt(body.id);
   const name = cleanText(body.name);
   if (!id) return NextResponse.json({ code: 400, message: "缺少素材 ID。" }, { status: 400 });
   if (!name) return NextResponse.json({ code: 400, message: "请输入素材名称。" }, { status: 400 });
@@ -197,7 +179,7 @@ export async function DELETE(request: Request) {
   if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
 
   const { searchParams } = new URL(request.url);
-  const id = cleanNumber(searchParams.get("id"), 0);
+  const id = databaseInt(searchParams.get("id"));
   if (!id) return NextResponse.json({ code: 400, message: "缺少素材 ID。" }, { status: 400 });
 
   const material = await prisma.material.findFirst({ where: { id, tenantId: membership.tenantId } });

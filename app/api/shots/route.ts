@@ -1,29 +1,13 @@
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
+import { boundedInteger, cleanText, databaseInt, positiveVersion, safeBigInt } from "@/lib/api-input";
 import { getCurrentMembership } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { prisma } from "@/lib/prisma";
 import { safeNumberFromBigInt } from "@/lib/video-task";
 
-const MAX_DATABASE_INT = 2147483647;
-
-function cleanProjectId(value: unknown) {
-  const number = Number(value);
-  return Number.isInteger(number) && number > 0 && number <= MAX_DATABASE_INT ? number : 0;
-}
-
-function cleanShotId(value: unknown) {
-  const number = Number(value);
-  return Number.isSafeInteger(number) && number > 0 ? BigInt(number) : null;
-}
-
-function cleanText(value: unknown, fallback = "") {
-  const text = String(value || "").trim();
-  return text || fallback;
-}
-
 function cleanDuration(value: unknown) {
-  return Math.max(4, Math.min(15, Math.round(Number(value || 5))));
+  return boundedInteger(value, 4, 15, 5);
 }
 
 function publicShot(shot: { id: bigint; title: string; prompt: string; ratio: string; duration: number; status: string; resolution: string | null; width: number | null; height: number | null; sortOrder: number; version: number; createdAt: Date; updatedAt: Date }) {
@@ -41,7 +25,7 @@ async function tenantProject(tenantId: string, projectId: number) {
 export async function GET(request: Request) {
   const membership = await getCurrentMembership();
   if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
-  const projectId = cleanProjectId(new URL(request.url).searchParams.get("projectId"));
+  const projectId = databaseInt(new URL(request.url).searchParams.get("projectId"));
   if (!projectId) return NextResponse.json({ code: 400, message: "缺少项目 ID。" }, { status: 400 });
   if (!await tenantProject(membership.tenantId, projectId)) return NextResponse.json({ code: 404, message: "项目不存在。" }, { status: 404 });
   const shots = await prisma.shot.findMany({ where: { tenantId: membership.tenantId, projectId }, orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] });
@@ -52,9 +36,9 @@ export async function POST(request: Request) {
   const membership = await getCurrentMembership();
   if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
   const body = await request.json();
-  const projectId = cleanProjectId(body.projectId);
+  const projectId = databaseInt(body.projectId);
   const inputs = Array.isArray(body.shots) ? body.shots.slice(0, 200) : body.shot ? [body.shot] : [];
-  const replaceShotId = cleanShotId(body.replaceShotId);
+  const replaceShotId = safeBigInt(body.replaceShotId);
   if (!projectId || !inputs.length) return NextResponse.json({ code: 400, message: "缺少项目或分镜数据。" }, { status: 400 });
   if (!await tenantProject(membership.tenantId, projectId)) return NextResponse.json({ code: 404, message: "项目不存在。" }, { status: 404 });
 
@@ -70,7 +54,7 @@ export async function POST(request: Request) {
     const rows = [];
     for (let index = 0; index < inputs.length; index += 1) {
       const input = inputs[index] as Record<string, unknown>;
-      const id = cleanShotId(input.id);
+      const id = safeBigInt(input.id);
       if (!id) throw new Error("INVALID_SHOT");
       const row = await tx.shot.upsert({
         where: { tenantId_projectId_id: { tenantId: membership.tenantId, projectId, id } },
@@ -102,10 +86,10 @@ export async function PATCH(request: Request) {
   const membership = await getCurrentMembership();
   if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
   const body = await request.json();
-  const projectId = cleanProjectId(body.projectId);
-  const shotId = cleanShotId(body.shotId);
-  const version = Number(body.version);
-  if (!projectId || !shotId || !Number.isInteger(version) || version < 1) return NextResponse.json({ code: 400, message: "缺少分镜版本，请刷新后重试。" }, { status: 400 });
+  const projectId = databaseInt(body.projectId);
+  const shotId = safeBigInt(body.shotId);
+  const version = positiveVersion(body.version);
+  if (!projectId || !shotId || !version) return NextResponse.json({ code: 400, message: "缺少分镜版本，请刷新后重试。" }, { status: 400 });
   const data: Prisma.ShotUpdateManyMutationInput = { version: { increment: 1 } };
   if (body.title !== undefined) data.title = cleanText(body.title, "未命名分镜");
   if (body.prompt !== undefined) data.prompt = String(body.prompt);
@@ -127,8 +111,8 @@ export async function DELETE(request: Request) {
   const membership = await getCurrentMembership();
   if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
   const { searchParams } = new URL(request.url);
-  const projectId = cleanProjectId(searchParams.get("projectId"));
-  const shotId = cleanShotId(searchParams.get("shotId"));
+  const projectId = databaseInt(searchParams.get("projectId"));
+  const shotId = safeBigInt(searchParams.get("shotId"));
   if (!projectId || !shotId) return NextResponse.json({ code: 400, message: "缺少项目或分镜 ID。" }, { status: 400 });
   const running = await prisma.videoTask.count({ where: { tenantId: membership.tenantId, projectId, shotId, status: { in: ["pending", "running"] } } });
   if (running) return NextResponse.json({ code: 409, message: "分镜仍有生成中的任务，暂时不能删除。" }, { status: 409 });

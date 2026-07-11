@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
+import { databaseInt, safeBigInt } from "@/lib/api-input";
 import { getCurrentMembership } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { fetchWithTimeout } from "@/lib/http";
@@ -9,15 +10,9 @@ import { prisma } from "@/lib/prisma";
 import { rateLimit } from "@/lib/rate-limit";
 import { publicVideoTask } from "@/lib/video-task";
 import { isPublicMediaUrl } from "@/lib/media-url";
-import { isZJVideoProvider, normalizeProviderBaseUrl, videoCreateEndpoint } from "@/lib/providers/video";
+import { videoCreateEndpoint } from "@/lib/providers/video";
+import { buildDurationControlledPrompt, buildVideoProviderPayload, createVideoError, CreateVideoResponse, extractCreatedTaskId, MediaInput, mediaUrls, normalizeVideoDuration, normalizeVideoRatio, resolveVideoApiProfile, videoAuditMetadata } from "@/lib/video-generation";
 import { resolveModelRoute } from "../api-profiles/store";
-
-type MediaInput = {
-  url: string;
-  role?: string;
-};
-
-type ApiProfile = { id?: string; name?: string; baseUrl?: string; apiKey?: string; model?: string; videoModels?: string[] };
 
 type GenerateVideoPayload = {
   project_id?: number;
@@ -41,145 +36,13 @@ type GenerateVideoPayload = {
   audios?: MediaInput[];
 };
 
-type FastGateTaskResponse = {
-  id?: string;
-  task_id?: string;
-  status?: string;
-  error?: { message?: string } | string;
-  message?: string;
-  data?: {
-    id?: string;
-    task_id?: string;
-    status?: string;
-  };
-};
-
-type FastGateListItem = {
-  id?: string;
-  status?: string;
-  url?: string;
-  video_url?: string;
-  content?: { video_url?: string; url?: string };
-  data?: Array<{ url?: string; video_url?: string }>;
-  prompt?: string;
-  created_at?: number;
-  error?: string | { message?: string };
-};
-
-type FastGateListResponse = {
-  data?: FastGateListItem[];
-  items?: FastGateListItem[];
-};
-
 const BASE_URL = process.env.SEEDANCE_BASE_URL || "https://api.aifastgate.com";
 const MODEL = process.env.SEEDANCE_MODEL || "doubao-seedance-2.0-fast";
 const MAX_VIDEO_PROMPT_LENGTH = 8000;
-const MAX_DATABASE_INT = 2147483647;
-
-function cleanProjectId(value: unknown) {
-  const number = Number(value);
-  return Number.isInteger(number) && number > 0 && number <= MAX_DATABASE_INT ? number : 0;
-}
-
-function cleanShotId(value: unknown) {
-  const number = Number(value);
-  return Number.isSafeInteger(number) && number > 0 ? BigInt(number) : null;
-}
-
-function resolveApiProfile(profile?: ApiProfile) {
-  const videoModels = Array.isArray(profile?.videoModels) ? profile.videoModels.map(item => item.trim()).filter(Boolean) : [];
-  return {
-    apiKey: profile?.apiKey?.trim() || process.env.SEEDANCE_API_KEY || "",
-    baseUrl: normalizeProviderBaseUrl(profile?.baseUrl, BASE_URL),
-    videoModels,
-    model: profile?.model?.trim() || videoModels[0] || MODEL,
-    name: profile?.name?.trim() || "默认 AIfastgate"
-  };
-}
-
-function normalizeRatio(value?: string) {
-  if (!value) return "9:16";
-  return value.split(" ")[0];
-}
-
-function normalizeDuration(value?: number) {
-  const duration = Number(value || 5);
-  if (duration < 4) return 4;
-  if (duration > 15) return 15;
-  return duration;
-}
-
-function buildDurationControlledPrompt(prompt: string, duration: number) {
-  const text = prompt.trim();
-  if (text.includes("严格时长控制")) return text;
-  return [
-    `严格时长控制：生成一个完整连续的 ${duration}秒 视频。`,
-    text,
-    `多场景要求：如果提示词包含“场景1/2、场景2/2”或多个段落，请把它们理解为同一个 ${duration}秒 视频内部的连续场景变化，不要拆成多个独立视频。`,
-    `节奏要求：所有场景、动作、表情、镜头运动和停顿必须共同铺满 ${duration}秒，不要提前结束，不要把每个场景单独压缩成 3 秒。`,
-    "结构要求：只生成一个完整视频，禁止自动分割、禁止输出多个片段、禁止新增无关剧情或字幕。"
-  ].join("\n");
-}
-
-function normalizeMedia(items: MediaInput[] | undefined, limit: number, type: "image" | "video" | "audio") {
-  return (items || [])
-    .filter(item => item.url.trim())
-    .slice(0, limit)
-    .map(item => {
-      if (type === "image") return { type: "image_url", image_url: { url: item.url.trim() }, role: item.role || "reference_image" };
-      if (type === "video") return { type: "video_url", video_url: { url: item.url.trim() }, role: item.role || "reference_video" };
-      return { type: "audio_url", audio_url: { url: item.url.trim() }, role: item.role || "reference_audio" };
-    });
-}
-
-function normalizeMediaUrls(items: MediaInput[] | undefined, limit: number) {
-  return (items || []).map(item => item.url.trim()).filter(Boolean).slice(0, limit);
-}
 
 async function findSmallLocalReferenceImages(urls: string[]) {
   const checked = await Promise.all(urls.map(async url => ({ url, dimensions: await readLocalUploadImageDimensions(url) })));
   return checked.filter(item => isSmallReferenceImage(item.dimensions));
-}
-
-function extractTaskId(result: FastGateTaskResponse) {
-  return result.task_id || result.data?.task_id || result.id || result.data?.id;
-}
-
-function extractError(result: FastGateTaskResponse) {
-  if (typeof result.error === "string") return result.error;
-  return result.error?.message || result.message || "创建 Seedance 任务失败";
-}
-
-function videoAuditMetadata(params: {
-  model: string;
-  provider: string;
-  profileId?: string;
-  duration?: number;
-  ratio?: string;
-  resolution?: string;
-  inputType?: string;
-  imageCount?: number;
-  videoCount?: number;
-  audioCount?: number;
-  promptLength?: number;
-  status?: number;
-  message?: string;
-}) {
-  return {
-    model: params.model,
-    provider: params.provider,
-    profileId: params.profileId,
-    duration: params.duration,
-    ratio: params.ratio,
-    resolution: params.resolution,
-    inputType: params.inputType,
-    imageCount: params.imageCount,
-    videoCount: params.videoCount,
-    audioCount: params.audioCount,
-    promptLength: params.promptLength,
-    status: params.status,
-    message: params.message
-  };
 }
 
 async function failPersistedTask(params: { tenantId: string; projectId: number; taskId: string; shotId: bigint; message: string }) {
@@ -200,7 +63,7 @@ export async function GET(request: Request) {
   const membership = await getCurrentMembership();
   if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
   const { searchParams } = new URL(request.url);
-  const projectId = cleanProjectId(searchParams.get("project_id"));
+  const projectId = databaseInt(searchParams.get("project_id"));
   if (!projectId) return NextResponse.json({ code: 400, message: "缺少项目 ID。" }, { status: 400 });
 
   const tasks = await prisma.videoTask.findMany({
@@ -243,7 +106,7 @@ export async function POST(request: Request) {
   if (body.model_id && !route) {
     return rejectRequest("当前没有启用的渠道支持所选视频模型，请在模型渠道管理中补充后重试。");
   }
-  const { apiKey, baseUrl, model, name } = resolveApiProfile(route?.profile);
+  const { apiKey, baseUrl, model, name } = resolveVideoApiProfile(route?.profile, { baseUrl: BASE_URL, model: MODEL, name: "默认 AIfastgate" });
   const requestedModel = body.model_id?.trim() || route?.model || model;
 
   if (!apiKey) {
@@ -255,8 +118,8 @@ export async function POST(request: Request) {
   if (!shot?.prompt) {
     return rejectRequest("缺少分镜提示词，无法创建视频生成任务。");
   }
-  const projectId = cleanProjectId(body.project_id);
-  const shotId = cleanShotId(shot.id);
+  const projectId = databaseInt(body.project_id);
+  const shotId = safeBigInt(shot.id);
   if (!projectId || !shotId) {
     return rejectRequest("缺少有效的项目或分镜 ID。");
   }
@@ -264,15 +127,15 @@ export async function POST(request: Request) {
   if (!project) {
     return rejectRequest("当前项目尚未同步到服务器，请稍后重试。", 404);
   }
-  const duration = normalizeDuration(shot.duration);
+  const duration = normalizeVideoDuration(shot.duration);
   const prompt = buildDurationControlledPrompt(shot.prompt, duration);
   if (prompt.length > MAX_VIDEO_PROMPT_LENGTH) {
     return rejectRequest(`视频提示词最多 ${MAX_VIDEO_PROMPT_LENGTH} 字，请精简后再生成。`);
   }
 
-  const imageUrls = normalizeMediaUrls(body.images, 9);
-  const videoUrls = normalizeMediaUrls(body.videos, 3);
-  const audioUrls = normalizeMediaUrls(body.audios, 3);
+  const imageUrls = mediaUrls(body.images, 9);
+  const videoUrls = mediaUrls(body.videos, 3);
+  const audioUrls = mediaUrls(body.audios, 3);
   if (![...imageUrls, ...videoUrls, ...audioUrls].every(isPublicMediaUrl)) {
     return rejectRequest("参考素材必须使用上游可访问的公网 http/https URL；本机、局域网或相对路径不能用于生成。");
   }
@@ -290,43 +153,11 @@ export async function POST(request: Request) {
       action: "video_task.create",
       targetType: "video_task",
       result: "blocked",
-      metadata: videoAuditMetadata({ model: requestedModel, provider: name, profileId: route?.profile.id, duration, ratio: normalizeRatio(shot.ratio), resolution: body.resolution || "720p", inputType, imageCount: imageUrls.length, videoCount: videoUrls.length, audioCount: audioUrls.length, promptLength: prompt.length, message })
+      metadata: videoAuditMetadata({ model: requestedModel, provider: name, profileId: route?.profile.id, duration, ratio: normalizeVideoRatio(shot.ratio), resolution: body.resolution || "720p", inputType, imageCount: imageUrls.length, videoCount: videoUrls.length, audioCount: audioUrls.length, promptLength: prompt.length, message })
     });
     return NextResponse.json({ code: 400, message }, { status: 400 });
   }
-  const payloadImageUrls = body.input_type === "first_last_frame" ? imageUrls.slice(0, 2) : imageUrls;
-  const content = [
-    { type: "text", text: prompt },
-    ...normalizeMedia(body.input_type === "first_last_frame" ? body.images?.slice(0, 2) : body.images, 9, "image"),
-    ...normalizeMedia(body.videos, 3, "video"),
-    ...normalizeMedia(body.audios, 3, "audio")
-  ];
-
-  const payload = isZJVideoProvider(baseUrl) ? {
-    model: requestedModel,
-    prompt,
-    input_type: inputType,
-    images: payloadImageUrls,
-    videos: videoUrls,
-    audios: audioUrls,
-    ratio: normalizeRatio(shot.ratio),
-    duration,
-    resolution: body.resolution || "720p",
-    metadata: {
-      draft: false,
-      generate_audio: body.generate_audio ?? true,
-      watermark: body.watermark ?? false
-    }
-  } : {
-    model: requestedModel,
-    prompt,
-    content,
-    ratio: normalizeRatio(shot.ratio),
-    duration,
-    resolution: body.resolution || "720p",
-    generate_audio: body.generate_audio ?? true,
-    watermark: body.watermark ?? false
-  };
+  const payload = buildVideoProviderPayload({ baseUrl, model: requestedModel, prompt, inputType, ratio: shot.ratio, duration, resolution: body.resolution || "720p", generateAudio: body.generate_audio, watermark: body.watermark, images: body.images, videos: body.videos, audios: body.audios });
 
   const internalTaskId = randomUUID();
   const snapshot = body.snapshot && typeof body.snapshot === "object" && !Array.isArray(body.snapshot)
@@ -395,18 +226,18 @@ export async function POST(request: Request) {
       action: "video_task.create",
       targetType: "video_task",
       result: "failure",
-      metadata: videoAuditMetadata({ model: requestedModel, provider: name, profileId: route?.profile.id, duration, ratio: normalizeRatio(shot.ratio), resolution: body.resolution || "720p", inputType, imageCount: imageUrls.length, videoCount: videoUrls.length, audioCount: audioUrls.length, promptLength: prompt.length, message })
+      metadata: videoAuditMetadata({ model: requestedModel, provider: name, profileId: route?.profile.id, duration, ratio: normalizeVideoRatio(shot.ratio), resolution: body.resolution || "720p", inputType, imageCount: imageUrls.length, videoCount: videoUrls.length, audioCount: audioUrls.length, promptLength: prompt.length, message })
     });
     return NextResponse.json({ code: 504, message, data: { task: publicVideoTask(failedTask) } }, { status: 504 });
   }
 
   const text = await response.text();
-  let result: FastGateTaskResponse = {};
-  try { result = text ? JSON.parse(text) as FastGateTaskResponse : {}; } catch { result = { message: text }; }
-  const taskId = extractTaskId(result);
+  let result: CreateVideoResponse = {};
+  try { result = text ? JSON.parse(text) as CreateVideoResponse : {}; } catch { result = { message: text }; }
+  const taskId = extractCreatedTaskId(result);
 
   if (!response.ok || !taskId) {
-    const message = extractError(result);
+    const message = createVideoError(result);
     const failedTask = await failPersistedTask({ tenantId: membership.tenantId, projectId, taskId: internalTaskId, shotId, message });
     await logAudit({
       request,
@@ -414,7 +245,7 @@ export async function POST(request: Request) {
       action: "video_task.create",
       targetType: "video_task",
       result: "failure",
-      metadata: videoAuditMetadata({ model: requestedModel, provider: name, profileId: route?.profile.id, duration, ratio: normalizeRatio(shot.ratio), resolution: body.resolution || "720p", inputType, imageCount: imageUrls.length, videoCount: videoUrls.length, audioCount: audioUrls.length, promptLength: prompt.length, status: response.status, message })
+      metadata: videoAuditMetadata({ model: requestedModel, provider: name, profileId: route?.profile.id, duration, ratio: normalizeVideoRatio(shot.ratio), resolution: body.resolution || "720p", inputType, imageCount: imageUrls.length, videoCount: videoUrls.length, audioCount: audioUrls.length, promptLength: prompt.length, status: response.status, message })
     });
     return NextResponse.json(
       {
@@ -443,7 +274,7 @@ export async function POST(request: Request) {
     targetType: "video_task",
     targetId: taskId,
     metadata: {
-      ...videoAuditMetadata({ model: requestedModel, provider: name, profileId: route?.profile.id, duration, ratio: normalizeRatio(shot.ratio), resolution: body.resolution || "720p", inputType, imageCount: imageUrls.length, videoCount: videoUrls.length, audioCount: audioUrls.length, promptLength: prompt.length })
+      ...videoAuditMetadata({ model: requestedModel, provider: name, profileId: route?.profile.id, duration, ratio: normalizeVideoRatio(shot.ratio), resolution: body.resolution || "720p", inputType, imageCount: imageUrls.length, videoCount: videoUrls.length, audioCount: audioUrls.length, promptLength: prompt.length })
     }
   });
 
@@ -467,9 +298,9 @@ export async function DELETE(request: Request) {
   if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
 
   const { searchParams } = new URL(request.url);
-  const projectId = cleanProjectId(searchParams.get("project_id"));
+  const projectId = databaseInt(searchParams.get("project_id"));
   const taskId = searchParams.get("task_id")?.trim();
-  const shotId = cleanShotId(searchParams.get("shot_id"));
+  const shotId = safeBigInt(searchParams.get("shot_id"));
   if (!projectId || (!taskId && !shotId)) {
     return NextResponse.json({ code: 400, message: "缺少项目 ID 和任务/分镜 ID。" }, { status: 400 });
   }

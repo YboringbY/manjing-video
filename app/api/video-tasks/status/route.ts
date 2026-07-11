@@ -1,14 +1,15 @@
 import { NextResponse } from "next/server";
+import { databaseInt } from "@/lib/api-input";
 import { getCurrentMembership } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { fetchWithTimeout } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { rateLimit } from "@/lib/rate-limit";
 import { publicVideoTask, VideoTaskRecord } from "@/lib/video-task";
-import { normalizeProviderBaseUrl, normalizeVideoStatus, videoStatusEndpoints } from "@/lib/providers/video";
+import { normalizeVideoStatus, videoStatusEndpoints } from "@/lib/providers/video";
+import { resolveVideoApiProfile } from "@/lib/video-generation";
+import { extractVideoError, extractVideoUrl, upstreamHost, VideoStatusResponse } from "@/lib/video-status";
 import { readServerApiProfiles } from "../../api-profiles/store";
-
-type ApiProfile = { id?: string; name?: string; baseUrl?: string; apiKey?: string; model?: string };
 
 type StatusPayload = {
   project_id?: number;
@@ -17,121 +18,7 @@ type StatusPayload = {
   profile_id?: string;
 };
 
-type FastGateStatusResponse = {
-  id?: string;
-  task_id?: string;
-  status?: string;
-  task_status?: string;
-  output?: string | string[] | { url?: string; video_url?: string };
-  url?: string;
-  video_url?: string;
-  content?: { video_url?: string; url?: string };
-  result?: { video_url?: string; url?: string; status?: string };
-  error?: { message?: string } | string;
-  message?: string;
-  data?: {
-    id?: string;
-    task_id?: string;
-    status?: string;
-    task_status?: string;
-    output?: string | string[] | { url?: string; video_url?: string };
-    url?: string;
-    video_url?: string;
-    content?: { video_url?: string; url?: string };
-    result?: { video_url?: string; url?: string; status?: string };
-    error?: string;
-  } | Array<{ url?: string; video_url?: string }>;
-  items?: Array<{
-    id?: string;
-    task_id?: string;
-    status?: string;
-    task_status?: string;
-    url?: string;
-    video_url?: string;
-    content?: { video_url?: string; url?: string };
-    result?: { video_url?: string; url?: string; status?: string };
-    error?: string | { message?: string };
-  }>;
-};
-
 const BASE_URL = process.env.SEEDANCE_BASE_URL || "https://api.aifastgate.com";
-const MAX_DATABASE_INT = 2147483647;
-
-function cleanProjectId(value: unknown) {
-  const number = Number(value);
-  return Number.isInteger(number) && number > 0 && number <= MAX_DATABASE_INT ? number : 0;
-}
-
-function resolveApiProfile(profile?: ApiProfile) {
-  return {
-    apiKey: profile?.apiKey?.trim() || process.env.SEEDANCE_API_KEY || "",
-    baseUrl: normalizeProviderBaseUrl(profile?.baseUrl, BASE_URL)
-  };
-}
-
-function isHttpUrl(value?: string) {
-  if (!value) return false;
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-function failedOutputMessage(value?: string) {
-  const text = value?.trim();
-  if (!text || isHttpUrl(text)) return "";
-  if (/fail|error|cancel|invalid|quota|insufficient|not enough/i.test(text)) return text;
-  return "";
-}
-
-function extractVideoUrl(result: FastGateStatusResponse) {
-  const dataObject = Array.isArray(result.data) ? undefined : result.data;
-  const dataItem = Array.isArray(result.data) ? result.data[0] : undefined;
-  const output = result.output || dataObject?.output;
-  const outputObject = typeof output === "object" && !Array.isArray(output) ? output : undefined;
-  const candidates = [
-    typeof output === "string" ? output : undefined,
-    Array.isArray(output) ? output[0] : undefined,
-    outputObject?.video_url,
-    outputObject?.url,
-    result.video_url,
-    dataObject?.video_url,
-    dataItem?.video_url,
-    result.url,
-    dataObject?.url,
-    dataItem?.url,
-    result.content?.video_url,
-    result.content?.url,
-    dataObject?.content?.video_url,
-    dataObject?.content?.url,
-    result.result?.video_url,
-    result.result?.url,
-    dataObject?.result?.video_url,
-    dataObject?.result?.url
-  ];
-  return candidates.find(isHttpUrl) || "";
-}
-
-function extractError(result: FastGateStatusResponse) {
-  const dataObject = Array.isArray(result.data) ? undefined : result.data;
-  const output = result.output || dataObject?.output;
-  const outputText = typeof output === "string" ? output : Array.isArray(output) && typeof output[0] === "string" ? output[0] : "";
-  const errorMessage = typeof result.error === "string" ? result.error : result.error?.message;
-  const detailedMessage = result.message && result.message !== "task failed" ? result.message : undefined;
-  const message = detailedMessage || dataObject?.error || errorMessage || result.message || failedOutputMessage(outputText);
-  if (message?.includes("pre_consume_token_quota_failed") || message?.includes("token quota is not enough")) return "账户余额不足，当前额度不足以生成该视频，请充值后重试。";
-  return message;
-}
-
-function upstreamHost(baseUrl: string) {
-  try {
-    return new URL(baseUrl).hostname;
-  } catch {
-    return baseUrl;
-  }
-}
 
 async function persistTaskStatus(task: VideoTaskRecord, params: { status: string; rawStatus?: string; videoUrl?: string; error?: string }) {
   const taskStatus = params.status === "succeeded" ? "done" : params.status === "failed" ? "failed" : "running";
@@ -192,7 +79,7 @@ export async function POST(request: Request) {
   if (limited) return limited;
 
   const body = await request.json() as StatusPayload;
-  const projectId = cleanProjectId(body.project_id);
+  const projectId = databaseInt(body.project_id);
   const internalTaskId = body.internal_task_id?.trim();
   let persistedTask: VideoTaskRecord | null = null;
   if (internalTaskId) {
@@ -211,7 +98,7 @@ export async function POST(request: Request) {
   const profiles = profileId ? await readServerApiProfiles() : [];
   const serverProfile = profileId ? profiles.find(profile => profile.id === profileId) : undefined;
   if (profileId && !serverProfile) return NextResponse.json({ code: 404, message: "这条任务使用的模型渠道已不存在，请联系管理员。" }, { status: 404 });
-  const { apiKey, baseUrl } = resolveApiProfile(serverProfile);
+  const { apiKey, baseUrl } = resolveVideoApiProfile(serverProfile, { baseUrl: BASE_URL, model: "", name: "" });
 
   if (!apiKey) {
     return NextResponse.json(
@@ -252,14 +139,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ code: 500, message: "未能发起状态查询请求。" }, { status: 500 });
   }
 
-  let result: FastGateStatusResponse = {};
-  try { result = text ? JSON.parse(text) as FastGateStatusResponse : {}; } catch { result = { message: text }; }
+  let result: VideoStatusResponse = {};
+  try { result = text ? JSON.parse(text) as VideoStatusResponse : {}; } catch { result = { message: text }; }
   const matchedItem = result.items?.find(item => item.id === upstreamTaskId || item.task_id === upstreamTaskId);
-  const matchedResult = matchedItem ? { ...matchedItem } as FastGateStatusResponse : result;
+  const matchedResult = matchedItem ? { ...matchedItem } as VideoStatusResponse : result;
   const dataObject = Array.isArray(matchedResult.data) ? undefined : matchedResult.data;
   const rawStatus = matchedResult.status || matchedResult.task_status || dataObject?.status || dataObject?.task_status || matchedResult.result?.status || dataObject?.result?.status;
   const videoUrl = extractVideoUrl(matchedResult);
-  const extractedError = extractError(matchedResult);
+  const extractedError = extractVideoError(matchedResult);
   const normalizedStatus = videoUrl ? "succeeded" : extractedError ? "failed" : normalizeVideoStatus(rawStatus);
   if (normalizedStatus === "failed") {
     await logAudit({
@@ -286,7 +173,7 @@ export async function POST(request: Request) {
         data: {
           task_id: upstreamTaskId,
           status: "pending",
-          error: extractError(result) || "上游任务状态暂未可查，继续等待同步。",
+          error: extractVideoError(result) || "上游任务状态暂未可查，继续等待同步。",
           task: updatedTask ? publicVideoTask(updatedTask) : undefined
         }
       });
@@ -295,7 +182,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         code: finalResponse.status,
-        message: extractError(result) || "查询 Seedance 任务状态失败"
+        message: extractVideoError(result) || "查询 Seedance 任务状态失败"
       },
       { status: finalResponse.status }
     );

@@ -1,20 +1,10 @@
 import { NextResponse } from "next/server";
 import { getCurrentMembership } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { cleanText, databaseInt, positiveVersion } from "@/lib/api-input";
 import { prisma } from "@/lib/prisma";
 
-const MAX_DATABASE_INT = 2147483647;
 const PROJECT_TYPES = new Set(["AI 漫剧", "AI 真人剧"]);
-
-function cleanId(value: unknown) {
-  const number = Number(value);
-  return Number.isInteger(number) && number > 0 && number <= MAX_DATABASE_INT ? number : 0;
-}
-
-function cleanText(value: unknown, fallback = "") {
-  const text = String(value || "").trim();
-  return text || fallback;
-}
 
 function publicProject(project: { id: number; name: string; type: string; script: string; status: string; version: number; createdAt: Date; updatedAt: Date }) {
   return {
@@ -44,7 +34,7 @@ export async function POST(request: Request) {
   const membership = await getCurrentMembership();
   if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
   const body = await request.json();
-  const id = cleanId(body.id);
+  const id = databaseInt(body.id);
   const name = cleanText(body.name, "未命名项目");
   const type = cleanText(body.type, "AI 漫剧");
   if (!id) return NextResponse.json({ code: 400, message: "缺少有效的项目 ID。" }, { status: 400 });
@@ -67,9 +57,9 @@ export async function PATCH(request: Request) {
   const membership = await getCurrentMembership();
   if (!membership) return NextResponse.json({ code: 401, message: "请先登录。" }, { status: 401 });
   const body = await request.json();
-  const id = cleanId(body.id);
-  const expectedVersion = Number(body.version);
-  if (!id || !Number.isInteger(expectedVersion) || expectedVersion < 1) return NextResponse.json({ code: 400, message: "缺少项目版本，请刷新后重试。" }, { status: 400 });
+  const id = databaseInt(body.id);
+  const expectedVersion = positiveVersion(body.version);
+  if (!id || !expectedVersion) return NextResponse.json({ code: 400, message: "缺少项目版本，请刷新后重试。" }, { status: 400 });
   const current = await prisma.project.findFirst({ where: { id, tenantId: membership.tenantId } });
   if (!current) return NextResponse.json({ code: 404, message: "项目不存在或已被删除。" }, { status: 404 });
 

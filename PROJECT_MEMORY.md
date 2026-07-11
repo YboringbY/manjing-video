@@ -2,6 +2,16 @@
 
 更新时间：2026-07-11
 
+# 2026-07-11 P1 代码结构与状态权威优化
+
+- 前端继续拆分 `app/page.tsx`：登录页、人员管理、审计日志分别迁到 `LoginPage`、`MembersSection`、`AuditLogsSection`，主页面从 2731 行降到 2647 行。
+- 新增 `lib/api-input.ts`，统一项目、分镜、素材和视频任务接口的文本、数据库 Int、BigInt、版本号与范围整数校验；数据库 Int 超出 PostgreSQL Int 范围时严格返回 400，禁止取模映射到其他业务 ID。
+- 新增 `lib/video-generation.ts` 和 `lib/video-status.ts`，集中处理视频渠道配置、时长与比例、参考素材 payload、上游任务 ID/错误/视频 URL 解析，视频创建路由从 509 行降到 340 行，状态路由从 318 行降到 205 行。
+- 浏览器 `localStorage` 只保存项目兼容元数据；读取和写入缓存时都清空 `shots / tasks / assets / materials`，规范化数据库 API 是这些业务数据的唯一权威来源。
+- `scripts/core-api-integration.mjs` 增加超范围数据库 ID 必须返回 400 的回归检查。
+- 验证通过：`git diff --check`、`npx tsc --noEmit`、清理 `.next` 后 `npm run build`、`npm run test:core-api`。集成测试覆盖严格 ID、项目/分镜 409、共享素材、任务评价和视频资产生命周期，临时数据已自动清理。
+- 本轮 P1 代码将提交并推送到 GitHub `main`，但不部署生产。当前生产仍为 `1b8534a Show restored production projects`；P0 提交 `39926bc` 与本轮 P1 都尚未部署。任何发布必须先向用户提交环境、影响、备份、停机和回滚方案并获得明确批准。
+
 ## 2026-07-11 P0 稳定性自动化
 
 - 新增 `scripts/core-api-integration.mjs`：仅允许 loopback，自动验证项目/分镜乐观锁、团队素材跨项目生命周期、任务评价和视频资产删除，并在 `finally` 清理测试数据。
