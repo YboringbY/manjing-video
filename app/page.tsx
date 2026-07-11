@@ -142,10 +142,6 @@ function mergeMaterials(current: MaterialAsset[], incoming: MaterialAsset[]) {
   });
 }
 
-function isLegacySeedProject(project?: Partial<Project>) {
-  return (project?.id === 1 && project.name === "短剧团队 Demo") || (project?.id === 2 && project.name === "demo2");
-}
-
 function materialDimensionText(material: Pick<MaterialAsset, "width" | "height">) {
   return material.width && material.height ? `${material.width}x${material.height}` : "";
 }
@@ -155,7 +151,7 @@ function isSmallVideoReferenceImage(material: MaterialAsset) {
 }
 
 function projectStatesFromWorkspaces(workspaces: WorkspaceRecord[]) {
-  return Object.fromEntries(workspaces.filter(item => !isLegacySeedProject(item.state.project)).map(item => {
+  return Object.fromEntries(workspaces.map(item => {
     const normalizedState = normalizeAppState(item.state);
     const projectId = safeProjectId(normalizedState.project.id || item.projectId);
     return [projectId, { ...normalizedState, project: { ...normalizedState.project, id: projectId } }];
@@ -538,7 +534,7 @@ export default function Home() {
         const result = await readApiJson(response, "加载项目工作区失败");
         if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "加载项目工作区失败");
         if (cancelled) return;
-        const workspaces = (result.data as WorkspaceRecord[]).filter(item => !isLegacySeedProject(item.state.project));
+        const workspaces = result.data as WorkspaceRecord[];
         if (!workspaces.length) {
           setState(emptyProjectState);
           setProjectStates(emptyProjectStates);
@@ -657,10 +653,10 @@ export default function Home() {
         Object.values(savedProjectStates).map(item => {
           const normalizedState = normalizeAppState(item as Partial<AppState>);
           return [normalizedState.project.id, normalizedState];
-        }).filter(([, normalizedState]) => !isLegacySeedProject((normalizedState as AppState).project))
+        })
       );
       const savedProjects: Project[] = Array.isArray(parsed.projects) ? parsed.projects : Object.values(savedProjectStates).map((item: unknown) => normalizeAppState(item as Partial<AppState>).project);
-      const normalizedSavedProjects = savedProjects.map(project => ({ ...project, id: safeProjectId(project.id) })).filter(project => !isLegacySeedProject(project));
+      const normalizedSavedProjects = savedProjects.map(project => ({ ...project, id: safeProjectId(project.id) }));
       const nextProjects = normalizedSavedProjects.filter((project, index, list) => index === list.findIndex(item => item.id === project.id));
       const safeProjects = nextProjects.length ? nextProjects : emptyProjects;
       const safeProjectStates = nextProjects.length ? nextProjectStates : emptyProjectStates;
