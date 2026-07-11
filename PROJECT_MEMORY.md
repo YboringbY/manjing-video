@@ -8,7 +8,10 @@
 - 生产只读核对确认数据没有丢失：项目 `id=1` 仍关联 10 条素材（7 图片、2 音频、1 视频），10 个 `storagePath` 和对应文件全部存在，20 条生成记录正常。
 - 根因是 P1 清空 localStorage 业务副本后暴露了已有并行加载竞态：`/api/materials?projectId=1` 若先返回，随后 `/api/workspaces` 的空 `materials` 会覆盖素材结果；当前项目 ID 未变化时素材 effect 不会再次执行。
 - 修复为项目素材必须等待工作区同步完成后加载，并在登录成功和退出登录时重置工作区同步标志，保证每次会话都按“工作区 -> 项目素材”顺序执行。
-- 本地验证通过：`git diff --check`、`npx tsc --noEmit`、清理 `.next` 后 `npm run build`、`npm run test:core-api`。修复尚未部署生产，部署不包含 schema/migration 或数据修改。
+- 本地验证通过：`git diff --check`、`npx tsc --noEmit`、清理 `.next` 后 `npm run build`、`npm run test:core-api`。
+- 用户明确批准后，热修复 `b1ae0ec Fix project material loading race` 已部署生产；待执行 migration 为 0，业务数量与主键指纹不变，PM2 online，公网首页 200，匿名鉴权 401。
+- 热修复备份：`/data/backups/manjing-video-db-pre-deploy-20260712-012832.dump`，63KB、PostgreSQL custom archive、111 个目录项；部署后复核 10 条素材关联和 10 个文件均存在。
+- 因未提供生产登录凭证，登录后的素材库页面需要用户刷新并进行最终可见性确认。
 
 # 2026-07-12 P0/P1 生产发布
 
