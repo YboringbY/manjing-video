@@ -536,7 +536,7 @@ export default function Home() {
   }, [authReady, currentUser, storageReady]);
 
   useEffect(() => {
-    if (!authReady || !currentUser || !storageReady) return;
+    if (!authReady || !currentUser || !storageReady || !workspaceSyncReady) return;
     let cancelled = false;
     async function loadProjectMaterials() {
       try {
@@ -559,7 +559,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [authReady, currentUser, storageReady, currentProjectId]);
+  }, [authReady, currentUser, storageReady, workspaceSyncReady, currentProjectId]);
 
   useEffect(() => {
     if (!authReady || !currentUser || !storageReady) return;
@@ -2255,6 +2255,7 @@ export default function Home() {
         return;
       }
       setAuthUsers(prev => ({ ...prev, [result.data.account]: result.data as AuthUser }));
+      setWorkspaceSyncReady(false);
       setCurrentUser(result.data.account);
       setShowLoginPage(false);
       setLoginPassword("");
@@ -2277,6 +2278,7 @@ export default function Home() {
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    setWorkspaceSyncReady(false);
     setCurrentUser(null);
     setLoginPassword("");
     setUserMenuOpen(false);

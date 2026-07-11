@@ -2,6 +2,14 @@
 
 更新时间：2026-07-11
 
+# 2026-07-12 生产素材库可见性回归
+
+- P0/P1 发布后用户反馈 `短剧团队 Demo` 的生成记录可见，但素材库为空。
+- 生产只读核对确认数据没有丢失：项目 `id=1` 仍关联 10 条素材（7 图片、2 音频、1 视频），10 个 `storagePath` 和对应文件全部存在，20 条生成记录正常。
+- 根因是 P1 清空 localStorage 业务副本后暴露了已有并行加载竞态：`/api/materials?projectId=1` 若先返回，随后 `/api/workspaces` 的空 `materials` 会覆盖素材结果；当前项目 ID 未变化时素材 effect 不会再次执行。
+- 修复为项目素材必须等待工作区同步完成后加载，并在登录成功和退出登录时重置工作区同步标志，保证每次会话都按“工作区 -> 项目素材”顺序执行。
+- 本地验证通过：`git diff --check`、`npx tsc --noEmit`、清理 `.next` 后 `npm run build`、`npm run test:core-api`。修复尚未部署生产，部署不包含 schema/migration 或数据修改。
+
 # 2026-07-12 P0/P1 生产发布
 
 - 用户在查看生产变更单后明确批准，将生产从 `1b8534a` 更新到 `b628a95 Refactor P1 frontend and video workflows`。
