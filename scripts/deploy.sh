@@ -36,8 +36,41 @@ chmod 600 "$PRE_MIGRATION_BACKUP"
 [[ -s "$PRE_MIGRATION_BACKUP" ]] || { echo "Database backup is empty." >&2; exit 2; }
 
 npm run db:preflight
+business_snapshot=$(mktemp)
+service_stopped=no
+migration_started=no
+
+deployment_error() {
+  rm -f "$business_snapshot"
+  if [[ "$service_stopped" == "yes" && "$migration_started" == "no" ]]; then
+    echo "Pre-migration failure; restarting the unchanged application." >&2
+    pm2 start "$PM2_APP" >/dev/null || true
+  elif [[ "$migration_started" == "yes" ]]; then
+    echo "Migration or conservation check failed; application remains stopped for manual recovery." >&2
+  fi
+}
+trap deployment_error ERR
+
+pm2 stop "$PM2_APP"
+service_stopped=yes
+bash scripts/business-data-snapshot.sh capture "$business_snapshot"
+migration_started=yes
 npx prisma migrate deploy
+bash scripts/business-data-snapshot.sh verify "$business_snapshot"
+rm -f "$business_snapshot"
 pm2 restart "$PM2_APP" --update-env
+service_stopped=no
+trap - ERR
 pm2 status "$PM2_APP" --no-color
+
+curl --retry 10 --retry-all-errors --retry-delay 1 -fsS -o /dev/null http://127.0.0.1:3000/
+auth_status=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/auth/me)
+[[ "$auth_status" == "401" ]] || { echo "Post-deploy auth smoke returned $auth_status." >&2; exit 7; }
+
+if [[ -n "${PRODUCTION_SMOKE_ACCOUNT:-}" && -n "${PRODUCTION_SMOKE_PASSWORD:-}" ]]; then
+  PRODUCTION_BASE_URL=http://127.0.0.1:3000 npm run smoke:production
+else
+  echo "Authenticated production smoke skipped: credentials were not provided."
+fi
 
 echo "Deployment complete. Backup: $PRE_MIGRATION_BACKUP"

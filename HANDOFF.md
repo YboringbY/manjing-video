@@ -2,6 +2,15 @@
 
 更新时间：2026-07-11
 
+## P0 稳定性自动化
+
+- `npm run test:core-api`：只允许本机，覆盖项目/分镜 409、共享素材、任务评价和视频资产生命周期，自动清理。
+- `npm run smoke:production`：生产只读业务 smoke；凭证通过 `PRODUCTION_SMOKE_ACCOUNT / PRODUCTION_SMOKE_PASSWORD` 临时提供。
+- `npm run db:snapshot -- capture|verify <file>`：migration 前后比较业务数量和主键指纹，差异默认阻断。
+- `npm run db:verify-backup`：恢复到隔离临时库验证备份计数，默认自动清理。
+- 部署脚本已串联备份、预检、停机、守恒检查、migration、重启和健康检查。
+- 每次发布必须完成 `docs/P0_RELEASE_CHECKLIST.md`，最终验收必须查看真实浏览器页面。
+
 ## 生产数据事故与强制规则
 
 - `20260710194000_remove_legacy_workspace_payload` 误把生产项目 `id=1 / 短剧团队 Demo` 当演示数据删除，导致 1 个项目、15 个分镜、20 个任务、3 个视频资产、10 个素材短暂不可用。

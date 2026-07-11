@@ -8,9 +8,11 @@ For any task involving production deployment, Prisma migrations, database repair
 2. Obtain explicit user approval before any production database change or destructive operation.
 3. Run `npm run db:preflight` before `prisma migrate deploy`.
 4. Create and verify a non-empty production database backup before migrations or repairs.
-5. Never infer that production data is disposable from an ID, name, legacy marker, demo label, age, or apparent inactivity.
-6. Do not put business-row deletion in normal schema migrations. Use a separate reviewed maintenance operation with a read-only impact report.
-7. Prefer additive changes and avoid high-risk cleanup after the service becomes stable.
-8. Use `scripts/deploy.sh` for production deployment. Do not use `git reset --hard` for deployment.
+5. Capture and compare business counts and identity fingerprints before and after migration.
+6. Never infer that production data is disposable from an ID, name, legacy marker, demo label, age, or apparent inactivity.
+7. Do not put business-row deletion in normal schema migrations. Use a separate reviewed maintenance operation with a read-only impact report.
+8. Prefer additive changes and avoid high-risk cleanup after the service becomes stable.
+9. Use `scripts/deploy.sh` for production deployment. Do not use `git reset --hard` for deployment.
+10. Complete `docs/P0_RELEASE_CHECKLIST.md`, including the final browser-visible workflow, before declaring a release successful.
 
 Read `docs/PRODUCTION_CHANGE_POLICY.md` and `docs/INCIDENT_2026-07-11_PROJECT_DELETION.md` before production database work.

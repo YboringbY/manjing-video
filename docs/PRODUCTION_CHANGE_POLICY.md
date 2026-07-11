@@ -19,6 +19,7 @@ Do not continue with a destructive operation until the user explicitly approves 
 - Historical/demo cleanup must be a separate maintenance script with a read-only impact report and explicit user approval.
 - Names and IDs are not sufficient proof that a row is disposable. Production rows may retain legacy demo identities while containing real user data.
 - Run `npm run db:preflight` before `prisma migrate deploy`.
+- Capture and verify business row counts and identity fingerprints around every production migration.
 - A non-empty database backup is mandatory before every production migration.
 - Stop the application for repairs that restore or rewrite related tables, and use a transaction whenever possible.
 
@@ -31,6 +32,8 @@ After the service is stable:
 - Reduce compatibility cleanup and large backfills.
 - Keep data removal out of routine feature releases.
 - Require a separate review for database migrations and production deployment.
+
+Use `docs/P0_RELEASE_CHECKLIST.md` for every production release. A release is not complete until the real browser UI is verified.
 
 ## Deployment Command
 
