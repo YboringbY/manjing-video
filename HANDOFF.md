@@ -1,16 +1,18 @@
 # 漫镜视频 Handoff
 
-更新时间：2026-07-10
+更新时间：2026-07-11
 
-## 晚间中断恢复
+## 2026-07-11 生产发布
 
-- 当前工作树有一批本地未提交、未部署改动，主线是结束 `ProjectWorkspace.state` 业务数组双写，改用项目/分镜/任务/视频资产/素材关联的规范化表和细粒度 API。
+- 业务提交 `c7ffc16` 已推送并部署，主线是结束 `ProjectWorkspace.state` 业务数组双写，改用项目/分镜/任务/视频资产/素材关联的规范化表和细粒度 API。
 - 新增 5 条 migration：移除旧工作区业务数组、项目素材关联、项目/分镜版本、任务评价、视频资产自增 ID。
 - 已修复恢复审查发现的项目 version 丢失、无 Workspace 的规范化项目不返回、IPv6 内网 URL 漏拦截、客户端伪造 `storagePath` 可触发文件删除、供应商 `/v1/v1` 路径重复等问题。
 - 本地 17 条 migration 已全部应用；Prisma validate/generate、TypeScript、生产 build 均通过。
 - 已用临时数据实测项目/分镜 409 乐观锁、团队素材跨项目生命周期、文件路径安全和 IPv4/IPv6 内网 URL 拦截，临时业务数据均已清理。
-- 本地开发服务运行在 `http://localhost:5050`。
-- 生产仍是 `166d0a2`。提交或部署前先 review 全部未提交 diff；生产部署前必须备份数据库，因为 migration 会清空旧工作区 JSON 的业务数组并删除精确匹配的旧 Demo 项目。
+- 生产 17 条 migration 已全部应用，构建通过，PM2 在线，公网首页 200，未登录鉴权 401。
+- 生产临时项目已验证项目/分镜乐观锁、规范化读取和删除闭环，测试数据已清理。
+- 发布备份位于 `/data/backups/manjing-video-db-pre-c7ffc16-20260711-104650.dump` 和 `/data/backups/manjing-video-code-pre-c7ffc16-20260711-104650.tar.gz`。
+- 当前生产业务项目、素材、任务均为 0；账号、模型渠道和审计数据正常保留。
 
 ## 当前状态
 
@@ -18,7 +20,7 @@
 - 本地开发：`http://localhost:5050`
 - 生产入口：`http://118.196.44.191`
 - 生产域名 `console.manjingstudio.com` 备案前不要恢复访问。
-- 最新生产提交：`166d0a2 Read workspace content from normalized tables`
+- 最新生产提交：`c7ffc16 Normalize project workflows and material lifecycle`
 - 生产 PM2：`manjing-video` online。
 
 本地启动：
@@ -66,16 +68,15 @@ npm run dev -- -p 5050
 
 重要现状：
 
-- `ProjectWorkspace.state` 仍保留，当前属于兼容/过渡层。
-- `/api/workspaces` POST 仍会保存完整快照，同时同步 `Project / Shot / VideoTask / VideoAsset`。
-- `/api/workspaces` GET 已优先从规范化表组装 `project / shots / tasks / assets`，再返回给前端。
-- 当前处于“双写过渡期”，不要长期停留在这个状态。
+- `ProjectWorkspace.state` 只保留兼容项目状态，不再保存 `shots / tasks / assets / materials` 业务副本。
+- `/api/workspaces` GET 从规范化表组装 `project / shots / tasks / assets`。
+- 项目、分镜、任务、视频资产和素材关系已使用细粒度 API。
 
 架构 review 共识：
 
 - 方向正确，但需要明确退役 JSON 快照的终点。
-- 优先补 `Material.projectId -> Project.id` 外键，减少孤儿素材风险。
-- 后续拆细粒度 API，减少整包保存和写放大。
+- 继续缩减并最终退役 `ProjectWorkspace` 兼容状态。
+- 优先完成真实模型生成、素材共享和视频预览下载的生产人工回归。
 - `Project.id` 仍由客户端生成随机 Int，短期可接受，长期应改为数据库生成或 cuid。
 
 ## 部署流程

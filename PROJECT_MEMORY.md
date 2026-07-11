@@ -1,10 +1,21 @@
 # 漫镜视频项目记忆
 
-更新时间：2026-07-10
+更新时间：2026-07-11
 
-## 2026-07-10 晚间中断恢复记录
+## 2026-07-11 生产发布记录
 
-当前有一批**本地未提交、未部署**的架构与产品优化。浏览器窗口关闭后已根据工作区 diff 恢复上下文并完成校验，不要把它误认为生产现状。
+中断恢复后的架构与产品优化已提交并发布到生产。
+
+- 业务提交：`c7ffc16 Normalize project workflows and material lifecycle`。
+- GitHub `main`、本地和生产运行代码已同步到 `c7ffc16`。
+- 生产 PostgreSQL 已从 12 条 migration 更新到 17 条，新增 5 条 migration 全部应用成功。
+- 生产构建通过，PM2 `manjing-video` 已重启并在线。
+- 公网 `http://118.196.44.191/` 返回 200，未登录 `/api/auth/me` 返回 401。
+- 管理员登录、项目/工作区/团队素材只读接口正常；旧 `/api/assets` 返回 404，任务评价接口未登录返回 401。
+- 生产临时项目实测：创建项目和工作区、保存剧本、创建/更新分镜、旧版本 409 冲突、规范化工作区读取和完整删除均正常；测试数据已清理。
+- 发布前数据库备份：`/data/backups/manjing-video-db-pre-c7ffc16-20260711-104650.dump`。
+- 发布前代码备份：`/data/backups/manjing-video-code-pre-c7ffc16-20260711-104650.tar.gz`。
+- 当前生产没有业务项目、分镜、任务、视频资产或素材；1 个租户、1 个用户、1 个成员关系、2 个模型渠道和审计日志均保留。
 
 本批改动主线：
 
@@ -26,7 +37,7 @@
 - `20260710203000_add_video_task_feedback`
 - `20260710204000_add_video_asset_sequence`
 
-本地验证结果：
+发布前验证结果：
 
 - 本地 PostgreSQL 16 已恢复运行，17 条 migration 全部已应用，无待执行 migration。
 - `npx prisma validate`、`npx prisma generate`、`npx tsc --noEmit` 通过。
@@ -35,13 +46,13 @@
 - 团队素材实测：跨项目关联成功；删除源项目后目标项目和团队库仍保留；解除关联和最终删除正常，测试数据已删除。
 - 文件安全实测：伪造 `storagePath` 不会删除已有文件；正常上传文件删除素材后物理文件被清理；API 不再泄露绝对路径。
 - 视频素材 URL 实测：`192.168.x.x`、`::1`、`fc00::/7`、IPv4-mapped loopback 均返回 400。
-- 本地开发服务当前运行在 `http://localhost:5050`。
+- 本地 5050 开发服务已在发布前停止，避免与生产构建共用 `.next`。
 
-部署前注意：
+发布后注意：
 
-- 这批 migration 会清空旧工作区 JSON 中的规范化业务数组，并删除名称和 ID 精确匹配的旧 Demo 项目；生产部署前必须先做数据库备份。
-- 生产仍是 `166d0a2`，本批代码尚未 commit/push/deploy。
-- 部署前还应手动复测登录后项目切换、剧本保存、分镜编辑、素材上传/共享、任务状态同步、视频预览下载和任务评价。
+- `ProjectWorkspace.state` 的业务数组已清空，规范化表成为项目、分镜、任务、视频资产和素材关系的数据源。
+- 仍建议在真实生产使用中复测素材上传/共享、真实模型生成、状态同步、视频预览下载和任务评价。
+- PM2 错误日志仍能看到外部伪造 Server Action `x` 请求；当前页面和 API 正常，本项目没有使用该 Server Action。
 
 ## 项目定位
 
@@ -56,7 +67,7 @@
 - 调用 Seedance 2.0 生成视频。
 - 同步生成任务状态，预览或下载生成视频。
 
-## 2026-07-10 当前精简状态
+## 2026-07-11 当前精简状态
 
 当前生产入口：
 
@@ -68,28 +79,25 @@ http://118.196.44.191
 
 最新已部署状态：
 
-- 最新生产提交：`166d0a2 Read workspace content from normalized tables`。
+- 最新生产提交：`c7ffc16 Normalize project workflows and material lifecycle`。
 - 生产 PM2 应用 `manjing-video` 在线。
 - 生产首页返回 `200 OK`。
 - `/api/auth/me` 未登录返回 JSON `401`，符合预期。
-- 生产 Prisma migration 已应用到 10 条。
+- 生产 Prisma migration 已应用到 17 条。
 
 数据库演进状态：
 
 - 已完成 `Project / Material / Shot / VideoTask / VideoAsset / ApiProfile / AuditLog` 等核心表。
-- `ProjectWorkspace.state` 仍保留为兼容快照，不应长期作为主数据源。
-- `/api/workspaces` POST 当前仍会写 `ProjectWorkspace.state`，同时同步写规范化表。
-- `/api/workspaces` GET 已开始用规范化表回填 `project / shots / tasks / assets` 后返回给前端。
-- 当前架构处于“双写过渡期”：方向正确，但需要尽快推进到“规范化表为唯一业务事实，ProjectWorkspace 只做兼容/归档”。
+- `ProjectWorkspace.state` 仅保留项目兼容状态，`shots / tasks / assets / materials` 不再实时双写。
+- `/api/workspaces` GET 从规范化表组装 `project / shots / tasks / assets` 后返回前端。
+- 项目、分镜、任务、视频资产和素材关系已使用细粒度 API 与规范化表。
 
 架构 review 后的下一步优先级：
 
-1. 补 `Material.projectId -> Project.id` 外键，项目删除时由数据库级联保证素材清理。
-2. 明确退役 `ProjectWorkspace.state` 的终点和阶段计划，避免双写长期存在。
-3. 拆细粒度 API：项目基础信息、剧本、分镜、视频任务、视频结果分别写表，减少整包保存和写放大。
-4. 逐步让前端从细粒度 API 读写，`ProjectWorkspace` 只作为旧数据兼容层。
-5. `Project.id` 仍由客户端生成随机 Int，40 人团队阶段可接受，但记录为后续技术债；更干净方向是数据库生成 ID 或 cuid。
-6. `VideoTask.shotId` 暂无复合外键约束，这是当前复合主键设计的取舍，先不主动修。
+1. 真实生产复测素材上传/共享、真实模型生成、状态同步、视频预览下载和任务评价。
+2. 继续缩减 `ProjectWorkspace` 兼容状态，最终只保留必要归档信息或完全退役。
+3. `Project.id` 仍由客户端生成随机 Int，40 人团队阶段可接受，但记录为后续技术债；更干净方向是数据库生成 ID 或 cuid。
+4. `VideoTask.shotId` 暂无复合外键约束，这是当前复合主键设计的取舍，先不主动修。
 
 近期客户反馈已处理：
 
