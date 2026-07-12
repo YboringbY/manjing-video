@@ -47,6 +47,7 @@ assert(workspaces.body.code === 0 && Array.isArray(workspaces.body.data), "Works
 assert(teamMaterials.body.code === 0 && Array.isArray(teamMaterials.body.data), "Team materials response is invalid.");
 
 const projectIds = new Set(projects.body.data.map(project => project.id));
+const checkedProjects = [];
 for (const workspace of workspaces.body.data) {
   assert(projectIds.has(workspace.projectId), `Workspace ${workspace.projectId} has no project.`);
   assert(Array.isArray(workspace.state?.shots), `Workspace ${workspace.projectId} shots are invalid.`);
@@ -67,6 +68,10 @@ for (const project of projects.body.data) {
   assert(workspace, `Project ${project.id} has no workspace response.`);
   assert(workspace.state.shots.length === shots.body.data.length, `Shot count mismatch for project ${project.id}.`);
   assert(workspace.state.tasks.length === tasks.body.data.length, `Task count mismatch for project ${project.id}.`);
+  const expectedMaterialCount = Number(workspace.state.project?.materialCount);
+  assert(Number.isInteger(expectedMaterialCount), `Workspace ${project.id} has no material count.`);
+  assert(expectedMaterialCount === materials.body.data.length, `Material count mismatch for project ${project.id}: workspace=${expectedMaterialCount}, api=${materials.body.data.length}.`);
+  checkedProjects.push({ id: project.id, shots: shots.body.data.length, materials: materials.body.data.length, tasks: tasks.body.data.length });
 }
 
 const legacyRoute = await fetch(`${baseUrl}/api/assets`, { headers: authHeaders });
@@ -76,5 +81,6 @@ console.log(JSON.stringify({
   ok: true,
   projects: projects.body.data.length,
   workspaces: workspaces.body.data.length,
-  teamMaterials: teamMaterials.body.data.length
+  teamMaterials: teamMaterials.body.data.length,
+  checkedProjects
 }));

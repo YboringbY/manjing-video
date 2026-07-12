@@ -2,6 +2,15 @@
 
 更新时间：2026-07-11
 
+# 2026-07-12 发布防回归机制优化
+
+- 素材可见性回归说明：数据库数量、主键指纹、文件存在和 API 200 都不能证明最终用户页面正确；发布验收必须覆盖浏览器状态与请求时序。
+- 前端增加双重保护：项目素材等待工作区同步完成后加载；工作区回包更新同一项目时保留已经加载的素材，避免未来请求时序变化再次清空 UI。
+- `scripts/production-smoke.mjs` 现在强制对比每个工作区的 `project.materialCount` 与 `/api/materials?projectId=...` 返回数量，并输出各项目的分镜、素材、任务检查结果。
+- `scripts/deploy.sh` 不再静默跳过登录后 smoke：缺少 `PRODUCTION_SMOKE_ACCOUNT / PRODUCTION_SMOKE_PASSWORD` 时默认在修改生产前阻断；只有用户明确批准单次例外并设置 `PRODUCTION_SMOKE_SKIP_APPROVED=yes` 才能继续。
+- 发布清单新增：涉及 localStorage、workspace hydration、规范化 API 加载或 React effect 的变更，必须使用清空 storage/全新浏览器会话验证项目、素材、任务和资产；API 数量与 UI 可见性必须分别验收。
+- 原则：不得再以“数据库记录还在”或“API 返回成功”代替最终页面验收；缺少已登录生产 smoke 和真实浏览器验收时，不得宣称发布完整成功。
+
 # 2026-07-12 生产素材库可见性回归
 
 - P0/P1 发布后用户反馈 `短剧团队 Demo` 的生成记录可见，但素材库为空。

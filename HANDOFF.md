@@ -2,6 +2,14 @@
 
 更新时间：2026-07-12
 
+## 发布防回归规则
+
+- 服务端数据数量和 API 成功不能替代 UI 验收；缓存、hydration、数据加载 effect 变更必须用清空 storage 的新浏览器会话验证。
+- 项目素材现在既等待工作区同步，又在同项目工作区回包时防止覆盖已加载素材。
+- 生产 smoke 强制比较 workspace `materialCount` 与素材 API 数量，并输出逐项目分镜/素材/任务结果。
+- 部署默认要求 `PRODUCTION_SMOKE_ACCOUNT / PRODUCTION_SMOKE_PASSWORD`；缺失时在生产变更前阻断。单次跳过必须获得用户明确批准并设置 `PRODUCTION_SMOKE_SKIP_APPROVED=yes`。
+- 发布未完成已登录 smoke 和真实浏览器项目/素材/生成记录验收时，不得标记为完整成功。
+
 ## 生产素材库显示热修复
 
 - 生产 10 条素材、10 条项目关联和 10 个文件均完整，素材库为空是前端加载竞态，不是再次丢数据。

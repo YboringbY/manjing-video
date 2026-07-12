@@ -35,6 +35,8 @@ After the service is stable:
 
 Use `docs/P0_RELEASE_CHECKLIST.md` for every production release. A release is not complete until the real browser UI is verified.
 
+For frontend state-authority changes, API/database counts are insufficient. Use a fresh browser profile or cleared localStorage and verify that projects, materials, tasks, and assets are visible after refresh. Authenticated production smoke credentials are required unless the user explicitly approves a one-release exception.
+
 ## Deployment Command
 
 Use `scripts/deploy.sh`; do not use `git reset --hard` or call `prisma migrate deploy` directly in routine production releases.

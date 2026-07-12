@@ -520,7 +520,9 @@ export default function Home() {
         setProjectStates(serverProjectStates);
         setProjects(serverProjects.length ? serverProjects : emptyProjects);
         setCurrentProjectId(nextCurrentProjectId);
-        setState(nextState);
+        setState(prev => prev.project.id === nextState.project.id && prev.materials.length
+          ? { ...nextState, materials: prev.materials }
+          : nextState);
         setScriptInput(nextState.project.script);
         setWorkspaceSyncMessage(`已同步 ${workspaces.length} 个项目工作区。`);
       } catch (error) {

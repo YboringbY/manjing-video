@@ -11,6 +11,14 @@ if [[ "${PRODUCTION_DEPLOY_APPROVED:-}" != "yes" ]]; then
   exit 2
 fi
 
+if [[ -z "${PRODUCTION_SMOKE_ACCOUNT:-}" || -z "${PRODUCTION_SMOKE_PASSWORD:-}" ]]; then
+  if [[ "${PRODUCTION_SMOKE_SKIP_APPROVED:-}" != "yes" ]]; then
+    echo "Authenticated production smoke credentials are required. An explicit approved exception requires PRODUCTION_SMOKE_SKIP_APPROVED=yes." >&2
+    exit 2
+  fi
+  echo "WARNING: authenticated production smoke will be skipped by explicit exception."
+fi
+
 cd "$APP_DIR"
 [[ -z "$(git status --porcelain)" ]] || { echo "Production worktree is not clean." >&2; exit 2; }
 
@@ -70,7 +78,7 @@ auth_status=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/
 if [[ -n "${PRODUCTION_SMOKE_ACCOUNT:-}" && -n "${PRODUCTION_SMOKE_PASSWORD:-}" ]]; then
   PRODUCTION_BASE_URL=http://127.0.0.1:3000 npm run smoke:production
 else
-  echo "Authenticated production smoke skipped: credentials were not provided."
+  echo "Authenticated production smoke skipped by explicit approved exception."
 fi
 
 echo "Deployment complete. Backup: $PRE_MIGRATION_BACKUP"
