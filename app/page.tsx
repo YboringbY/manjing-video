@@ -323,6 +323,8 @@ export default function Home() {
   const [imageHeight, setImageHeight] = useState(1024);
   const [imageRatio, setImageRatio] = useState<AspectRatio>("1:1");
   const [imageCount, setImageCount] = useState(1);
+  const [imageReferenceMaterialId, setImageReferenceMaterialId] = useState<number | null>(null);
+  const [selectingImageReference, setSelectingImageReference] = useState(false);
   const [generatedImages, setGeneratedImages] = useState<MaterialAsset[]>([]);
   const [isImageGenerating, setIsImageGenerating] = useState(false);
   const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("all");
@@ -651,6 +653,17 @@ export default function Home() {
     if (!storageReady) return;
     setProjectStates(prev => ({ ...prev, [currentProjectId]: state }));
   }, [state, currentProjectId, storageReady]);
+
+  useEffect(() => {
+    setImageReferenceMaterialId(null);
+    setSelectingImageReference(false);
+  }, [currentProjectId]);
+
+  useEffect(() => {
+    if (imageReferenceMaterialId && !state.materials.some(material => material.id === imageReferenceMaterialId && material.kind === "image")) {
+      setImageReferenceMaterialId(null);
+    }
+  }, [imageReferenceMaterialId, state.materials]);
 
   useEffect(() => {
     if (!storageReady || typeof window === "undefined") return;
@@ -1973,6 +1986,7 @@ export default function Home() {
   const visibleAssets = showAllAssets ? filteredMaterials : filteredMaterials.slice(0, 5);
   const hiddenImageResultCount = Math.max(generatedImages.length - 5, 0);
   const visibleImageResults = showAllImageResults ? generatedImages : generatedImages.slice(0, 5);
+  const imageReferenceMaterial = state.materials.find(material => material.id === imageReferenceMaterialId && material.kind === "image");
   const sortedShots = [...state.shots].sort((a, b) => b.id - a.id);
   const recentWorkbenchShots = sortedShots.slice(0, 3);
   const sortedTasks = [...state.tasks].sort((a, b) => {
@@ -2189,7 +2203,8 @@ export default function Home() {
           prompt: imageWorkbenchPrompt,
           size: `${imageWidth}x${imageHeight}`,
           n: imageCount,
-          projectId: currentProjectId
+          projectId: currentProjectId,
+          referenceMaterialId: imageReferenceMaterialId || undefined
         })
       });
       const result = await readApiJson(response, "图片生成失败");
@@ -2226,6 +2241,26 @@ export default function Home() {
     } finally {
       setIsImageGenerating(false);
     }
+  }
+
+  function openImageReferencePicker() {
+    setSelectingImageReference(true);
+    setActiveAssetScope("project");
+    setActiveAssetTab("image");
+    setProjectMaterialSearch("");
+    setActiveSection("material-assets");
+    setMaterialMessage("请选择一张图片作为生图参考；选择后会自动返回生图工作台。");
+  }
+
+  function selectImageWorkbenchReference(material: MaterialAsset) {
+    if (material.kind !== "image" || !materialApiUrl(material)) {
+      setMaterialMessage("只有状态为可用的图片素材可以作为生图参考。");
+      return;
+    }
+    setImageReferenceMaterialId(material.id);
+    setSelectingImageReference(false);
+    setActiveSection("image-workbench");
+    setMaterialMessage(`已选择生图参考：${material.name}`);
   }
 
   async function submitAuth() {
@@ -2475,7 +2510,7 @@ export default function Home() {
         <section id="image-workbench" className="image-workbench card" style={sectionStyle("image-workbench")}>
           <div className="image-head"><div><h2>生图工作台</h2><p className="muted">填写提示词、选择模型与尺寸，生成图片素材后可用于视频生成参考。</p></div></div>
           <div className="image-form-block"><label>提示词</label><div className="image-prompt-tools"><button className="btn-ghost btn-small" onClick={() => setImageWorkbenchPrompt(shotPrompt)}>复用当前分镜提示词</button><button className="btn-ghost btn-small" onClick={() => setImageWorkbenchPrompt("电影感角色参考图，精致五官，统一服装设定，干净背景，适合短剧分镜制作")}>套用示例</button></div><textarea className="image-prompt" value={imageWorkbenchPrompt} onChange={event => setImageWorkbenchPrompt(event.target.value)} placeholder="描述画面主体、风格、构图、光线和用途" /></div>
-          <div className="image-form-block"><label>参考图</label><div className="reference-box"><span>暂无参考图</span><input type="file" accept="image/*" onChange={addLocalPreview} /><button className="btn-ghost btn-small" onClick={() => document.getElementById("material-assets")?.scrollIntoView({ behavior: "smooth" })}>去素材库选择</button></div></div>
+          <div className="image-form-block"><label>参考图</label><div className={`reference-box ${imageReferenceMaterial ? "has-reference" : ""}`}>{imageReferenceMaterial ? <div className="image-reference-selection">{materialPreviewUrl(imageReferenceMaterial) ? <img src={materialPreviewUrl(imageReferenceMaterial)} alt={imageReferenceMaterial.name} /> : <span>图片</span>}<div><strong>{imageReferenceMaterial.name}</strong><small>将作为本次生图参考</small></div></div> : <span>未选择参考图，将使用纯文本生图</span>}<button className="btn-ghost btn-small" onClick={openImageReferencePicker}>{imageReferenceMaterial ? "更换参考图" : "去素材库选择"}</button>{imageReferenceMaterial && <button className="btn-ghost btn-small" onClick={() => setImageReferenceMaterialId(null)}>移除</button>}</div></div>
           <div className="image-settings-grid"><div><label>模型</label><select value={imageModel} onChange={event => setImageModel(event.target.value)}>{activeImageModels.map(model => <option key={model} value={model}>{model}</option>)}</select></div><div><label>质量</label><div className="segmented">{(["auto", "high", "medium", "low"] as ImageQuality[]).map(item => <button key={item} className={imageQuality === item ? "active" : ""} onClick={() => setImageQuality(item)}>{item === "auto" ? "自动" : item === "high" ? "高" : item === "medium" ? "中" : "低"}</button>)}</div></div><div><label>尺寸</label><div className="size-row"><input type="number" value={imageWidth} onChange={event => setImageWidth(Number(event.target.value))} /><span>×</span><input type="number" value={imageHeight} onChange={event => setImageHeight(Number(event.target.value))} /></div></div></div>
           <div className="image-form-block"><label>宽高比</label><div className="ratio-grid">{(["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16", "auto"] as AspectRatio[]).map(item => <button key={item} className={imageRatio === item ? "active" : ""} onClick={() => updateImageRatio(item)}><span className="ratio-icon">▭</span>{item}</button>)}</div></div>
           <div className="image-form-block"><label>生成张数</label><div className="count-grid">{[1,2,3,4,5,6,7,8,9,10].map(count => <button key={count} className={imageCount === count ? "active" : ""} onClick={() => setImageCount(count)}>{count} 张</button>)}</div></div>
@@ -2486,6 +2521,7 @@ export default function Home() {
         <div style={sectionStyle("material-assets")}>
         <section className="card asset-dynamic-workspace">
           <div className="asset-workspace-head"><div><h2>素材库</h2><p className="muted">当前项目素材跟随项目切换；共享素材适合汽车、场景、道具、背景音乐等多个项目复用的内容。</p></div><span className="source-pill internal">{activeAssetScope === "project" ? "当前项目" : "团队共享"}</span></div>
+          {selectingImageReference && <div className="api-active-banner"><strong>正在选择生图参考</strong><small>选择一张可用图片后会自动返回生图工作台。</small><button className="btn-ghost btn-small" onClick={() => { setSelectingImageReference(false); setActiveSection("image-workbench"); }}>取消选择</button></div>}
           <div className="asset-tabs">
             {([
               ["project", "当前项目"],
@@ -2517,16 +2553,16 @@ export default function Home() {
           </div>}
           {activeAssetScope === "project" && <div className="material-grid">
             {visibleAssets.length ? visibleAssets.map(material => {
-              const usable = Boolean(material.reviewedAssetUrl || material.seedanceAssetUrl || material.url);
+              const usable = Boolean(materialApiUrl(material));
               return (
-              <div className={`material-card ${selectedMaterialIds.includes(material.id) ? "selected" : ""}`} key={material.id} onClick={() => toggleMaterial(material.id)}>
+              <div className={`material-card ${selectingImageReference && imageReferenceMaterialId === material.id ? "selected" : selectedMaterialIds.includes(material.id) ? "selected" : ""}`} key={material.id} onClick={() => selectingImageReference ? selectImageWorkbenchReference(material) : toggleMaterial(material.id)}>
                 <div className={`material-preview ${material.kind}`} onClick={event => openMaterialPreview(event, material)}>
                   {material.kind === "image" && materialPreviewUrl(material) ? <img src={materialPreviewUrl(material)} alt={material.name} /> : material.kind === "video" && materialPreviewUrl(material) ? <video src={materialPreviewUrl(material)} muted preload="metadata" /> : material.kind === "audio" && materialPreviewUrl(material) ? <span>音频</span> : <span>{material.kind === "sd2" ? "提示词" : material.kind}</span>}
                 </div>
                 {renamingMaterialId === material.id ? <div className="material-rename-row" onClick={event => event.stopPropagation()}><input value={renamingMaterialName} onChange={event => setRenamingMaterialName(event.target.value)} onKeyDown={event => { if (event.key === "Enter") saveMaterialName(material); if (event.key === "Escape") setRenamingMaterialId(null); }} autoFocus /><button className="btn-primary btn-small" onClick={() => saveMaterialName(material)}>保存</button><button className="btn-ghost btn-small" onClick={() => setRenamingMaterialId(null)}>取消</button></div> : <strong>{material.name}</strong>}
                 <p className="muted">{material.kind === "sd2" ? "提示词" : material.kind === "image" ? "图片" : material.kind === "video" ? "视频" : "音频"}{material.source === "generated" ? " / 生图" : material.source === "upload" ? " / 上传" : ""}{materialDimensionText(material) ? ` / ${materialDimensionText(material)}` : ""}{isSmallVideoReferenceImage(material) ? " / 尺寸偏小" : ""}{material.scope === "team" ? " / 团队共享" : " / 项目独享"}</p>
                 <span className={usable ? "reviewed-badge" : "local-only-badge"}>{usable ? "可用" : material.kind === "sd2" ? "提示词" : "处理中"}</span>
-                <div className="actions"><button className="btn-ghost btn-small" onClick={event => { event.stopPropagation(); openRenameMaterial(material); }}>重命名</button><button className="btn-ghost btn-small" onClick={event => { event.stopPropagation(); toggleMaterial(material.id); }}>{selectedMaterialIds.includes(material.id) ? "取消参考" : "选为参考"}</button><button className="btn-danger btn-small" onClick={event => { event.stopPropagation(); deleteMaterial(material.id); }}>删除</button></div>
+                <div className="actions">{selectingImageReference ? <button className="btn-primary btn-small" disabled={!usable || material.kind !== "image"} onClick={event => { event.stopPropagation(); selectImageWorkbenchReference(material); }}>选为生图参考</button> : <><button className="btn-ghost btn-small" onClick={event => { event.stopPropagation(); openRenameMaterial(material); }}>重命名</button><button className="btn-ghost btn-small" onClick={event => { event.stopPropagation(); toggleMaterial(material.id); }}>{selectedMaterialIds.includes(material.id) ? "取消参考" : "选为参考"}</button><button className="btn-danger btn-small" onClick={event => { event.stopPropagation(); deleteMaterial(material.id); }}>删除</button></>}</div>
               </div>
             ); }) : <div className="empty">当前 {activeAssetTab === "image" ? "图片分类暂无素材。可以上传本地图片，或到生图工作台生成图片。" : activeAssetTab === "video" ? "视频分类暂无素材。可以上传本地视频。" : activeAssetTab === "audio" ? "音频分类暂无素材。可以上传本地音频。" : "提示词分类暂无内容。可以生成提示词并保存到素材库。"}</div>}
           </div>}

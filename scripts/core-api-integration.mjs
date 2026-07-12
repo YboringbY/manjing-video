@@ -99,6 +99,12 @@ try {
   });
   materialId = materialCreate.body.data?.id;
   assert(materialCreate.response.status === 200 && materialId, "Team material creation failed.");
+  const unlinkedImageReference = await json("/api/images/generate", "POST", {
+    projectId: projectB,
+    referenceMaterialId: materialId,
+    prompt: "integration reference image"
+  });
+  assert(unlinkedImageReference.response.status === 404, "Unlinked image reference was not rejected.");
   const link = await json("/api/materials/links", "POST", { projectId: projectB, materialId });
   assert(link.response.status === 200, "Cross-project material link failed.");
   const targetMaterials = await request(`/api/materials?projectId=${projectB}`);
@@ -149,7 +155,7 @@ try {
   const taskDelete = await request(`/api/video-tasks?project_id=${projectA}&task_id=${taskId}`, { method: "DELETE" });
   assert(taskDelete.response.status === 200 && taskDelete.body.data?.deleted, "Video task deletion failed.");
 
-  console.log(JSON.stringify({ ok: true, strictDatabaseIds: true, projectOptimisticLock: true, shotOptimisticLock: true, materialLifecycle: true, taskAssetLifecycle: true }));
+  console.log(JSON.stringify({ ok: true, strictDatabaseIds: true, projectOptimisticLock: true, shotOptimisticLock: true, imageReferenceAuthorization: true, materialLifecycle: true, taskAssetLifecycle: true }));
 } finally {
   if (materialId) await request(`/api/materials?id=${materialId}`, { method: "DELETE" }).catch(() => undefined);
   if (cookie) {
