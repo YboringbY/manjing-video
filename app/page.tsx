@@ -1920,14 +1920,7 @@ export default function Home() {
   function taskSnapshotText(task: VideoTask) {
     const snapshot = task.snapshot;
     if (!snapshot) return "历史任务未记录完整参数";
-    const refs = snapshot.materialIds.length + (snapshot.externalAssetIds || []).length;
-    const inputLabel = snapshot.inputType === "first_last_frame" ? "首尾帧" : refs ? "参考素材" : "纯文本";
-    return `${snapshot.duration}s / ${snapshot.ratio.split(" ")[0]} / ${snapshot.resolution || "720p"} / ${inputLabel}${refs ? ` ${refs} 个` : ""}`;
-  }
-
-  function taskReferenceText(task: VideoTask) {
-    const references = task.snapshot?.references || [];
-    return references.length ? references.map(reference => reference.name).join("、") : "";
+    return `${snapshot.duration}s / ${snapshot.ratio.split(" ")[0]} / ${snapshot.resolution || "720p"}`;
   }
 
   async function submitTaskFeedback(task: VideoTask, rating: "satisfied" | "unsatisfied") {
@@ -2603,7 +2596,6 @@ export default function Home() {
                         <td>
                           <div>#{String(task.shotId).padStart(2, "0")} {task.shotTitle}</div>
                           <small className="muted">{taskSnapshotText(task)}</small>
-                          {taskReferenceText(task) && <small className="muted">引用：{taskReferenceText(task)}</small>}
                         </td>
                         <td>{task.provider}</td>
                         <td>{taskStatusTag(task.status)}</td>
