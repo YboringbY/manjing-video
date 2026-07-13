@@ -2208,25 +2208,13 @@ export default function Home() {
         })
       });
       const result = await readApiJson(response, "图片生成失败");
+      if (response.status === 504) {
+        setGeneratedImages([]);
+        setMaterialMessage("生图请求等待超时，上游可能仍在处理。生成完成后服务端会自动保存到素材库，请稍后刷新素材库查看。");
+        return;
+      }
       if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "图片生成失败");
-      const images: MaterialAsset[] = result.data.map((item: { name?: string; publicUrl: string; previewUrl?: string }, index: number) => ({
-        id: Date.now() + index,
-        name: item.name || `生图结果 ${index + 1}`,
-        url: item.publicUrl,
-        kind: "image" as MaterialKind,
-        role: "reference_image" as MaterialRole,
-        previewUrl: item.previewUrl || item.publicUrl,
-        width: imageWidth,
-        height: imageHeight,
-        source: "generated",
-        status: "ready",
-        scope: "project",
-        prompt: imageWorkbenchPrompt,
-        sourceProjectId: currentProjectId,
-        sourceProjectName: state.project.name,
-        createdBy: currentDisplayName
-      }));
-      const savedImages = await Promise.all(images.map(image => saveMaterialRecord(image)));
+      const savedImages = result.data as MaterialAsset[];
       setGeneratedImages(savedImages);
       setState(prev => ({ ...prev, materials: [...savedImages, ...prev.materials] }));
       setActiveAssetTab("image");

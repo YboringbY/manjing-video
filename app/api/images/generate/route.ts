@@ -6,7 +6,7 @@ import { databaseInt } from "@/lib/api-input";
 import { getCurrentMembership } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { fetchWithTimeout, readLimitedResponseBuffer } from "@/lib/http";
-import { storedMaterialPathForUrl } from "@/lib/material-files";
+import { removeStoredMaterialFile, storedMaterialPathForUrl } from "@/lib/material-files";
 import { isPublicMediaUrl } from "@/lib/media-url";
 import { prisma } from "@/lib/prisma";
 import { rateLimit } from "@/lib/rate-limit";
@@ -132,7 +132,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ code: 400, message: `生图提示词最多 ${MAX_IMAGE_PROMPT_LENGTH} 字，请精简后再生成。` }, { status: 400 });
   }
   if (!projectId) return NextResponse.json({ code: 400, message: "缺少有效的项目 ID。" }, { status: 400 });
-  const project = await prisma.project.findFirst({ where: { id: projectId, tenantId: membership.tenantId }, select: { id: true } });
+  const project = await prisma.project.findFirst({ where: { id: projectId, tenantId: membership.tenantId }, select: { id: true, name: true } });
   if (!project) return NextResponse.json({ code: 404, message: "项目不存在或已被删除。" }, { status: 404 });
 
   const referenceLink = referenceMaterialId
@@ -217,10 +217,42 @@ export async function POST(request: Request) {
     return NextResponse.json({ code: 502, message: error instanceof Error ? error.message : "保存生成图片失败。" }, { status: 502 });
   }
 
-  const readyImages = images.filter(Boolean);
+  const readyImages = images.filter((image): image is NonNullable<typeof image> => Boolean(image));
   if (!readyImages.length) {
     await logAudit({ request, actor: membership, action: "image.generate", targetType: "image", targetId: String(projectId), result: "failure", metadata: { stage: "empty_result", model, promptLength: prompt.length, referenceMaterialId: referenceMaterialId || undefined } });
     return NextResponse.json({ code: 400, message: "图片生成接口没有返回可用图片 URL。" }, { status: 400 });
+  }
+
+  const [width, height] = String(body.size || "1024x1024").split("x").map(Number);
+  let savedMaterials;
+  try {
+    savedMaterials = await prisma.$transaction(readyImages.map((image, index) => prisma.material.create({
+      data: {
+        tenantId: membership.tenantId,
+        projectId,
+        name: image.name || `生图结果 ${index + 1}`,
+        kind: "image",
+        role: "reference_image",
+        url: image.publicUrl,
+        previewUrl: image.previewUrl,
+        storagePath: storedMaterialPathForUrl(image.previewUrl, projectId),
+        width: Number.isInteger(width) && width > 0 ? width : null,
+        height: Number.isInteger(height) && height > 0 ? height : null,
+        source: "generated",
+        status: "ready",
+        scope: "project",
+        prompt,
+        sourceProjectId: projectId,
+        sourceProjectName: project.name,
+        createdById: membership.userId,
+        createdByName: membership.user.displayName,
+        projectLinks: { create: { tenantId: membership.tenantId, projectId } }
+      }
+    })));
+  } catch (error) {
+    await Promise.all(readyImages.map(image => removeStoredMaterialFile(storedMaterialPathForUrl(image.previewUrl, projectId)).catch(() => false)));
+    await logAudit({ request, actor: membership, action: "image.generate", targetType: "image", targetId: String(projectId), result: "failure", metadata: { stage: "persist_material", model, promptLength: prompt.length, referenceMaterialId: referenceMaterialId || undefined, message: error instanceof Error ? error.message : "保存生图素材记录失败" } });
+    return NextResponse.json({ code: 500, message: "图片已经生成，但保存到素材库失败，请稍后重试。" }, { status: 500 });
   }
 
   await logAudit({
@@ -229,8 +261,28 @@ export async function POST(request: Request) {
     action: "image.generate",
     targetType: "image",
     targetId: String(projectId),
-    metadata: { model, size: body.size || "1024x1024", count: readyImages.length, promptLength: prompt.length, referenceMaterialId: referenceMaterialId || undefined }
+    metadata: { model, size: body.size || "1024x1024", count: savedMaterials.length, promptLength: prompt.length, referenceMaterialId: referenceMaterialId || undefined, materialIds: savedMaterials.map(material => material.id) }
   });
 
-  return NextResponse.json({ code: 0, data: readyImages });
+  return NextResponse.json({
+    code: 0,
+    data: savedMaterials.map(material => ({
+      id: material.id,
+      dbId: material.id,
+      name: material.name,
+      kind: material.kind,
+      role: material.role,
+      url: material.url,
+      previewUrl: material.previewUrl || undefined,
+      width: material.width || undefined,
+      height: material.height || undefined,
+      source: material.source,
+      status: material.status,
+      scope: material.scope,
+      prompt: material.prompt || undefined,
+      sourceProjectId: material.sourceProjectId || undefined,
+      sourceProjectName: material.sourceProjectName || undefined,
+      createdBy: material.createdByName || undefined
+    }))
+  });
 }
