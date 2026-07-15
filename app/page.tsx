@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ProjectListSection } from "./components/ProjectListSection";
 import { ProjectOverviewSection } from "./components/ProjectOverviewSection";
 import { Sidebar } from "./components/Sidebar";
@@ -43,6 +43,7 @@ type AuditLogEntry = {
   createdAt: string;
 };
 type TaskRecordFilter = "all" | "running" | "done" | "failed";
+type WorkbenchDropTarget = "prompt" | "first" | "last";
 
 const STORAGE_KEY = "manjing-video-mvp";
 const AUTH_STORAGE_KEY = "manjing-video-auth";
@@ -296,6 +297,8 @@ export default function Home() {
   const [shotTitle, setShotTitle] = useState("");
   const [shotPrompt, setShotPrompt] = useState("");
   const shotPromptRef = useRef<HTMLTextAreaElement | null>(null);
+  const shotPromptSelectionRef = useRef({ start: 0, end: 0 });
+  const shotPromptSelectionKnownRef = useRef(false);
   const [shotRatio, setShotRatio] = useState("9:16 竖屏短剧");
   const [shotDuration, setShotDuration] = useState(5);
   const [shotResolution, setShotResolution] = useState<Shot["resolution"]>("720p");
@@ -309,6 +312,10 @@ export default function Home() {
   const [materialRole, setMaterialRole] = useState<MaterialRole>("reference_image");
   const [materialMessage, setMaterialMessage] = useState("");
   const [isUploadingMaterial, setIsUploadingMaterial] = useState(false);
+  const materialUploadInFlightRef = useRef(false);
+  const [activeDropTarget, setActiveDropTarget] = useState<WorkbenchDropTarget | null>(null);
+  const [workbenchUploadTarget, setWorkbenchUploadTarget] = useState<WorkbenchDropTarget | null>(null);
+  const [workbenchUploadMessage, setWorkbenchUploadMessage] = useState("");
   const [shareUploadToTeam, setShareUploadToTeam] = useState(false);
   const [activeAssetScope, setActiveAssetScope] = useState<"project" | "shared">("project");
   const [activeAssetTab, setActiveAssetTab] = useState<MaterialKind>("image");
@@ -657,6 +664,11 @@ export default function Home() {
   useEffect(() => {
     setImageReferenceMaterialId(null);
     setSelectingImageReference(false);
+    setFirstFrameMaterialId(null);
+    setLastFrameMaterialId(null);
+    setActiveDropTarget(null);
+    setWorkbenchUploadMessage("");
+    shotPromptSelectionKnownRef.current = false;
   }, [currentProjectId]);
 
   useEffect(() => {
@@ -810,6 +822,7 @@ export default function Home() {
   }
 
   async function saveProject() {
+    if (materialUploadInFlightRef.current) return alert("素材仍在上传，请等待保存完成后再创建项目。");
     let newProjectState = createBlankProject(projectName, projectType);
     try {
       const response = await fetch("/api/projects", {
@@ -850,6 +863,7 @@ export default function Home() {
 
   function deleteProject() {
     if (!deleteProjectTarget) return;
+    if (materialUploadInFlightRef.current) return alert("素材仍在上传，请等待保存完成后再删除项目。");
     if (deleteProjectName.trim() !== deleteProjectTarget.name) {
       alert("请输入完整项目名称后再删除。");
       return;
@@ -884,6 +898,10 @@ export default function Home() {
 
   function switchProject(project: Project) {
     if (project.id === currentProjectId) return;
+    if (materialUploadInFlightRef.current) {
+      alert("素材仍在上传，请等待保存完成后再切换项目。");
+      return;
+    }
     const nextState = projectStates[project.id] || createBlankProject(project.name, project.type);
     const nextProjectStates = { ...projectStates, [currentProjectId]: state, [project.id]: nextState };
     setProjectStates(nextProjectStates);
@@ -1079,6 +1097,10 @@ export default function Home() {
 
   function addShot(preset?: Partial<Pick<Shot, "title" | "prompt" | "ratio" | "duration" | "resolution">>, context = currentGenerationContext()) {
     if (videoSubmissionInFlightRef.current) return;
+    if (materialUploadInFlightRef.current) {
+      alert("参考素材仍在上传，请等待素材保存完成后再生成。");
+      return;
+    }
     const nextTitle = (preset?.title ?? shotTitle).trim();
     const nextPrompt = (preset?.prompt ?? shotPrompt).trim();
     const nextRatio = preset?.ratio ?? shotRatio;
@@ -1345,62 +1367,61 @@ export default function Home() {
     }
   }
 
+  async function uploadMaterialFile(file: File, options: { kind: "image" | "video" | "audio"; name?: string; scope?: "project" | "team" }) {
+    if (materialUploadInFlightRef.current) throw new Error("已有素材正在上传，请等待完成后再试。");
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("projectId", String(currentProjectId));
+    formData.append("kind", options.kind);
+    formData.append("scope", options.scope || "project");
+    if (options.name?.trim()) formData.append("name", options.name.trim());
+
+    materialUploadInFlightRef.current = true;
+    setIsUploadingMaterial(true);
+    try {
+      const response = await fetch("/api/materials/upload", { method: "POST", body: formData });
+      const result = await readApiJson(response, "上传素材失败");
+      if (!response.ok || result.code !== 0 || !result.data?.id) throw new Error(result.message || "上传素材失败");
+      return {
+        material: result.data as MaterialAsset,
+        deduplicated: Boolean(result.deduplicated),
+        warning: typeof result.warning === "string" ? result.warning : ""
+      };
+    } finally {
+      materialUploadInFlightRef.current = false;
+      setIsUploadingMaterial(false);
+    }
+  }
+
   async function addLocalPreview(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    const kind: MaterialKind = activeAssetTab === "video" ? "video" : activeAssetTab === "audio" ? "audio" : "image";
-    if (!file.type.startsWith(`${kind}/`)) {
+    const kind: "image" | "video" | "audio" = activeAssetTab === "video" ? "video" : activeAssetTab === "audio" ? "audio" : "image";
+    if (file.type && !file.type.startsWith(`${kind}/`)) {
       setMaterialMessage(`当前是${kind === "image" ? "图片" : kind === "video" ? "视频" : "音频"}分类，请选择对应类型的文件。`);
       event.target.value = "";
       return;
     }
-    const role: MaterialRole = kind === "image" ? "reference_image" : kind === "video" ? "reference_video" : "reference_audio";
-    const uploadName = materialName.trim() && materialName.trim() !== "角色参考图" ? materialName.trim() : file.name;
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("projectId", String(currentProjectId));
-    formData.append("kind", kind);
-    formData.append("name", uploadName);
+    const uploadName = materialName.trim() && materialName.trim() !== "角色参考图" ? materialName.trim() : undefined;
 
     try {
-      setIsUploadingMaterial(true);
       setMaterialMessage("正在上传素材...");
-      const response = await fetch("/api/assets/upload", { method: "POST", body: formData });
-      const result = await readApiJson(response, "上传素材失败");
-      if (!response.ok || result.code !== 0 || !result.data?.publicUrl) throw new Error(result.message || "上传素材失败");
-
-      const materialDraft: MaterialAsset = {
-        id: Date.now(),
-        name: String(result.data.name || file.name || "未命名素材"),
-        url: result.data.publicUrl,
-        kind,
-        role,
-        previewUrl: result.data.previewUrl || result.data.publicUrl,
-        width: result.data.width,
-        height: result.data.height,
-        source: "upload",
-        status: "ready",
-        scope: shareUploadToTeam ? "team" : "project",
-        sourceProjectId: currentProjectId,
-        sourceProjectName: state.project.name,
-        createdBy: currentDisplayName
-      };
-      const material = await saveMaterialRecord(materialDraft);
-      setState(prev => ({ ...prev, materials: [material, ...prev.materials] }));
+      const { material, deduplicated, warning } = await uploadMaterialFile(file, { kind, name: uploadName, scope: shareUploadToTeam ? "team" : "project" });
+      setState(prev => ({ ...prev, materials: mergeMaterials(prev.materials, [material]) }));
       if (material.scope === "team") setServerTeamMaterials(prev => mergeMaterials(prev, [material]));
       setActiveAssetTab(kind);
       setActiveAssetScope("project");
       setMaterialName("");
       const dimensionText = materialDimensionText(material);
-      const warning = result.data.warning ? ` ${result.data.warning}` : "";
-      const generationMessage = isPublicMediaUrl(material.url)
+      const generationMessage = deduplicated
+        ? `检测到相同内容，已复用素材“${material.name}”，未重复上传。`
+        : isPublicMediaUrl(material.url)
         ? shareUploadToTeam ? "素材已上传到当前项目，并加入团队共享。" : "素材已上传到当前项目，可作为参考素材使用。"
         : "素材已上传并可本地预览；当前开发环境没有公网素材地址，暂不能作为生成参考。";
-      setMaterialMessage(`${generationMessage}${dimensionText ? ` 尺寸：${dimensionText}。` : ""}${warning}`);
+      setMaterialMessage(`${generationMessage}${dimensionText ? ` 尺寸：${dimensionText}。` : ""}${warning ? ` ${warning}` : ""}`);
     } catch (error) {
       setMaterialMessage(error instanceof Error ? error.message : "上传素材失败");
     } finally {
-      setIsUploadingMaterial(false);
       event.target.value = "";
     }
   }
@@ -2120,11 +2141,11 @@ export default function Home() {
     }
   }
 
-  function insertMention(material: MaterialAsset) {
+  function insertMention(material: MaterialAsset, selection?: { start: number; end: number }) {
     const token = `@${material.name}`;
     const textarea = shotPromptRef.current;
-    const start = textarea?.selectionStart ?? shotPrompt.length;
-    const end = textarea?.selectionEnd ?? start;
+    const start = Math.max(0, Math.min(shotPrompt.length, selection?.start ?? textarea?.selectionStart ?? shotPrompt.length));
+    const end = Math.max(start, Math.min(shotPrompt.length, selection?.end ?? textarea?.selectionEnd ?? start));
     const before = shotPrompt.slice(0, start);
     const after = shotPrompt.slice(end);
     const prefix = before && !/[\s\n]$/.test(before) ? " " : "";
@@ -2132,6 +2153,8 @@ export default function Home() {
     const nextPrompt = `${before}${prefix}${token}${suffix}${after}`;
     const nextCursor = before.length + prefix.length + token.length + suffix.length;
     setShotPrompt(nextPrompt);
+    shotPromptSelectionRef.current = { start: nextCursor, end: nextCursor };
+    shotPromptSelectionKnownRef.current = true;
     window.setTimeout(() => {
       shotPromptRef.current?.focus();
       shotPromptRef.current?.setSelectionRange(nextCursor, nextCursor);
@@ -2142,6 +2165,81 @@ export default function Home() {
       setMaterialMessage(`“${material.name}”已插入提示词，但它只有本地预览地址，不会作为参考素材提交。`);
     }
     setMentionMenuOpen(false);
+  }
+
+  function materialKindForFile(file: File): "image" | "video" | "audio" | undefined {
+    const mimeKind = file.type.split("/")[0];
+    if (mimeKind === "image" || mimeKind === "video" || mimeKind === "audio") return mimeKind;
+    const extension = file.name.split(".").pop()?.toLowerCase();
+    if (["jpg", "jpeg", "png", "webp", "gif"].includes(extension || "")) return "image";
+    if (["mp4", "webm", "mov"].includes(extension || "")) return "video";
+    if (["mp3", "wav", "m4a"].includes(extension || "")) return "audio";
+    return undefined;
+  }
+
+  function handleWorkbenchDragOver(event: DragEvent<HTMLElement>, target: WorkbenchDropTarget) {
+    if (!event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    if (!materialUploadInFlightRef.current) setActiveDropTarget(target);
+  }
+
+  function handleWorkbenchDragLeave(event: DragEvent<HTMLElement>, target: WorkbenchDropTarget) {
+    const relatedTarget = event.relatedTarget;
+    if (relatedTarget instanceof Node && event.currentTarget.contains(relatedTarget)) return;
+    setActiveDropTarget(current => current === target ? null : current);
+  }
+
+  async function handleWorkbenchDrop(event: DragEvent<HTMLElement>, target: WorkbenchDropTarget) {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveDropTarget(null);
+    const files = Array.from(event.dataTransfer.files || []);
+    if (files.length !== 1) {
+      setWorkbenchUploadMessage("每次只能拖入一个素材文件。");
+      return;
+    }
+    const file = files[0];
+    const kind = materialKindForFile(file);
+    if (!kind) {
+      setWorkbenchUploadMessage("仅支持有效的图片、视频或音频文件。");
+      return;
+    }
+    if (target !== "prompt" && kind !== "image") {
+      setWorkbenchUploadMessage("首帧和尾帧槽位只支持图片文件。");
+      return;
+    }
+    if (materialUploadInFlightRef.current) {
+      setWorkbenchUploadMessage("已有素材正在上传，请等待完成后再试。");
+      return;
+    }
+
+    const selection = shotPromptSelectionKnownRef.current ? { ...shotPromptSelectionRef.current } : { start: shotPrompt.length, end: shotPrompt.length };
+    setWorkbenchUploadTarget(target);
+    setWorkbenchUploadMessage(target === "prompt" ? "正在上传并绑定参考素材..." : `正在上传并设置${target === "first" ? "首帧" : "尾帧"}...`);
+    try {
+      const { material, deduplicated, warning } = await uploadMaterialFile(file, { kind });
+      setState(prev => ({ ...prev, materials: mergeMaterials(prev.materials, [material]) }));
+      const usable = Boolean(materialApiUrl(material));
+      if (target === "prompt") {
+        insertMention(material, selection);
+        setSelectedMaterialIds(prev => prev.includes(material.id) ? prev : [...prev, material.id]);
+      } else {
+        if (target === "first") setFirstFrameMaterialId(material.id);
+        else setLastFrameMaterialId(material.id);
+        setSelectedMaterialIds(prev => prev.includes(material.id) ? prev : [...prev, material.id]);
+        setFramePickerSlot(null);
+      }
+
+      const action = target === "prompt" ? `已插入 @${material.name} 并加入参考素材` : `已设置为${target === "first" ? "首帧" : "尾帧"}`;
+      const duplicateText = deduplicated ? `检测到相同内容，已复用素材“${material.name}”。` : `素材“${material.name}”已保存到当前项目。`;
+      const readinessText = usable ? "" : " 当前环境没有公网素材地址，已显示为仅本地预览，生成前需要部署到可公开访问的素材服务。";
+      setWorkbenchUploadMessage(`${duplicateText}${action}。${readinessText}${warning ? ` ${warning}` : ""}`);
+    } catch (error) {
+      setWorkbenchUploadMessage(error instanceof Error ? error.message : "素材上传失败，请稍后重试。");
+    } finally {
+      setWorkbenchUploadTarget(null);
+    }
   }
 
   function enrichShotPrompt() {
@@ -2391,7 +2489,7 @@ export default function Home() {
               <button className="btn-ghost btn-small" onClick={() => setBatchModalOpen(true)}>提示词拆分分镜</button>
             </div>
             <div className="video-reference-panel">
-              <div className="video-reference-head"><div><strong>参考素材</strong><span>{selectedProjectReferences.length ? `已选择 ${selectedProjectReferences.length} 个，将随任务提交` : "按用途选择图片、首帧、尾帧、视频和音频参考"}</span></div><button className="btn-ghost btn-small" onClick={() => setMentionMenuOpen(open => !open)}>@ 插入到提示词</button></div>
+              <div className="video-reference-head"><div><strong>参考素材</strong><span>{selectedProjectReferences.length ? localOnlyReferences.length ? `已选择 ${selectedProjectReferences.length} 个，其中 ${localOnlyReferences.length} 个仅本地预览` : `已选择 ${selectedProjectReferences.length} 个，将随任务提交` : "按用途选择图片、首帧、尾帧、视频和音频参考"}</span></div><button className="btn-ghost btn-small" onClick={() => setMentionMenuOpen(open => !open)}>@ 插入到提示词</button></div>
               <div className="video-reference-grid">
                 {visibleReferenceGroups.map(group => {
                   const selected = selectedReferencesByRole[group.role] || [];
@@ -2412,13 +2510,27 @@ export default function Home() {
                     <strong>{firstLastFrameStatus}</strong>
                   </div>
                   <div className="first-last-frame-grid">
-                    <button className={`first-last-frame-cell ${selectedFirstFrame ? "filled" : ""}`} onClick={() => openFramePicker("first")}>
+                    <button
+                      className={`first-last-frame-cell ${selectedFirstFrame ? "filled" : ""} ${activeDropTarget === "first" ? "drop-active" : ""} ${workbenchUploadTarget === "first" ? "uploading" : ""}`}
+                      onClick={() => openFramePicker("first")}
+                      onDragOver={event => handleWorkbenchDragOver(event, "first")}
+                      onDragLeave={event => handleWorkbenchDragLeave(event, "first")}
+                      onDrop={event => handleWorkbenchDrop(event, "first")}
+                      aria-busy={workbenchUploadTarget === "first"}
+                    >
                       <b>首帧</b>
-                      {selectedFirstFrame?.previewUrl ? <img src={selectedFirstFrame.previewUrl} alt={selectedFirstFrame.name} /> : <span>选择</span>}
+                      {workbenchUploadTarget === "first" ? <span>上传中...</span> : activeDropTarget === "first" ? <span>释放设置</span> : selectedFirstFrame?.previewUrl ? <img src={selectedFirstFrame.previewUrl} alt={selectedFirstFrame.name} /> : <span>选择或拖入</span>}
                     </button>
-                    <button className={`first-last-frame-cell ${selectedLastFrame ? "filled" : ""}`} onClick={() => openFramePicker("last")}>
+                    <button
+                      className={`first-last-frame-cell ${selectedLastFrame ? "filled" : ""} ${activeDropTarget === "last" ? "drop-active" : ""} ${workbenchUploadTarget === "last" ? "uploading" : ""}`}
+                      onClick={() => openFramePicker("last")}
+                      onDragOver={event => handleWorkbenchDragOver(event, "last")}
+                      onDragLeave={event => handleWorkbenchDragLeave(event, "last")}
+                      onDrop={event => handleWorkbenchDrop(event, "last")}
+                      aria-busy={workbenchUploadTarget === "last"}
+                    >
                       <b>尾帧</b>
-                      {selectedLastFrame?.previewUrl ? <img src={selectedLastFrame.previewUrl} alt={selectedLastFrame.name} /> : <span>选择</span>}
+                      {workbenchUploadTarget === "last" ? <span>上传中...</span> : activeDropTarget === "last" ? <span>释放设置</span> : selectedLastFrame?.previewUrl ? <img src={selectedLastFrame.previewUrl} alt={selectedLastFrame.name} /> : <span>选择或拖入</span>}
                     </button>
                   </div>
                   <p className="first-last-hint">{selectedFirstFrame || selectedLastFrame ? selectedFirstFrame && selectedLastFrame ? "首尾帧已指定" : "请补齐首帧和尾帧" : "未指定"}</p>
@@ -2433,7 +2545,7 @@ export default function Home() {
                     return <button key={material.id} className={`reference-picker-item ${selected ? "selected" : ""}`} onClick={() => selectFrameReference(framePickerSlot, material)}>
                       <span className={`reference-picker-thumb ${material.kind}`}>{referenceThumb(material)}</span>
                       <strong>{material.name}</strong>
-                      <em>{selected ? "已指定" : usable ? "可使用" : "仅预览"}</em>
+                      <em>{selected ? usable ? "已指定" : "已指定·仅本地预览" : usable ? "可使用" : "仅本地预览"}</em>
                     </button>;
                   }) : <div className="mention-empty">素材库里还没有参考图片。</div>}
                 </div>
@@ -2448,16 +2560,34 @@ export default function Home() {
                     return <button key={material.id} className={`reference-picker-item ${selected ? "selected" : ""}`} onClick={() => toggleMaterial(material.id)}>
                       <span className={`reference-picker-thumb ${material.kind}`}>{referenceThumb(material)}</span>
                       <strong>{material.name}</strong>
-                      <em>{selected ? "已选择" : usable ? "可生成" : "仅预览"}</em>
+                      <em>{selected ? usable ? "已选择" : "已选·仅本地预览" : usable ? "可生成" : "仅本地预览"}</em>
                     </button>;
                   }) : <div className="mention-empty">素材库里还没有{pickerGroup.title}素材。</div>}
                 </div>
                 <div className="reference-picker-actions"><button className="btn-primary btn-small" onClick={() => prepareReferenceUpload(pickerGroup.kind, pickerGroup.role)}>上传{pickerGroup.title}</button><button className="btn-ghost btn-small" onClick={() => setReferencePickerRole(null)}>关闭</button></div>
               </div>}
             </div>
-            <textarea ref={shotPromptRef} className="video-prompt-editor" value={shotPrompt} onChange={event => setShotPrompt(event.target.value)} placeholder="描述视频内容，可点击 @ 选择参考素材并插入素材名称，例如：@林凡 在教室门口回头，镜头缓慢推进。" />
+            <div
+              className={`video-prompt-dropzone ${activeDropTarget === "prompt" ? "drop-active" : ""} ${workbenchUploadTarget === "prompt" ? "uploading" : ""}`}
+              onDragOver={event => handleWorkbenchDragOver(event, "prompt")}
+              onDragLeave={event => handleWorkbenchDragLeave(event, "prompt")}
+              onDrop={event => handleWorkbenchDrop(event, "prompt")}
+              aria-busy={workbenchUploadTarget === "prompt"}
+            >
+              <textarea
+                ref={shotPromptRef}
+                className="video-prompt-editor"
+                value={shotPrompt}
+                readOnly={Boolean(workbenchUploadTarget)}
+                onChange={event => setShotPrompt(event.target.value)}
+                onSelect={event => { shotPromptSelectionRef.current = { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd }; shotPromptSelectionKnownRef.current = true; }}
+                placeholder="描述视频内容，可点击 @ 选择参考素材并插入素材名称，例如：@林凡 在教室门口回头，镜头缓慢推进。"
+              />
+              {(activeDropTarget === "prompt" || workbenchUploadTarget === "prompt") && <div className="video-prompt-drop-overlay">{workbenchUploadTarget === "prompt" ? "正在上传并绑定素材..." : "释放后上传、加入参考并插入 @素材名"}</div>}
+            </div>
+            {!!workbenchUploadMessage && <p className="workbench-upload-message">{workbenchUploadMessage}</p>}
             {omniReferenceEnabled && <div className="omni-reference-panel"><div className="omni-reference-head"><span className="live-dot" /><strong>全能参考模式已开启</strong><em>{omniReferenceItems.length ? `${omniReferenceItems.length} 个参考素材将随任务提交` : "等待绑定参考素材"}</em></div><div className="omni-reference-strip">{omniReferenceItems.length ? omniReferenceItems.map((item, index) => <div className="omni-ref-chip" key={item.id}>{item.previewUrl && item.kind === "image" ? <img src={item.previewUrl} alt={item.name} /> : <span className={`reference-type-badge ${item.kind}`}>{String(item.kind).slice(0, 2)}</span>}<b>参考{index + 1}</b><small>{item.name}</small></div>) : <div className="omni-empty">请先在素材库选择可生成素材。</div>}</div>{localOnlyReferences.length > 0 && <p className="omni-warning">已忽略 {localOnlyReferences.length} 个仅预览素材；这类素材暂时不能随任务提交。</p>}</div>}
-            {mentionMenuOpen && <div className="video-mention-popover"><div className="mention-panel-head"><strong>可选参考素材</strong><span>点击素材插入到提示词；只有“可生成”素材会随任务提交</span></div><div className="mention-panel-list">{mentionMaterials.length ? mentionMaterials.map(material => { const usable = Boolean(materialApiUrl(material)); const selected = selectedMaterialIds.includes(material.id); return <div key={material.id} className={`mention-item ${selected ? "selected" : ""}`}><button onClick={() => insertMention(material)}><div className="mention-thumb">{referenceThumb(material)}</div><div className="mention-meta"><strong>{material.name}</strong><span>{usable ? "可生成" : "仅预览"}</span></div></button><button className="btn-ghost btn-small" onClick={() => toggleMaterial(material.id)}>{selected ? "取消参考" : "选为参考"}</button><button className="btn-danger btn-small" onClick={() => deleteMaterial(material.id)}>删除</button></div>; }) : <div className="mention-empty">素材库里还没有可引用素材。</div>}</div></div>}
+            {mentionMenuOpen && <div className="video-mention-popover"><div className="mention-panel-head"><strong>可选参考素材</strong><span>点击素材插入到提示词；只有“可生成”素材会随任务提交</span></div><div className="mention-panel-list">{mentionMaterials.length ? mentionMaterials.map(material => { const usable = Boolean(materialApiUrl(material)); const selected = selectedMaterialIds.includes(material.id); return <div key={material.id} className={`mention-item ${selected ? "selected" : ""}`}><button onClick={() => insertMention(material)}><div className="mention-thumb">{referenceThumb(material)}</div><div className="mention-meta"><strong>{material.name}</strong><span>{usable ? "可生成" : "仅本地预览"}</span></div></button><button className="btn-ghost btn-small" onClick={() => toggleMaterial(material.id)}>{selected ? "取消参考" : "选为参考"}</button><button className="btn-danger btn-small" onClick={() => deleteMaterial(material.id)}>删除</button></div>; }) : <div className="mention-empty">素材库里还没有可引用素材。</div>}</div></div>}
             <div className="video-composer-toolbar">
               <div className="video-settings-grid">
                 <button className={`tool-chip primary ${omniReferenceEnabled ? "active" : ""}`} onClick={() => setOmniReferenceEnabled(enabled => !enabled)}>全能参考{omniReferenceEnabled ? "已开" : ""}</button>
@@ -2468,7 +2598,7 @@ export default function Home() {
               </div>
               <div className="video-submit-row">
                 <button className="tool-chip" onClick={() => setMentionMenuOpen(open => !open)}>@ 素材</button>
-                <button className="video-generate-button" onClick={() => addShot()} disabled={isVideoSubmitting}>{isVideoSubmitting ? "正在提交" : "开始生成"}</button>
+                <button className="video-generate-button" onClick={() => addShot()} disabled={isVideoSubmitting || isUploadingMaterial}>{isVideoSubmitting ? "正在提交" : isUploadingMaterial ? "素材上传中" : "开始生成"}</button>
               </div>
             </div>
           </div>

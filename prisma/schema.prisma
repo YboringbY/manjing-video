@@ -176,6 +176,9 @@ model Material {
   reviewedAssetUrl  String?
   width             Int?
   height            Int?
+  contentHash       String?
+  byteSize          Int?
+  mimeType          String?
   source            String            @default("upload")
   status            String            @default("ready")
   scope             String            @default("project")
@@ -194,6 +197,7 @@ model Material {
   @@index([tenantId, projectId, createdAt])
   @@index([tenantId, scope, createdAt])
   @@index([createdById])
+  @@unique([tenantId, projectId, kind, contentHash])
 }
 
 model ProjectMaterial {

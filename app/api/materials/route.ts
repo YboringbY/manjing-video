@@ -3,6 +3,7 @@ import { cleanText, databaseInt, optionalText } from "@/lib/api-input";
 import { getCurrentMembership } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { removeStoredMaterialFile, storedMaterialPathForUrl } from "@/lib/material-files";
+import { publicMaterial } from "@/lib/material-response";
 import { prisma } from "@/lib/prisma";
 
 const KINDS = new Set(["image", "video", "audio", "sd2"]);
@@ -14,49 +15,6 @@ function cleanDimension(value: unknown) {
   const number = Number(value);
   if (Number.isInteger(number) && number > 0 && number <= 100000) return number;
   return undefined;
-}
-
-function publicMaterial(material: {
-  id: number;
-  projectId: number | null;
-  name: string;
-  kind: string;
-  role: string;
-  url: string;
-  previewUrl: string | null;
-  storagePath: string | null;
-  seedanceAssetUrl: string | null;
-  reviewedAssetUrl: string | null;
-  width: number | null;
-  height: number | null;
-  source: string;
-  status: string;
-  scope: string;
-  prompt: string | null;
-  sourceProjectId: number | null;
-  sourceProjectName: string | null;
-  createdByName: string | null;
-}) {
-  return {
-    id: material.id,
-    dbId: material.id,
-    name: material.name,
-    kind: material.kind,
-    role: material.role,
-    url: material.url,
-    previewUrl: material.previewUrl || undefined,
-    seedanceAssetUrl: material.seedanceAssetUrl || undefined,
-    reviewedAssetUrl: material.reviewedAssetUrl || undefined,
-    width: material.width || undefined,
-    height: material.height || undefined,
-    source: material.source,
-    status: material.status,
-    scope: material.scope,
-    prompt: material.prompt || undefined,
-    sourceProjectId: material.sourceProjectId || material.projectId || undefined,
-    sourceProjectName: material.sourceProjectName || undefined,
-    createdBy: material.createdByName || undefined
-  };
 }
 
 export async function GET(request: Request) {

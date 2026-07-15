@@ -19,6 +19,7 @@ const shotId = BigInt(projectA) * BigInt(1000) + BigInt(1);
 const taskId = `integration-${randomUUID()}`;
 let cookie = "";
 let materialId = 0;
+let uploadedMaterialId = 0;
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -84,6 +85,25 @@ try {
   assert(shotUpdate.response.status === 200 && shotUpdate.body.data?.version === 2, "Shot optimistic update failed.");
   const staleShot = await json("/api/shots", "PATCH", { projectId: projectA, shotId: Number(shotId), version: 1, duration: 8 });
   assert(staleShot.response.status === 409, "Stale shot update was not rejected.");
+
+  const pngBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6wV0AAAAASUVORK5CYII=", "base64");
+  function uploadForm(kind = "image") {
+    const form = new FormData();
+    form.append("file", new Blob([pngBytes], { type: "image/png" }), "integration-reference.png");
+    form.append("projectId", String(projectA));
+    form.append("kind", kind);
+    return form;
+  }
+  const firstUpload = await request("/api/materials/upload", { method: "POST", body: uploadForm() });
+  uploadedMaterialId = firstUpload.body.data?.id;
+  assert(firstUpload.response.status === 200 && uploadedMaterialId && firstUpload.body.deduplicated === false, `Material upload failed: ${firstUpload.response.status} ${JSON.stringify(firstUpload.body)}`);
+  await prisma.material.update({ where: { id: uploadedMaterialId }, data: { contentHash: null, byteSize: null, mimeType: null } });
+  const duplicateUpload = await request("/api/materials/upload", { method: "POST", body: uploadForm() });
+  assert(duplicateUpload.response.status === 200 && duplicateUpload.body.deduplicated === true && duplicateUpload.body.data?.id === uploadedMaterialId, "Legacy material upload was not hashed and reused.");
+  const directDuplicateUpload = await request("/api/materials/upload", { method: "POST", body: uploadForm() });
+  assert(directDuplicateUpload.response.status === 200 && directDuplicateUpload.body.deduplicated === true && directDuplicateUpload.body.data?.id === uploadedMaterialId, "Duplicate material upload was not reused.");
+  const mismatchedUpload = await request("/api/materials/upload", { method: "POST", body: uploadForm("audio") });
+  assert(mismatchedUpload.response.status === 400, "Mismatched upload content type was not rejected.");
 
   const materialCreate = await json("/api/materials", "POST", {
     projectId: projectA,
@@ -155,8 +175,9 @@ try {
   const taskDelete = await request(`/api/video-tasks?project_id=${projectA}&task_id=${taskId}`, { method: "DELETE" });
   assert(taskDelete.response.status === 200 && taskDelete.body.data?.deleted, "Video task deletion failed.");
 
-  console.log(JSON.stringify({ ok: true, strictDatabaseIds: true, projectOptimisticLock: true, shotOptimisticLock: true, imageReferenceAuthorization: true, materialLifecycle: true, taskAssetLifecycle: true }));
+  console.log(JSON.stringify({ ok: true, strictDatabaseIds: true, projectOptimisticLock: true, shotOptimisticLock: true, materialUploadDeduplication: true, imageReferenceAuthorization: true, materialLifecycle: true, taskAssetLifecycle: true }));
 } finally {
+  if (uploadedMaterialId) await request(`/api/materials?id=${uploadedMaterialId}`, { method: "DELETE" }).catch(() => undefined);
   if (materialId) await request(`/api/materials?id=${materialId}`, { method: "DELETE" }).catch(() => undefined);
   if (cookie) {
     await request(`/api/workspaces?projectId=${projectB}`, { method: "DELETE" }).catch(() => undefined);
