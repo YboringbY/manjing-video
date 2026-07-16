@@ -6,6 +6,9 @@ const account = process.env.PRODUCTION_SMOKE_ACCOUNT || "";
 const password = process.env.PRODUCTION_SMOKE_PASSWORD || "";
 const screenshotPath = process.env.BROWSER_SMOKE_SCREENSHOT || "";
 const imageScreenshotPath = process.env.BROWSER_SMOKE_IMAGE_SCREENSHOT || "";
+const loginScreenshotPath = process.env.BROWSER_SMOKE_LOGIN_SCREENSHOT || "";
+const viewportWidth = Math.max(320, Number(process.env.BROWSER_SMOKE_VIEWPORT_WIDTH || 1440));
+const viewportHeight = Math.max(568, Number(process.env.BROWSER_SMOKE_VIEWPORT_HEIGHT || 1000));
 const executableCandidates = [
   process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE,
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -25,7 +28,7 @@ function assert(condition, message) {
 
 console.error(`[browser-smoke] launching ${executablePath}`);
 const browser = await chromium.launch({ executablePath, headless: true, args: ["--no-sandbox", "--disable-gpu"], timeout: 15000 });
-const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+const context = await browser.newContext({ viewport: { width: viewportWidth, height: viewportHeight } });
 const page = await context.newPage();
 page.setDefaultTimeout(20000);
 const pageErrors = [];
@@ -34,6 +37,10 @@ page.on("pageerror", error => pageErrors.push(error.message));
 try {
   console.error(`[browser-smoke] opening ${baseUrl}`);
   await page.goto(baseUrl, { waitUntil: "networkidle", timeout: 30000 });
+  const filingLink = page.getByRole("link", { name: "浙ICP备2026053932号-1" });
+  await filingLink.waitFor({ state: "visible" });
+  assert((await filingLink.getAttribute("href")) === "https://beian.miit.gov.cn/", "Login filing link target was incorrect.");
+  if (loginScreenshotPath) await page.screenshot({ path: loginScreenshotPath, fullPage: true });
   const accountInput = page.getByPlaceholder("输入您的账号");
   const passwordInput = page.getByPlaceholder("输入您的密码");
   await accountInput.waitFor({ state: "visible" });
@@ -92,11 +99,12 @@ try {
   assert((await allTab.getAttribute("class"))?.includes("active"), "All task filter did not become active.");
   const taskRows = await taskTableRows.count();
   assert(taskRows > 0, "The generation record table had no result or empty-state row.");
+  await page.getByRole("link", { name: "浙ICP备2026053932号-1" }).waitFor({ state: "visible" });
   console.error(`[browser-smoke] task rows visible: ${taskRows}`);
 
   if (screenshotPath) await page.screenshot({ path: screenshotPath, fullPage: true });
   assert(pageErrors.length === 0, `Browser page errors: ${pageErrors.join(" | ")}`);
-  console.log(JSON.stringify({ ok: true, projectCount, firstProjectName, imageWorkbenchReady: true, visibleMaterialCards, taskRows, taskFilterReady: true, freshBrowserContext: true, screenshotPath: screenshotPath || undefined, imageScreenshotPath: imageScreenshotPath || undefined }));
+  console.log(JSON.stringify({ ok: true, projectCount, firstProjectName, imageWorkbenchReady: true, visibleMaterialCards, taskRows, taskFilterReady: true, filingReady: true, freshBrowserContext: true, viewport: { width: viewportWidth, height: viewportHeight }, screenshotPath: screenshotPath || undefined, imageScreenshotPath: imageScreenshotPath || undefined, loginScreenshotPath: loginScreenshotPath || undefined }));
 } catch (error) {
   if (screenshotPath) await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
   throw error;

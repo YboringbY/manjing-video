@@ -5,6 +5,7 @@ import { ProjectListSection } from "./components/ProjectListSection";
 import { ProjectOverviewSection } from "./components/ProjectOverviewSection";
 import { ImageWorkbench } from "./components/ImageWorkbench";
 import { GenerationRecordsSection } from "./components/GenerationRecordsSection";
+import { SiteFiling } from "./components/SiteFiling";
 import { Sidebar } from "./components/Sidebar";
 import { LoginPage } from "./components/LoginPage";
 import { MembersSection } from "./components/MembersSection";
@@ -2508,6 +2509,8 @@ export default function Home() {
           onFeedback={submitTaskFeedback}
           onDelete={deleteTask}
         />
+
+        <SiteFiling />
 
       </main>
 

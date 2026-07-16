@@ -1,3 +1,5 @@
+import { SiteFiling } from "./SiteFiling";
+
 type LoginPageProps = {
   account: string;
   password: string;
@@ -39,6 +41,7 @@ export function LoginPage(props: LoginPageProps) {
             <button type="button" className="login-submit" onClick={props.onSubmit} disabled={props.isLoggingIn}>{props.isLoggingIn ? "正在进入..." : "进入工作空间"} <span>→</span></button>
           </div>
         </div>
+        <SiteFiling variant="login" />
       </section>
     </div>
   );

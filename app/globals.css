@@ -68,6 +68,12 @@ body {
 .login-switch button { margin-left: 8px; font-weight: 900; }
 .login-terms { margin: 0; color: rgba(119, 132, 141, .75); font-size: 13px; }
 .login-terms span { color: #818cf8; }
+.site-filing { width: 100%; padding: 18px 0 0; text-align: center; font-size: 12px; line-height: 1.5; }
+.site-filing a { color: #7a8798; text-decoration: none; }
+.site-filing a:hover { color: var(--primary); text-decoration: underline; }
+.site-filing--login { padding-top: 0; }
+.site-filing--login a { color: #8f98a6; }
+.site-filing--workspace { padding-top: 30px; }
 
 .app { min-height: 100vh; display: grid; grid-template-columns: 248px 1fr; }
 

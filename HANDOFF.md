@@ -10,6 +10,7 @@
 - TLS 证书覆盖 `console.manjingstudio.com`，有效期至 2026-10-03；Certbot 自动续期 timer 为 enabled/active。
 - 回滚备份：`/root/backups/manjing-video-nginx-before-domain-20260716-145427.conf` 和 `/root/backups/manjing-video-env-before-domain-20260716-145427.env`。
 - 已验证 HTTP `301`、HTTPS 首页 `200`、匿名鉴权 `401`、正式域名素材 `200 image/png`、登录态浏览器项目/生图/素材/生成记录及筛选交互；PM2 online。
+- 备案号组件已在登录页和登录后的工作台底部展示，链接到 `https://beian.miit.gov.cn/`；桌面与 390×844 移动端浏览器 smoke 均验证可见且不遮挡内容，尚未部署生产。
 - 可审查配置与回滚执行逻辑已记录在 `ops/nginx/manjing-video.conf` 和 `ops/scripts/enable-console-domain.sh`。
 
 ## 稳定版本前的开发流程决策
