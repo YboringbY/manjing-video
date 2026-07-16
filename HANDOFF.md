@@ -2,6 +2,16 @@
 
 更新时间：2026-07-16
 
+## 2026-07-16 正式域名启用
+
+- 备案号：`浙ICP备2026053932号-1`；正式入口已启用为 `https://console.manjingstudio.com`，DNS 指向 `118.196.44.191`。
+- Nginx 的域名 HTTP 入口已从 `444` 改为 `301` 跳转 HTTPS，HTTPS 已启用应用反向代理和 `/data/manjing/uploads` 静态素材服务；IP 入口继续保留为运维回退入口。
+- `ASSET_PUBLIC_BASE_URL` 已更新为 `https://console.manjingstudio.com`，以后新生成和上传素材使用正式域名；本次未回填历史数据库 URL，未修改任何业务行。
+- TLS 证书覆盖 `console.manjingstudio.com`，有效期至 2026-10-03；Certbot 自动续期 timer 为 enabled/active。
+- 回滚备份：`/root/backups/manjing-video-nginx-before-domain-20260716-145427.conf` 和 `/root/backups/manjing-video-env-before-domain-20260716-145427.env`。
+- 已验证 HTTP `301`、HTTPS 首页 `200`、匿名鉴权 `401`、正式域名素材 `200 image/png`、登录态浏览器项目/生图/素材/生成记录及筛选交互；PM2 online。
+- 可审查配置与回滚执行逻辑已记录在 `ops/nginx/manjing-video.conf` 和 `ops/scripts/enable-console-domain.sh`。
+
 ## 稳定版本前的开发流程决策
 
 - 继续使用本地 `lint / unit / TypeScript / core API / build / browser smoke` 质量门禁，生产部署继续要求用户明确批准并由安全部署脚本执行。
@@ -153,8 +163,8 @@
 
 - 项目路径：`/Users/keyang/Desktop/manjing_SaaS/manjing-video`
 - 本地开发：`http://localhost:5050`
-- 生产入口：`http://118.196.44.191`
-- 生产域名 `console.manjingstudio.com` 备案前不要恢复访问。
+- 生产入口：`https://console.manjingstudio.com`
+- 运维回退入口：`http://118.196.44.191`
 - 最新生产业务提交：`9234a4b Extract P1 generation records module`
 - 最新发布记录：本文件顶部“P1 前端模块拆分生产发布”章节
 - 生产 PM2：`manjing-video` online。
@@ -247,7 +257,7 @@ pm2 restart manjing-video --update-env
 
 - 不要打印 `.env`、API Key、数据库密码、私钥。
 - Prisma CLI 在生产上需要显式加载 `.env`。
-- 备案前生产测试只用 IP。
+- 日常生产验收优先使用正式 HTTPS 域名；IP 仅作为运维回退入口。
 
 ## 近期完成
 
