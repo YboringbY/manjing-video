@@ -31,6 +31,13 @@ snapshot() {
       'tasks', json_build_object('count', count(*), 'ids', md5(COALESCE(string_agg(("tenantId" || ':' || "projectId"::text || ':' || id), ',' ORDER BY "tenantId", "projectId", id), '')))) FROM "VideoTask";
     SELECT json_build_object(
       'assets', json_build_object('count', count(*), 'ids', md5(COALESCE(string_agg(("tenantId" || ':' || "projectId"::text || ':' || id::text), ',' ORDER BY "tenantId", "projectId", id), '')))) FROM "VideoAsset";
+    SELECT (to_regclass('"ImageTask"') IS NOT NULL) AS image_tasks_exists \gset
+    \if :image_tasks_exists
+      SELECT json_build_object(
+        'imageTasks', json_build_object('count', count(*), 'ids', md5(COALESCE(string_agg(("tenantId" || ':' || "projectId"::text || ':' || id), ',' ORDER BY "tenantId", "projectId", id), '')))) FROM "ImageTask";
+    \else
+      SELECT json_build_object('imageTasks', json_build_object('count', 0, 'ids', md5('')));
+    \endif
 SQL
 }
 

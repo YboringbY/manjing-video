@@ -18,8 +18,8 @@ type DetectedMedia = { kind: MediaKind; mimeType: string; extension: string };
 const DEFAULT_UPLOAD_ROOT = path.join(process.cwd(), "public", "uploads");
 const MAX_FILE_SIZE: Record<MediaKind, number> = {
   image: 25 * 1024 * 1024,
-  audio: 100 * 1024 * 1024,
-  video: 500 * 1024 * 1024
+  audio: 50 * 1024 * 1024,
+  video: 50 * 1024 * 1024
 };
 const ROLE_BY_KIND: Record<MediaKind, string> = {
   image: "reference_image",

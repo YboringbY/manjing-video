@@ -44,6 +44,13 @@ type AuditLogEntry = {
 };
 type TaskRecordFilter = "all" | "running" | "done" | "failed";
 type WorkbenchDropTarget = "prompt" | "first" | "last";
+type ImageGenerationTask = {
+  id: string;
+  projectId: number;
+  status: "pending" | "running" | "done" | "failed";
+  error?: string;
+  materials?: MaterialAsset[];
+};
 
 const STORAGE_KEY = "manjing-video-mvp";
 const AUTH_STORAGE_KEY = "manjing-video-auth";
@@ -54,6 +61,7 @@ const defaultApiProfiles: ApiProfile[] = [];
 const PROJECT_TYPES = ["AI 漫剧", "AI 真人剧"] as const;
 const MAX_DATABASE_INT = 2147483647;
 const MIN_VIDEO_REFERENCE_IMAGE_SIDE = 300;
+const MATERIAL_UPLOAD_LIMIT_BYTES = { image: 25 * 1024 * 1024, video: 50 * 1024 * 1024, audio: 50 * 1024 * 1024 } as const;
 
 const emptyProjectState: AppState = {
   project: { id: 1, name: "未命名项目", type: "AI 真人剧", script: "" },
@@ -264,6 +272,9 @@ function modelsByPriority(profiles: ApiProfile[], capability: "text" | "image" |
 }
 
 async function readApiJson(response: Response, fallbackMessage: string) {
+  if (response.status === 413) {
+    return { code: 413, message: "文件超过生产上传上限。图片需在 25MB 以内，视频和音频需在 50MB 以内。" };
+  }
   const text = await response.text();
   if (!text.trim()) {
     return { code: response.ok ? 0 : response.status, message: response.ok ? "" : fallbackMessage };
@@ -280,6 +291,7 @@ export default function Home() {
   const [projectStates, setProjectStates] = useState<ProjectStates>(emptyProjectStates);
   const [projects, setProjects] = useState<Project[]>(emptyProjects);
   const [currentProjectId, setCurrentProjectId] = useState(emptyProjectState.project.id);
+  const currentProjectIdRef = useRef(currentProjectId);
   const workspaceUpdatedAtRef = useRef<Record<number, string>>({});
   const generationPollTimersRef = useRef<Record<string, number>>({});
   const videoSubmissionInFlightRef = useRef(false);
@@ -334,6 +346,8 @@ export default function Home() {
   const [selectingImageReference, setSelectingImageReference] = useState(false);
   const [generatedImages, setGeneratedImages] = useState<MaterialAsset[]>([]);
   const [isImageGenerating, setIsImageGenerating] = useState(false);
+  const imageTaskPollTimerRef = useRef<number | null>(null);
+  const activeImageTaskIdRef = useRef<string | null>(null);
   const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("all");
   const [librarySearch, setLibrarySearch] = useState("");
   const [projectMaterialSearch, setProjectMaterialSearch] = useState("");
@@ -662,6 +676,11 @@ export default function Home() {
   }, [state, currentProjectId, storageReady]);
 
   useEffect(() => {
+    currentProjectIdRef.current = currentProjectId;
+    if (imageTaskPollTimerRef.current) window.clearTimeout(imageTaskPollTimerRef.current);
+    imageTaskPollTimerRef.current = null;
+    activeImageTaskIdRef.current = null;
+    setIsImageGenerating(false);
     setImageReferenceMaterialId(null);
     setSelectingImageReference(false);
     setFirstFrameMaterialId(null);
@@ -670,6 +689,24 @@ export default function Home() {
     setWorkbenchUploadMessage("");
     shotPromptSelectionKnownRef.current = false;
   }, [currentProjectId]);
+
+  useEffect(() => {
+    if (!authReady || !currentUser || !workspaceSyncReady) return;
+    let cancelled = false;
+    fetch(`/api/image-tasks?projectId=${currentProjectId}`)
+      .then(response => readApiJson(response, "恢复生图任务失败"))
+      .then(result => {
+        if (cancelled || result.code !== 0 || !result.data?.id) return;
+        beginImageTaskPolling(result.data as ImageGenerationTask, currentProjectId);
+        setMaterialMessage("检测到当前项目仍有生图任务，正在恢复状态同步...");
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [authReady, currentUser, workspaceSyncReady, currentProjectId]);
+
+  useEffect(() => () => {
+    if (imageTaskPollTimerRef.current) window.clearTimeout(imageTaskPollTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (imageReferenceMaterialId && !state.materials.some(material => material.id === imageReferenceMaterialId && material.kind === "image")) {
@@ -1369,6 +1406,10 @@ export default function Home() {
 
   async function uploadMaterialFile(file: File, options: { kind: "image" | "video" | "audio"; name?: string; scope?: "project" | "team" }) {
     if (materialUploadInFlightRef.current) throw new Error("已有素材正在上传，请等待完成后再试。");
+    const limitBytes = MATERIAL_UPLOAD_LIMIT_BYTES[options.kind];
+    if (!file.size || file.size > limitBytes) {
+      throw new Error(`${options.kind === "image" ? "图片" : options.kind === "video" ? "视频" : "音频"}文件需在 ${Math.round(limitBytes / 1024 / 1024)}MB 以内。`);
+    }
     const formData = new FormData();
     formData.append("file", file);
     formData.append("projectId", String(currentProjectId));
@@ -2285,15 +2326,76 @@ export default function Home() {
     setImageHeight(height);
   }
 
+  function stopImageTaskPolling() {
+    if (imageTaskPollTimerRef.current) window.clearTimeout(imageTaskPollTimerRef.current);
+    imageTaskPollTimerRef.current = null;
+    activeImageTaskIdRef.current = null;
+    setIsImageGenerating(false);
+  }
+
+  function applyCompletedImageTask(task: ImageGenerationTask, projectId: number) {
+    if (currentProjectIdRef.current !== projectId) return stopImageTaskPolling();
+    const savedImages = Array.isArray(task.materials) ? task.materials : [];
+    setGeneratedImages(prev => mergeMaterials(prev, savedImages));
+    setState(prev => ({ ...prev, materials: mergeMaterials(prev.materials, savedImages) }));
+    setActiveAssetTab("image");
+    setActiveAssetScope("project");
+    const generationReadyCount = savedImages.filter(image => materialApiUrl(image)).length;
+    setMaterialMessage(generationReadyCount
+      ? `已生成 ${savedImages.length} 张图片，并保存到当前项目素材库。`
+      : `已生成 ${savedImages.length} 张图片并保存，可本地预览；当前开发环境没有公网素材地址，暂不能作为视频参考。`);
+    stopImageTaskPolling();
+  }
+
+  async function pollImageTask(taskId: string, projectId: number, attempt = 0) {
+    if (currentProjectIdRef.current !== projectId || activeImageTaskIdRef.current !== taskId) return;
+    try {
+      const response = await fetch(`/api/image-tasks?projectId=${projectId}&id=${encodeURIComponent(taskId)}`);
+      const result = await readApiJson(response, "同步生图任务失败");
+      if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "同步生图任务失败");
+      const task = result.data as ImageGenerationTask;
+      if (activeImageTaskIdRef.current !== task.id) return;
+      if (task.status === "done") return applyCompletedImageTask(task, projectId);
+      if (task.status === "failed") {
+        setGeneratedImages([]);
+        setMaterialMessage(task.error || "图片生成失败，请检查渠道后重试。");
+        return stopImageTaskPolling();
+      }
+      setMaterialMessage(task.status === "pending" ? "生图任务已排队，等待后台处理..." : "图片正在后台生成，离开页面或刷新不会中断任务...");
+      imageTaskPollTimerRef.current = window.setTimeout(() => pollImageTask(taskId, projectId, attempt + 1), 2000);
+    } catch (error) {
+      if (attempt >= 120) {
+        setMaterialMessage("生图任务仍在后台处理，但状态同步暂时不可用。请稍后刷新素材库查看结果。");
+        return stopImageTaskPolling();
+      }
+      setMaterialMessage(error instanceof Error ? `生图状态暂未同步：${error.message}` : "生图状态暂未同步，正在重试...");
+      imageTaskPollTimerRef.current = window.setTimeout(() => pollImageTask(taskId, projectId, attempt + 1), Math.min(10000, 2500 + attempt * 250));
+    }
+  }
+
+  function beginImageTaskPolling(task: ImageGenerationTask, projectId: number) {
+    if (imageTaskPollTimerRef.current) window.clearTimeout(imageTaskPollTimerRef.current);
+    activeImageTaskIdRef.current = task.id;
+    setIsImageGenerating(true);
+    if (task.status === "done") return applyCompletedImageTask(task, projectId);
+    if (task.status === "failed") {
+      setMaterialMessage(task.error || "图片生成失败，请检查渠道后重试。");
+      return stopImageTaskPolling();
+    }
+    void pollImageTask(task.id, projectId);
+  }
+
   async function generateImages() {
     if (!imageWorkbenchPrompt.trim()) {
       alert("请先填写生图提示词。");
       return;
     }
+    if (isImageGenerating || activeImageTaskIdRef.current) return;
+    const taskProjectId = currentProjectId;
     setIsImageGenerating(true);
-    setMaterialMessage("正在生成图片...");
+    setMaterialMessage("正在提交生图任务...");
     try {
-      const response = await fetch("/api/images/generate", {
+      const response = await fetch("/api/image-tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2306,26 +2408,17 @@ export default function Home() {
         })
       });
       const result = await readApiJson(response, "图片生成失败");
-      if (response.status === 504) {
-        setGeneratedImages([]);
-        setMaterialMessage("生图请求等待超时，上游可能仍在处理。生成完成后服务端会自动保存到素材库，请稍后刷新素材库查看。");
+      if (response.status === 409 && result.data?.id) {
+        beginImageTaskPolling(result.data as ImageGenerationTask, taskProjectId);
+        setMaterialMessage("当前项目已有生图任务，已恢复状态同步。");
         return;
       }
-      if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) throw new Error(result.message || "图片生成失败");
-      const savedImages = result.data as MaterialAsset[];
-      setGeneratedImages(savedImages);
-      setState(prev => ({ ...prev, materials: [...savedImages, ...prev.materials] }));
-      setActiveAssetTab("image");
-      setActiveAssetScope("project");
-      const generationReadyCount = savedImages.filter(image => materialApiUrl(image)).length;
-      setMaterialMessage(generationReadyCount
-        ? `已生成 ${savedImages.length} 张图片，并保存到当前项目素材库。`
-        : `已生成 ${savedImages.length} 张图片并保存，可本地预览；当前开发环境没有公网素材地址，暂不能作为视频参考。`);
+      if (!response.ok || result.code !== 0 || !result.data?.id) throw new Error(result.message || "图片生成任务创建失败");
+      beginImageTaskPolling(result.data as ImageGenerationTask, taskProjectId);
+      setMaterialMessage("生图任务已提交，正在后台处理。刷新页面不会中断任务。");
     } catch (error) {
-      setGeneratedImages([]);
       setMaterialMessage(error instanceof Error ? error.message : "图片生成失败");
-    } finally {
-      setIsImageGenerating(false);
+      stopImageTaskPolling();
     }
   }
 

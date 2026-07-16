@@ -17,6 +17,7 @@ const projectA = 1900000000 + Math.floor(Math.random() * 40000000);
 const projectB = projectA + 1;
 const shotId = BigInt(projectA) * BigInt(1000) + BigInt(1);
 const taskId = `integration-${randomUUID()}`;
+const imageTaskId = `image-integration-${randomUUID()}`;
 let cookie = "";
 let materialId = 0;
 let uploadedMaterialId = 0;
@@ -125,6 +126,44 @@ try {
     prompt: "integration reference image"
   });
   assert(unlinkedImageReference.response.status === 404, "Unlinked image reference was not rejected.");
+  const unlinkedImageTask = await json("/api/image-tasks", "POST", {
+    projectId: projectB,
+    referenceMaterialId: materialId,
+    prompt: "integration reference image",
+    model: "integration-model",
+    size: "1024x1024",
+    n: 1
+  });
+  assert(unlinkedImageTask.response.status === 404, "Unlinked image task reference was not rejected.");
+  const invalidImageTaskSize = await json("/api/image-tasks", "POST", {
+    projectId: projectA,
+    prompt: "integration invalid size",
+    model: "integration-model",
+    size: "invalid",
+    n: 1
+  });
+  assert(invalidImageTaskSize.response.status === 400, "Invalid image task size was not rejected.");
+  const unsupportedImageTaskPayload = {
+    projectId: projectA,
+    prompt: "integration unsupported model",
+    model: `integration-unsupported-${randomUUID()}`,
+    size: "1024x1024",
+    n: 1
+  };
+  const concurrentImageTasks = await Promise.all([
+    json("/api/image-tasks", "POST", unsupportedImageTaskPayload),
+    json("/api/image-tasks", "POST", unsupportedImageTaskPayload)
+  ]);
+  const [unsupportedImageTask] = concurrentImageTasks.filter(result => result.response.status === 202);
+  const [conflictingImageTask] = concurrentImageTasks.filter(result => result.response.status === 409);
+  assert(unsupportedImageTask?.body.data?.id && conflictingImageTask?.body.data?.id === unsupportedImageTask.body.data.id, `Concurrent image task guard failed: ${concurrentImageTasks.map(result => result.response.status).join(",")}`);
+  let failedImageTask;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    failedImageTask = await request(`/api/image-tasks?projectId=${projectA}&id=${unsupportedImageTask.body.data.id}`);
+    if (failedImageTask.body.data?.status === "failed") break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  assert(failedImageTask?.response.status === 200 && failedImageTask.body.data?.status === "failed" && failedImageTask.body.data?.error, "Asynchronous image task failure was not persisted.");
   const link = await json("/api/materials/links", "POST", { projectId: projectB, materialId });
   assert(link.response.status === 200, "Cross-project material link failed.");
   const targetMaterials = await request(`/api/materials?projectId=${projectB}`);
@@ -134,9 +173,27 @@ try {
 
   const membership = await prisma.membership.findFirst({
     where: { user: { account } },
-    select: { tenantId: true }
+    select: { tenantId: true, userId: true }
   });
   assert(membership, "Test membership was not found.");
+  await prisma.imageTask.create({
+    data: {
+      id: imageTaskId,
+      tenantId: membership.tenantId,
+      projectId: projectA,
+      status: "done",
+      model: "integration-model",
+      prompt: "integration image task",
+      size: "1024x1024",
+      imageCount: 1,
+      resultMaterialIds: [uploadedMaterialId],
+      createdById: membership.userId,
+      createdByName: account,
+      completedAt: new Date()
+    }
+  });
+  const completedImageTask = await request(`/api/image-tasks?projectId=${projectA}&id=${imageTaskId}`);
+  assert(completedImageTask.response.status === 200 && completedImageTask.body.data?.status === "done" && completedImageTask.body.data?.materials?.[0]?.id === uploadedMaterialId, `Completed image task result was not restored: ${completedImageTask.response.status} ${JSON.stringify(completedImageTask.body)}`);
   await prisma.videoTask.create({
     data: {
       id: taskId,
@@ -175,7 +232,7 @@ try {
   const taskDelete = await request(`/api/video-tasks?project_id=${projectA}&task_id=${taskId}`, { method: "DELETE" });
   assert(taskDelete.response.status === 200 && taskDelete.body.data?.deleted, "Video task deletion failed.");
 
-  console.log(JSON.stringify({ ok: true, strictDatabaseIds: true, projectOptimisticLock: true, shotOptimisticLock: true, materialUploadDeduplication: true, imageReferenceAuthorization: true, materialLifecycle: true, taskAssetLifecycle: true }));
+  console.log(JSON.stringify({ ok: true, strictDatabaseIds: true, projectOptimisticLock: true, shotOptimisticLock: true, materialUploadDeduplication: true, imageReferenceAuthorization: true, imageTaskLifecycle: true, materialLifecycle: true, taskAssetLifecycle: true }));
 } finally {
   if (uploadedMaterialId) await request(`/api/materials?id=${uploadedMaterialId}`, { method: "DELETE" }).catch(() => undefined);
   if (materialId) await request(`/api/materials?id=${materialId}`, { method: "DELETE" }).catch(() => undefined);

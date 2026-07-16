@@ -82,6 +82,7 @@ model Project {
   updatedBy       User?             @relation("ProjectUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   shots           Shot[]
   videoTasks      VideoTask[]
+  imageTasks      ImageTask[]
   videoAssets     VideoAsset[]
   sourceMaterials Material[]        @relation("MaterialSourceProject")
   materialLinks   ProjectMaterial[]
@@ -140,6 +141,32 @@ model VideoTask {
   @@index([tenantId, projectId, updatedAt])
   @@index([tenantId, status])
   @@index([providerTaskId])
+}
+
+model ImageTask {
+  id                  String
+  tenantId            String
+  projectId           Int
+  status              String    @default("pending")
+  model               String
+  prompt              String
+  size                 String
+  imageCount           Int
+  referenceMaterialId Int?
+  resultMaterialIds   Json?
+  error               String?
+  createdById         String?
+  createdByName       String?
+  startedAt           DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  project             Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, projectId, id])
+  @@index([tenantId, projectId, createdAt])
+  @@index([tenantId, projectId, status])
+  @@index([createdById, status])
 }
 
 model VideoAsset {

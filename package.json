@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "smoke:production": "node scripts/production-smoke.mjs",
+    "smoke:production:browser": "node scripts/production-browser-smoke.mjs",
     "test:core-api": "node scripts/core-api-integration.mjs",
     "db:snapshot": "bash scripts/business-data-snapshot.sh",
     "db:verify-backup": "bash scripts/verify-backup-restore.sh",
@@ -31,5 +32,8 @@
   },
   "overrides": {
     "postcss": "8.5.10"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.61.1"
   }
 }

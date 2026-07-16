@@ -9,6 +9,7 @@
 - [ ] Any change to localStorage, workspace hydration, normalized API loading, or React effects has a fresh-session regression check for projects, materials, tasks, and assets.
 - [ ] Production worktree is clean and Git update is fast-forward only.
 - [ ] Database backup exists, is non-empty, and has a recorded path.
+- [ ] `npm run db:verify-backup` restored that exact backup into an isolated database and matched source business counts before PM2 was stopped.
 - [ ] `npm run db:preflight` passed.
 - [ ] Pre-migration business counts and identity fingerprints were captured.
 
@@ -19,6 +20,7 @@
 - [ ] Homepage returns 200.
 - [ ] Anonymous `/api/auth/me` returns 401.
 - [ ] `npm run smoke:production` passed with temporary credentials supplied through environment variables.
+- [ ] `npm run smoke:production:browser` passed in a fresh browser context with temporary credentials and no page errors.
 - [ ] Each workspace `materialCount` matches `/api/materials?projectId=...`; each workspace shot/task count matches its normalized API.
 
 ## User-Visible Verification

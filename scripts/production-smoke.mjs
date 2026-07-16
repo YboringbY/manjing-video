@@ -56,14 +56,16 @@ for (const workspace of workspaces.body.data) {
 }
 
 for (const project of projects.body.data) {
-  const [shots, materials, tasks] = await Promise.all([
+  const [shots, materials, tasks, activeImageTask] = await Promise.all([
     jsonRequest(`/api/shots?projectId=${project.id}`, { headers: authHeaders }),
     jsonRequest(`/api/materials?projectId=${project.id}`, { headers: authHeaders }),
-    jsonRequest(`/api/video-tasks?project_id=${project.id}`, { headers: authHeaders })
+    jsonRequest(`/api/video-tasks?project_id=${project.id}`, { headers: authHeaders }),
+    jsonRequest(`/api/image-tasks?projectId=${project.id}`, { headers: authHeaders })
   ]);
   assert(shots.body.code === 0 && Array.isArray(shots.body.data), `Shots failed for project ${project.id}.`);
   assert(materials.body.code === 0 && Array.isArray(materials.body.data), `Materials failed for project ${project.id}.`);
   assert(tasks.body.code === 0 && Array.isArray(tasks.body.data), `Tasks failed for project ${project.id}.`);
+  assert(activeImageTask.body.code === 0 && (activeImageTask.body.data === null || typeof activeImageTask.body.data === "object"), `Image task status failed for project ${project.id}.`);
   const workspace = workspaces.body.data.find(item => item.projectId === project.id);
   assert(workspace, `Project ${project.id} has no workspace response.`);
   assert(workspace.state.shots.length === shots.body.data.length, `Shot count mismatch for project ${project.id}.`);

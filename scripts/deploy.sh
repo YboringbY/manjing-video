@@ -43,6 +43,9 @@ pg_dump --format=custom --file="$PRE_MIGRATION_BACKUP" "$db_url"
 chmod 600 "$PRE_MIGRATION_BACKUP"
 [[ -s "$PRE_MIGRATION_BACKUP" ]] || { echo "Database backup is empty." >&2; exit 2; }
 
+echo "Verifying backup by restoring it into an isolated database..."
+BACKUP_FILE="$PRE_MIGRATION_BACKUP" SOURCE_DATABASE_URL="$DATABASE_URL" npm run db:verify-backup
+
 npm run db:preflight
 business_snapshot=$(mktemp)
 service_stopped=no
