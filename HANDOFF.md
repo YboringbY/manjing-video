@@ -8,17 +8,20 @@
 - 稳定版本确认前不引入 GitHub Actions，不启用 push-to-deploy；稳定后把现有命令迁入 GitHub CI，生产 CD 仍保留人工审批。
 - P1 按单模块小批次拆分，每批完成全量本地回归后再评估发布，不把高风险生产维护混入代码优化。
 
-## 2026-07-16 P1 前端模块拆分（本地完成，未部署）
+## 2026-07-16 P1 前端模块拆分生产发布
 
-- 当前生产业务代码为 `a5b04db`，发布记录为 `b331423`；生产 PM2 online，20 条 migration 一致，最近一次登录态 HTTP smoke 和全新浏览器 smoke 均通过。
+- 生产业务代码已更新到 `9234a4b`；生产 PM2 online，20 条 migration 一致，本次待执行 migration 为 0。
 - 生图任务的恢复、提交、轮询、退避重试、项目切换和登出清理已提取到 `app/hooks/useImageGenerationTask.ts`；失败任务不再清空既有成功图片列表。
 - 生图表单和结果展示已提取到 `app/components/ImageWorkbench.tsx`；比例尺寸、任务文案和素材去重移到可测试的 `lib/image-workbench.ts`。
 - 生成记录已提取到 `app/components/GenerationRecordsSection.tsx`；排序、筛选、计数、参数摘要和视频代理链接移到 `lib/generation-records.ts`。
 - `app/page.tsx` 从 2890 行降到 2530 行，并删除 11 个没有任何调用入口的旧函数；API 合约、Prisma schema 和生产数据均未改动。
 - `npm run lint` 已切换为 ESLint CLI 且达到 0 错误、0 警告；新增 `npm run test:unit` 和 `npm run test:quality`，开发依赖精确固定到兼容 Node 18.20.8 的版本。
 - 浏览器 smoke 新增生图工作台只读检查，以及生成记录“已完成/全部”筛选与行数核对；不发起付费生成。
-- 本地 lint、9 项单元测试、TypeScript、核心 API 集成、生产构建、生产依赖审计和全新浏览器 smoke 均通过；5050 已用本轮代码重新启动。
-- 本轮不修改 Prisma schema、不执行生产数据修复、不调整 Nginx，也不恢复历史 5 张孤立生图；生产部署需单独确认。
+- 本地 lint、9 项单元测试、TypeScript、核心 API 集成、生产构建、生产依赖审计和全新浏览器 smoke 均通过。
+- 发布备份 `/data/backups/manjing-video-db-pre-deploy-20260716-125445.dump` 已隔离恢复验证，83,336 字节、权限 `600`；迁移前后业务守恒为项目 1、工作区 1、素材 25、素材关联 25、分镜 27、视频任务 32、视频资产 10、生图任务 0。
+- 公网首页 `200`、匿名鉴权 `401`、登录态 HTTP smoke 和全新浏览器 smoke 均通过；真实项目“短剧团队 Demo”、生图工作台、素材库、生成记录及筛选交互正常。
+- 生产 3 条已有生图素材的文件均存在，大小约 1.24–1.67MB，Nginx 均返回 `200 image/png`；截图中的浅色缩略图是截图早于图片下载完成，不是素材丢失。
+- 本轮未修改 Prisma schema、未执行生产数据修复、未调整 Nginx，也未恢复历史 5 张孤立生图。
 
 ## 2026-07-16 P0 稳定性优化生产发布
 
@@ -152,8 +155,8 @@
 - 本地开发：`http://localhost:5050`
 - 生产入口：`http://118.196.44.191`
 - 生产域名 `console.manjingstudio.com` 备案前不要恢复访问。
-- 最新生产业务提交：`a5b04db Harden P0 image generation and deployment checks`
-- 最新发布记录提交：`b331423 Record P0 production deployment`
+- 最新生产业务提交：`9234a4b Extract P1 generation records module`
+- 最新发布记录：本文件顶部“P1 前端模块拆分生产发布”章节
 - 生产 PM2：`manjing-video` online。
 
 本地启动：
