@@ -2,6 +2,17 @@
 
 更新时间：2026-07-16
 
+## 2026-07-16 P1 生图前端拆分（本地完成，未部署）
+
+- 当前生产业务代码为 `a5b04db`，发布记录为 `b331423`；生产 PM2 online，20 条 migration 一致，最近一次登录态 HTTP smoke 和全新浏览器 smoke 均通过。
+- 生图任务的恢复、提交、轮询、退避重试、项目切换和登出清理已提取到 `app/hooks/useImageGenerationTask.ts`；失败任务不再清空既有成功图片列表。
+- 生图表单和结果展示已提取到 `app/components/ImageWorkbench.tsx`；比例尺寸、任务文案和素材去重移到可测试的 `lib/image-workbench.ts`。
+- `app/page.tsx` 从 2890 行降到 2607 行，并删除 11 个没有任何调用入口的旧函数；API 合约、Prisma schema 和生产数据均未改动。
+- `npm run lint` 已切换为 ESLint CLI 且达到 0 错误、0 警告；新增 `npm run test:unit` 和 `npm run test:quality`，开发依赖精确固定到兼容 Node 18.20.8 的版本。
+- 浏览器 smoke 新增生图工作台只读检查，确认提示词、模型、尺寸和生成按钮可见，不发起付费生成。
+- 本地 lint、5 项单元测试、TypeScript、核心 API 集成、生产构建、生产依赖审计和全新浏览器 smoke 均通过；5050 已用本轮代码重新启动。
+- 本轮不修改 Prisma schema、不执行生产数据修复、不调整 Nginx，也不恢复历史 5 张孤立生图；生产部署需单独确认。
+
 ## 2026-07-16 P0 稳定性优化生产发布
 
 - 生图工作台已改为持久化异步任务：新增 `ImageTask`，提交返回 `202`，页面轮询并支持刷新后恢复；同一用户在同一项目仅允许一个进行中任务，服务重启后的 `running` 任务不会自动重复调用付费接口。
@@ -134,7 +145,8 @@
 - 本地开发：`http://localhost:5050`
 - 生产入口：`http://118.196.44.191`
 - 生产域名 `console.manjingstudio.com` 备案前不要恢复访问。
-- 最新生产提交：`1b8534a Show restored production projects`
+- 最新生产业务提交：`a5b04db Harden P0 image generation and deployment checks`
+- 最新发布记录提交：`b331423 Record P0 production deployment`
 - 生产 PM2：`manjing-video` online。
 
 本地启动：

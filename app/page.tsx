@@ -3,11 +3,14 @@
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ProjectListSection } from "./components/ProjectListSection";
 import { ProjectOverviewSection } from "./components/ProjectOverviewSection";
+import { ImageWorkbench } from "./components/ImageWorkbench";
 import { Sidebar } from "./components/Sidebar";
 import { LoginPage } from "./components/LoginPage";
 import { MembersSection } from "./components/MembersSection";
 import { AuditLogsSection } from "./components/AuditLogsSection";
 import { ApiProfile, AppState, AspectRatio, ImageQuality, LibraryFilter, MaterialAsset, MaterialKind, MaterialRole, MemberRole, ProfileSection, Project, ProjectStates, Shot, ShotStatus, TaskStatus, VideoAsset, VideoTask, VideoTaskSnapshot, WorkspaceSection } from "./components/types";
+import { useImageGenerationTask } from "./hooks/useImageGenerationTask";
+import { imageSizeForRatio, mergeMaterials } from "@/lib/image-workbench";
 import { isPublicMediaUrl } from "@/lib/media-url";
 
 type AuthUser = {
@@ -44,17 +47,9 @@ type AuditLogEntry = {
 };
 type TaskRecordFilter = "all" | "running" | "done" | "failed";
 type WorkbenchDropTarget = "prompt" | "first" | "last";
-type ImageGenerationTask = {
-  id: string;
-  projectId: number;
-  status: "pending" | "running" | "done" | "failed";
-  error?: string;
-  materials?: MaterialAsset[];
-};
 
 const STORAGE_KEY = "manjing-video-mvp";
 const AUTH_STORAGE_KEY = "manjing-video-auth";
-const USER_STORAGE_KEY = "manjing-video-users";
 const API_PROFILE_STORAGE_KEY = "manjing-video-api-profiles";
 const ACTIVE_API_PROFILE_STORAGE_KEY = "manjing-video-active-api-profile";
 const defaultApiProfiles: ApiProfile[] = [];
@@ -140,20 +135,6 @@ function randomGradient() {
   return gradients[Math.floor(Math.random() * gradients.length)];
 }
 
-function materialKey(material: MaterialAsset) {
-  return material.dbId ? `db:${material.dbId}` : material.storagePath ? `storage:${material.storagePath}` : `url:${material.url}`;
-}
-
-function mergeMaterials(current: MaterialAsset[], incoming: MaterialAsset[]) {
-  const seen = new Set<string>();
-  return [...incoming, ...current].filter(material => {
-    const key = materialKey(material);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
 function materialDimensionText(material: Pick<MaterialAsset, "width" | "height">) {
   return material.width && material.height ? `${material.width}x${material.height}` : "";
 }
@@ -180,15 +161,6 @@ function projectStatesForCache(states: ProjectStates) {
 
 function workspaceCachePayload(state: AppState, projectStates: ProjectStates, projects: Project[], currentProjectId: number) {
   return { state: workspaceStateForSync(state), projectStates: projectStatesForCache(projectStates), projects, currentProjectId };
-}
-
-function getStoredUsers(): Record<string, AuthUser> {
-  if (typeof window === "undefined") return {};
-  try {
-    return JSON.parse(window.localStorage.getItem(USER_STORAGE_KEY) || "{}") as Record<string, AuthUser>;
-  } catch {
-    return {};
-  }
 }
 
 function usersToMap(users: AuthUser[]) {
@@ -252,11 +224,6 @@ function writeApiProfiles(profiles: ApiProfile[]) {
   window.localStorage.setItem(API_PROFILE_STORAGE_KEY, JSON.stringify(profiles));
 }
 
-function publicApiProfile(profile?: ApiProfile) {
-  if (!profile) return undefined;
-  return { id: profile.id, name: profile.name, baseUrl: profile.baseUrl, model: profile.model, textModels: profile.textModels, scriptModels: profile.textModels || profile.scriptModels, videoModels: profile.videoModels, imageModels: profile.imageModels, priority: profile.priority, enabled: profile.enabled, concurrencyLimit: profile.concurrencyLimit };
-}
-
 function modelsByPriority(profiles: ApiProfile[], capability: "text" | "image" | "video") {
   const seen = new Set<string>();
   return profiles
@@ -292,6 +259,9 @@ export default function Home() {
   const [projects, setProjects] = useState<Project[]>(emptyProjects);
   const [currentProjectId, setCurrentProjectId] = useState(emptyProjectState.project.id);
   const currentProjectIdRef = useRef(currentProjectId);
+  const workspaceStateRef = useRef(state);
+  currentProjectIdRef.current = currentProjectId;
+  workspaceStateRef.current = state;
   const workspaceUpdatedAtRef = useRef<Record<number, string>>({});
   const generationPollTimersRef = useRef<Record<string, number>>({});
   const videoSubmissionInFlightRef = useRef(false);
@@ -319,8 +289,6 @@ export default function Home() {
   const [firstFrameMaterialId, setFirstFrameMaterialId] = useState<number | null>(null);
   const [lastFrameMaterialId, setLastFrameMaterialId] = useState<number | null>(null);
   const [materialName, setMaterialName] = useState("角色参考图");
-  const [materialUrl, setMaterialUrl] = useState("");
-  const [materialKind, setMaterialKind] = useState<MaterialKind>("image");
   const [materialRole, setMaterialRole] = useState<MaterialRole>("reference_image");
   const [materialMessage, setMaterialMessage] = useState("");
   const [isUploadingMaterial, setIsUploadingMaterial] = useState(false);
@@ -345,9 +313,6 @@ export default function Home() {
   const [imageReferenceMaterialId, setImageReferenceMaterialId] = useState<number | null>(null);
   const [selectingImageReference, setSelectingImageReference] = useState(false);
   const [generatedImages, setGeneratedImages] = useState<MaterialAsset[]>([]);
-  const [isImageGenerating, setIsImageGenerating] = useState(false);
-  const imageTaskPollTimerRef = useRef<number | null>(null);
-  const activeImageTaskIdRef = useRef<string | null>(null);
   const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("all");
   const [librarySearch, setLibrarySearch] = useState("");
   const [projectMaterialSearch, setProjectMaterialSearch] = useState("");
@@ -365,7 +330,6 @@ export default function Home() {
   const [scriptEpisodeSplit, setScriptEpisodeSplit] = useState("");
   const [scriptOptimizationNote, setScriptOptimizationNote] = useState("");
   const [showAllAssets, setShowAllAssets] = useState(false);
-  const [showAllImageResults, setShowAllImageResults] = useState(false);
   const [showAllTasks, setShowAllTasks] = useState(false);
   const [taskRecordFilter, setTaskRecordFilter] = useState<TaskRecordFilter>("all");
   const [showAllTeamMaterials, setShowAllTeamMaterials] = useState(false);
@@ -431,6 +395,24 @@ export default function Home() {
     setApiProfileEnabled(profile?.enabled ?? true);
     setApiProfileConcurrencyLimit(Math.max(1, Math.min(50, Number(profile?.concurrencyLimit || 1))));
   }
+
+  const { isGenerating: isImageGenerating, submit: submitImageTask } = useImageGenerationTask({
+    enabled: authReady && Boolean(currentUser) && workspaceSyncReady,
+    projectId: currentProjectId,
+    readApiJson,
+    onCompleted(task) {
+      const savedImages = Array.isArray(task.materials) ? task.materials : [];
+      setGeneratedImages(previous => mergeMaterials(previous, savedImages));
+      setState(previous => ({ ...previous, materials: mergeMaterials(previous.materials, savedImages) }));
+      setActiveAssetTab("image");
+      setActiveAssetScope("project");
+      const generationReadyCount = savedImages.filter(image => materialApiUrl(image)).length;
+      setMaterialMessage(generationReadyCount
+        ? `已生成 ${savedImages.length} 张图片，并保存到当前项目素材库。`
+        : `已生成 ${savedImages.length} 张图片并保存，可本地预览；当前开发环境没有公网素材地址，暂不能作为视频参考。`);
+    },
+    onMessage: setMaterialMessage
+  });
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -507,6 +489,8 @@ export default function Home() {
       setIsAuditLogsLoading(false);
     }
   }
+  const fetchAuditLogsRef = useRef(fetchAuditLogs);
+  fetchAuditLogsRef.current = fetchAuditLogs;
 
   useEffect(() => {
     if (!authReady || !currentUser) return;
@@ -538,7 +522,8 @@ export default function Home() {
         };
         const serverProjectStates = projectStatesFromWorkspaces(workspaces);
         const serverProjects = Object.values(serverProjectStates).map(item => item.project);
-        const nextCurrentProjectId = serverProjectStates[currentProjectId] ? currentProjectId : serverProjects[0]?.id || emptyProjectState.project.id;
+        const preferredProjectId = currentProjectIdRef.current;
+        const nextCurrentProjectId = serverProjectStates[preferredProjectId] ? preferredProjectId : serverProjects[0]?.id || emptyProjectState.project.id;
         const nextState = serverProjectStates[nextCurrentProjectId] || emptyProjectState;
         setProjectStates(serverProjectStates);
         setProjects(serverProjects.length ? serverProjects : emptyProjects);
@@ -614,7 +599,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!authReady || !currentUser || activeSection !== "audit-logs") return;
-    fetchAuditLogs().catch(() => undefined);
+    fetchAuditLogsRef.current().catch(() => undefined);
   }, [authReady, currentUser, activeSection]);
 
   useEffect(() => {
@@ -676,11 +661,6 @@ export default function Home() {
   }, [state, currentProjectId, storageReady]);
 
   useEffect(() => {
-    currentProjectIdRef.current = currentProjectId;
-    if (imageTaskPollTimerRef.current) window.clearTimeout(imageTaskPollTimerRef.current);
-    imageTaskPollTimerRef.current = null;
-    activeImageTaskIdRef.current = null;
-    setIsImageGenerating(false);
     setImageReferenceMaterialId(null);
     setSelectingImageReference(false);
     setFirstFrameMaterialId(null);
@@ -689,24 +669,6 @@ export default function Home() {
     setWorkbenchUploadMessage("");
     shotPromptSelectionKnownRef.current = false;
   }, [currentProjectId]);
-
-  useEffect(() => {
-    if (!authReady || !currentUser || !workspaceSyncReady) return;
-    let cancelled = false;
-    fetch(`/api/image-tasks?projectId=${currentProjectId}`)
-      .then(response => readApiJson(response, "恢复生图任务失败"))
-      .then(result => {
-        if (cancelled || result.code !== 0 || !result.data?.id) return;
-        beginImageTaskPolling(result.data as ImageGenerationTask, currentProjectId);
-        setMaterialMessage("检测到当前项目仍有生图任务，正在恢复状态同步...");
-      })
-      .catch(() => undefined);
-    return () => { cancelled = true; };
-  }, [authReady, currentUser, workspaceSyncReady, currentProjectId]);
-
-  useEffect(() => () => {
-    if (imageTaskPollTimerRef.current) window.clearTimeout(imageTaskPollTimerRef.current);
-  }, []);
 
   useEffect(() => {
     if (imageReferenceMaterialId && !state.materials.some(material => material.id === imageReferenceMaterialId && material.kind === "image")) {
@@ -726,7 +688,7 @@ export default function Home() {
         const response = await fetch("/api/workspaces", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ projectId: currentProjectId, name: state.project.name, state: workspaceStateForSync(state), lastUpdatedAt: workspaceUpdatedAtRef.current[currentProjectId] })
+          body: JSON.stringify({ projectId: currentProjectId, name: state.project.name, state: workspaceStateForSync(workspaceStateRef.current), lastUpdatedAt: workspaceUpdatedAtRef.current[currentProjectId] })
         });
         const result = await readApiJson(response, "保存项目工作区失败");
         if (!response.ok || result.code !== 0) throw new Error(result.message || "保存项目工作区失败");
@@ -1104,10 +1066,6 @@ export default function Home() {
     return chunks.map((action, index) => createEditedShot(index, chunks.length, action, totalDuration, segmentDuration, ratio));
   }
 
-  function splitLongPromptIntoShots(title: string, prompt: string, ratio: string, duration = shotDuration) {
-    return splitPromptLikeEditor(prompt, ratio, duration).map((shot, index) => ({ ...shot, title: `${title || "分镜"}｜${String(index + 1).padStart(2, "0")}` }));
-  }
-
   function buildDurationControlledPrompt(prompt: string, duration: number) {
     const cleanPrompt = prompt.trim();
     const durationText = `${duration}秒`;
@@ -1152,33 +1110,6 @@ export default function Home() {
     setState(prev => ({ ...prev, shots: [...prev.shots, nextShot] }));
     setShotTitle("");
     startGeneration(id, nextShot, context);
-  }
-
-
-  async function splitExistingShot(shot: Shot) {
-    const splitShots = splitLongPromptIntoShots(shot.title.replace(/｜\d+$/, ""), shot.prompt, shot.ratio, Math.max(12, shot.duration));
-    if (splitShots.length <= 1) {
-      alert("这条分镜没有足够内容可拆分，请补充更完整的动作和台词，或使用 0-3秒/3-6秒 时间轴格式。");
-      return;
-    }
-    const response = await fetch("/api/shots", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ projectId: currentProjectId, replaceShotId: shot.id, shots: splitShots })
-    });
-    const result = await readApiJson(response, "拆分分镜失败");
-    if (!response.ok || result.code !== 0 || !Array.isArray(result.data)) {
-      setUserActionMessage(result.message || "拆分分镜失败");
-      return;
-    }
-    const savedShots = result.data as Shot[];
-    setState(prev => ({
-      ...prev,
-      shots: prev.shots.flatMap(item => item.id === shot.id ? savedShots : [item]),
-      tasks: prev.tasks.filter(task => task.shotId !== shot.id),
-      assets: prev.assets.filter(asset => asset.shotId !== shot.id)
-    }));
-    savedShots.forEach((item, index) => window.setTimeout(() => startGeneration(item.id, item), index * 800));
   }
 
   function generateShotOrSplit(shot: Shot) {
@@ -1313,28 +1244,6 @@ export default function Home() {
     }
   }
 
-  async function switchApiProfile(id: string) {
-    const target = apiProfiles.find(item => item.id === id);
-    if (!target) return alert("未找到这个模型渠道，请刷新后重试。");
-    try {
-      const response = await fetch("/api/api-profiles", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
-      const result = await readApiJson(response, "设置当前模型渠道失败");
-      if (!response.ok || result.code !== 0) throw new Error(result.message || "设置当前模型渠道失败");
-      const next = apiProfiles.map(item => ({ ...item, active: item.id === id }));
-      setApiProfiles(next);
-      setActiveApiProfileId(id);
-      loadApiProfileDraft(target);
-      setSelectedTextModel(target.textModels?.[0] || target.scriptModels?.[0] || selectedTextModel);
-      setSelectedVideoModel(target.videoModels[0] || selectedVideoModel);
-      setImageModel(target.imageModels[0] || imageModel);
-      writeApiProfiles(next);
-      window.localStorage.setItem(ACTIVE_API_PROFILE_STORAGE_KEY, id);
-      setUserActionMessage("配置已切换。");
-    } catch (error) {
-      setUserActionMessage(error instanceof Error ? error.message : "设置当前模型渠道失败");
-    }
-  }
-
   async function deleteApiProfile(id: string) {
     try {
       const response = await fetch(`/api/api-profiles?id=${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -1366,42 +1275,6 @@ export default function Home() {
     const result = await readApiJson(response, "素材记录保存失败");
     if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "素材记录保存失败。");
     return result.data as MaterialAsset;
-  }
-
-  async function addMaterialFromUrl() {
-    const url = materialUrl.trim();
-    if (!url) {
-      alert("请填写可访问的素材链接。");
-      return;
-    }
-    if (!isPublicMediaUrl(url)) {
-      setMaterialMessage("请输入上游可访问的公网 http/https URL；本机、局域网和相对路径只能用于预览。");
-      return;
-    }
-
-    const materialDraft: MaterialAsset = {
-      id: Date.now(),
-      name: materialName.trim() || "未命名素材",
-      url,
-      kind: materialKind,
-      role: materialRole,
-      previewUrl: url,
-      source: "link",
-      status: "ready",
-      scope: "project",
-      sourceProjectId: currentProjectId,
-      sourceProjectName: state.project.name,
-      createdBy: currentDisplayName
-    };
-
-    try {
-      const material = await saveMaterialRecord(materialDraft);
-      setState(prev => ({ ...prev, materials: [material, ...prev.materials] }));
-      setMaterialUrl("");
-      setMaterialMessage("URL 素材已加入当前项目，可作为参考素材使用。");
-    } catch (error) {
-      setMaterialMessage(error instanceof Error ? error.message : "URL 素材保存失败。");
-    }
   }
 
   async function uploadMaterialFile(file: File, options: { kind: "image" | "video" | "audio"; name?: string; scope?: "project" | "team" }) {
@@ -1566,7 +1439,6 @@ export default function Home() {
     setActiveSection("material-assets");
     setActiveAssetScope("project");
     setActiveAssetTab(kind);
-    setMaterialKind(kind);
     setMaterialRole(role);
     setReferencePickerRole(null);
     setFramePickerSlot(null);
@@ -1862,17 +1734,6 @@ export default function Home() {
     }
   }
 
-  function cleanupImportedBackendVideos() {
-    setState(prev => {
-      const importedProviderTaskIds = new Set(prev.tasks.filter(task => task.id.startsWith("imported-")).map(task => task.providerTaskId).filter(Boolean));
-      return {
-        ...prev,
-        tasks: prev.tasks.filter(task => !task.id.startsWith("imported-")),
-        assets: prev.assets.filter(asset => !asset.providerTaskId || !importedProviderTaskIds.has(asset.providerTaskId))
-      };
-    });
-  }
-
   async function refreshAllTaskStatuses() {
     const tasks = state.tasks.filter(task => !task.id.startsWith("imported-") && ["pending", "running"].includes(task.status));
     try {
@@ -1881,38 +1742,6 @@ export default function Home() {
     } catch (error) {
       setUserActionMessage(error instanceof Error ? error.message : "同步本页任务状态失败");
     }
-  }
-
-  async function deleteShot(shotId: number) {
-    if (!confirm("确定删除这条分镜及相关任务、资产吗？")) return;
-    try {
-      const params = new URLSearchParams({ projectId: String(currentProjectId), shotId: String(shotId) });
-      const response = await fetch(`/api/shots?${params.toString()}`, { method: "DELETE" });
-      const result = await readApiJson(response, "删除分镜失败");
-      if (!response.ok || result.code !== 0) throw new Error(result.message || "删除分镜失败");
-    } catch (error) {
-      setUserActionMessage(error instanceof Error ? error.message : "删除分镜关联任务失败");
-      return;
-    }
-    setState(prev => ({ ...prev, shots: prev.shots.filter(shot => shot.id !== shotId), tasks: prev.tasks.filter(task => task.shotId !== shotId), assets: prev.assets.filter(asset => asset.shotId !== shotId) }));
-  }
-
-  async function updateShotParams(shotId: number, patch: Partial<Pick<Shot, "ratio" | "duration" | "resolution" | "width" | "height">>) {
-    const current = state.shots.find(shot => shot.id === shotId);
-    if (!current) return;
-    setState(prev => ({ ...prev, shots: prev.shots.map(shot => shot.id === shotId ? { ...shot, ...patch } : shot) }));
-    const response = await fetch("/api/shots", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ projectId: currentProjectId, shotId, version: current.version || 1, ...patch })
-    });
-    const result = await readApiJson(response, "更新分镜失败");
-    if (!response.ok || result.code !== 0 || !result.data) {
-      setUserActionMessage(result.message || "更新分镜失败，请刷新后重试。");
-      if (result.data) setState(prev => ({ ...prev, shots: prev.shots.map(shot => shot.id === shotId ? result.data as Shot : shot) }));
-      return;
-    }
-    setState(prev => ({ ...prev, shots: prev.shots.map(shot => shot.id === shotId ? result.data as Shot : shot) }));
   }
 
   async function deleteTask(taskId: string) {
@@ -2022,17 +1851,6 @@ export default function Home() {
     setMaterialMessage("已恢复这张图片的提示词和尺寸，可调整后重新生成。");
   }
 
-  async function deleteVideoAsset(assetId: number) {
-    const params = new URLSearchParams({ projectId: String(currentProjectId), assetId: String(assetId) });
-    const response = await fetch(`/api/video-assets?${params.toString()}`, { method: "DELETE" });
-    const result = await readApiJson(response, "删除视频资产失败");
-    if (!response.ok || result.code !== 0) {
-      setUserActionMessage(result.message || "删除视频资产失败");
-      return;
-    }
-    setState(prev => ({ ...prev, assets: prev.assets.filter(asset => asset.id !== assetId) }));
-  }
-
   const filteredMaterials = state.materials.filter(material => {
     const typeMatched = activeAssetTab === "sd2" ? material.kind === "sd2" : material.kind === activeAssetTab;
     const keyword = projectMaterialSearch.trim().toLowerCase();
@@ -2046,8 +1864,6 @@ export default function Home() {
   const teamSharedMaterials = mergeMaterials(localTeamSharedMaterials, serverTeamMaterials);
   const hiddenAssetCount = Math.max(filteredMaterials.length - 5, 0);
   const visibleAssets = showAllAssets ? filteredMaterials : filteredMaterials.slice(0, 5);
-  const hiddenImageResultCount = Math.max(generatedImages.length - 5, 0);
-  const visibleImageResults = showAllImageResults ? generatedImages : generatedImages.slice(0, 5);
   const imageReferenceMaterial = state.materials.find(material => material.id === imageReferenceMaterialId && material.kind === "image");
   const sortedShots = [...state.shots].sort((a, b) => b.id - a.id);
   const recentWorkbenchShots = sortedShots.slice(0, 3);
@@ -2134,19 +1950,6 @@ export default function Home() {
     if (activeVideoModels.length && !activeVideoModels.includes(selectedVideoModel)) setSelectedVideoModel(activeVideoModels[0]);
     if (activeImageModels.length && !activeImageModels.includes(imageModel)) setImageModel(activeImageModels[0]);
   }, [activeApiProfileId, apiProfiles, activeTextModels, activeVideoModels, activeImageModels, selectedTextModel, selectedVideoModel, imageModel]);
-
-  function resetWorkspaceToBlank() {
-    if (!confirm("确定清空本地项目缓存并重置为空白项目吗？")) return;
-    const nextProjectStates = { [emptyProjectState.project.id]: emptyProjectState };
-    const nextProjects = [emptyProjectState.project];
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(workspaceCachePayload(emptyProjectState, nextProjectStates, nextProjects, emptyProjectState.project.id)));
-    setSelectedMaterialIds([]);
-    setGeneratedImages([]);
-    setProjectStates(nextProjectStates);
-    setProjects(nextProjects);
-    setCurrentProjectId(emptyProjectState.project.id);
-    setState(emptyProjectState);
-  }
 
   function openPromptDialog() {
     setPromptDraft(shotPrompt || "请基于当前剧本和分镜，生成一个适合视频生成的中文/英文提示词。");
@@ -2283,20 +2086,6 @@ export default function Home() {
     }
   }
 
-  function enrichShotPrompt() {
-    const text = shotPrompt.trim();
-    if (!text) {
-      alert("请先输入提示词，再使用全能参考润色。");
-      return;
-    }
-    setShotPrompt([
-      text,
-      "\n全能参考润色：真人写实短剧质感，电影级布光，镜头运动自然，人物表情细腻，动作连贯完整。",
-      "画面要求：保持提示词中 @人物/素材 对应关系一致，参考素材中的脸型、发型、服装、年龄感和气质不要变化。",
-      "生成要求：不要新增无关人物和场景，不要生成字幕，节奏适合短视频叙事，画面清晰稳定。"
-    ].join("\n"));
-  }
-
   function shotSizeForRatio(ratio: string): Pick<Shot, "width" | "height"> {
     const sizeMap: Record<string, Pick<Shot, "width" | "height">> = {
       "16:9 横屏": { width: 1280, height: 720 },
@@ -2311,78 +2100,9 @@ export default function Home() {
 
   function updateImageRatio(ratio: AspectRatio) {
     setImageRatio(ratio);
-    const sizes: Record<AspectRatio, [number, number]> = {
-      "1:1": [1024, 1024],
-      "3:2": [1216, 832],
-      "2:3": [832, 1216],
-      "4:3": [1152, 896],
-      "3:4": [896, 1152],
-      "16:9": [1344, 768],
-      "9:16": [768, 1344],
-      auto: [1024, 1024]
-    };
-    const [width, height] = sizes[ratio];
+    const [width, height] = imageSizeForRatio(ratio);
     setImageWidth(width);
     setImageHeight(height);
-  }
-
-  function stopImageTaskPolling() {
-    if (imageTaskPollTimerRef.current) window.clearTimeout(imageTaskPollTimerRef.current);
-    imageTaskPollTimerRef.current = null;
-    activeImageTaskIdRef.current = null;
-    setIsImageGenerating(false);
-  }
-
-  function applyCompletedImageTask(task: ImageGenerationTask, projectId: number) {
-    if (currentProjectIdRef.current !== projectId) return stopImageTaskPolling();
-    const savedImages = Array.isArray(task.materials) ? task.materials : [];
-    setGeneratedImages(prev => mergeMaterials(prev, savedImages));
-    setState(prev => ({ ...prev, materials: mergeMaterials(prev.materials, savedImages) }));
-    setActiveAssetTab("image");
-    setActiveAssetScope("project");
-    const generationReadyCount = savedImages.filter(image => materialApiUrl(image)).length;
-    setMaterialMessage(generationReadyCount
-      ? `已生成 ${savedImages.length} 张图片，并保存到当前项目素材库。`
-      : `已生成 ${savedImages.length} 张图片并保存，可本地预览；当前开发环境没有公网素材地址，暂不能作为视频参考。`);
-    stopImageTaskPolling();
-  }
-
-  async function pollImageTask(taskId: string, projectId: number, attempt = 0) {
-    if (currentProjectIdRef.current !== projectId || activeImageTaskIdRef.current !== taskId) return;
-    try {
-      const response = await fetch(`/api/image-tasks?projectId=${projectId}&id=${encodeURIComponent(taskId)}`);
-      const result = await readApiJson(response, "同步生图任务失败");
-      if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "同步生图任务失败");
-      const task = result.data as ImageGenerationTask;
-      if (activeImageTaskIdRef.current !== task.id) return;
-      if (task.status === "done") return applyCompletedImageTask(task, projectId);
-      if (task.status === "failed") {
-        setGeneratedImages([]);
-        setMaterialMessage(task.error || "图片生成失败，请检查渠道后重试。");
-        return stopImageTaskPolling();
-      }
-      setMaterialMessage(task.status === "pending" ? "生图任务已排队，等待后台处理..." : "图片正在后台生成，离开页面或刷新不会中断任务...");
-      imageTaskPollTimerRef.current = window.setTimeout(() => pollImageTask(taskId, projectId, attempt + 1), 2000);
-    } catch (error) {
-      if (attempt >= 120) {
-        setMaterialMessage("生图任务仍在后台处理，但状态同步暂时不可用。请稍后刷新素材库查看结果。");
-        return stopImageTaskPolling();
-      }
-      setMaterialMessage(error instanceof Error ? `生图状态暂未同步：${error.message}` : "生图状态暂未同步，正在重试...");
-      imageTaskPollTimerRef.current = window.setTimeout(() => pollImageTask(taskId, projectId, attempt + 1), Math.min(10000, 2500 + attempt * 250));
-    }
-  }
-
-  function beginImageTaskPolling(task: ImageGenerationTask, projectId: number) {
-    if (imageTaskPollTimerRef.current) window.clearTimeout(imageTaskPollTimerRef.current);
-    activeImageTaskIdRef.current = task.id;
-    setIsImageGenerating(true);
-    if (task.status === "done") return applyCompletedImageTask(task, projectId);
-    if (task.status === "failed") {
-      setMaterialMessage(task.error || "图片生成失败，请检查渠道后重试。");
-      return stopImageTaskPolling();
-    }
-    void pollImageTask(task.id, projectId);
   }
 
   async function generateImages() {
@@ -2390,36 +2110,13 @@ export default function Home() {
       alert("请先填写生图提示词。");
       return;
     }
-    if (isImageGenerating || activeImageTaskIdRef.current) return;
-    const taskProjectId = currentProjectId;
-    setIsImageGenerating(true);
-    setMaterialMessage("正在提交生图任务...");
-    try {
-      const response = await fetch("/api/image-tasks", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: imageModel,
-          prompt: imageWorkbenchPrompt,
-          size: `${imageWidth}x${imageHeight}`,
-          n: imageCount,
-          projectId: currentProjectId,
-          referenceMaterialId: imageReferenceMaterialId || undefined
-        })
-      });
-      const result = await readApiJson(response, "图片生成失败");
-      if (response.status === 409 && result.data?.id) {
-        beginImageTaskPolling(result.data as ImageGenerationTask, taskProjectId);
-        setMaterialMessage("当前项目已有生图任务，已恢复状态同步。");
-        return;
-      }
-      if (!response.ok || result.code !== 0 || !result.data?.id) throw new Error(result.message || "图片生成任务创建失败");
-      beginImageTaskPolling(result.data as ImageGenerationTask, taskProjectId);
-      setMaterialMessage("生图任务已提交，正在后台处理。刷新页面不会中断任务。");
-    } catch (error) {
-      setMaterialMessage(error instanceof Error ? error.message : "图片生成失败");
-      stopImageTaskPolling();
-    }
+    await submitImageTask({
+      model: imageModel,
+      prompt: imageWorkbenchPrompt,
+      size: `${imageWidth}x${imageHeight}`,
+      count: imageCount,
+      referenceMaterialId: imageReferenceMaterialId || undefined
+    });
   }
 
   function openImageReferencePicker() {
@@ -2718,16 +2415,33 @@ export default function Home() {
           </div>
         </section>
 
-        <section id="image-workbench" className="image-workbench card" style={sectionStyle("image-workbench")}>
-          <div className="image-head"><div><h2>生图工作台</h2><p className="muted">填写提示词、选择模型与尺寸，生成图片素材后可用于视频生成参考。</p></div></div>
-          <div className="image-form-block"><label>提示词</label><div className="image-prompt-tools"><button className="btn-ghost btn-small" onClick={() => setImageWorkbenchPrompt(shotPrompt)}>复用当前分镜提示词</button><button className="btn-ghost btn-small" onClick={() => setImageWorkbenchPrompt("电影感角色参考图，精致五官，统一服装设定，干净背景，适合短剧分镜制作")}>套用示例</button></div><textarea className="image-prompt" value={imageWorkbenchPrompt} onChange={event => setImageWorkbenchPrompt(event.target.value)} placeholder="描述画面主体、风格、构图、光线和用途" /></div>
-          <div className="image-form-block"><label>参考图</label><div className={`reference-box ${imageReferenceMaterial ? "has-reference" : ""}`}>{imageReferenceMaterial ? <div className="image-reference-selection">{materialPreviewUrl(imageReferenceMaterial) ? <img src={materialPreviewUrl(imageReferenceMaterial)} alt={imageReferenceMaterial.name} /> : <span>图片</span>}<div><strong>{imageReferenceMaterial.name}</strong><small>将作为本次生图参考</small></div></div> : <span>未选择参考图，将使用纯文本生图</span>}<button className="btn-ghost btn-small" onClick={openImageReferencePicker}>{imageReferenceMaterial ? "更换参考图" : "去素材库选择"}</button>{imageReferenceMaterial && <button className="btn-ghost btn-small" onClick={() => setImageReferenceMaterialId(null)}>移除</button>}</div></div>
-          <div className="image-settings-grid"><div><label>模型</label><select value={imageModel} onChange={event => setImageModel(event.target.value)}>{activeImageModels.map(model => <option key={model} value={model}>{model}</option>)}</select></div><div><label>质量</label><div className="segmented">{(["auto", "high", "medium", "low"] as ImageQuality[]).map(item => <button key={item} className={imageQuality === item ? "active" : ""} onClick={() => setImageQuality(item)}>{item === "auto" ? "自动" : item === "high" ? "高" : item === "medium" ? "中" : "低"}</button>)}</div></div><div><label>尺寸</label><div className="size-row"><input type="number" value={imageWidth} onChange={event => setImageWidth(Number(event.target.value))} /><span>×</span><input type="number" value={imageHeight} onChange={event => setImageHeight(Number(event.target.value))} /></div></div></div>
-          <div className="image-form-block"><label>宽高比</label><div className="ratio-grid">{(["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16", "auto"] as AspectRatio[]).map(item => <button key={item} className={imageRatio === item ? "active" : ""} onClick={() => updateImageRatio(item)}><span className="ratio-icon">▭</span>{item}</button>)}</div></div>
-          <div className="image-form-block"><label>生成张数</label><div className="count-grid">{[1,2,3,4,5,6,7,8,9,10].map(count => <button key={count} className={imageCount === count ? "active" : ""} onClick={() => setImageCount(count)}>{count} 张</button>)}</div></div>
-          <button className="btn-primary image-generate" disabled={isImageGenerating} onClick={generateImages}>{isImageGenerating ? "生成中..." : "开始生成"}</button>
-          <div className="image-results"><h2>生成结果</h2>{visibleImageResults.length ? <div className="material-grid">{visibleImageResults.map(item => <div className="material-card" key={item.id}><div className="material-preview" onClick={event => openMaterialPreview(event, item)}>{item.previewUrl ? <img src={item.previewUrl} alt={item.name} /> : <span>图片</span>}</div><strong>{item.name}</strong><p className="muted">{item.width && item.height ? `${item.width}x${item.height}` : imageRatio}</p><div className="task-video-actions"><span className="reviewed-badge">已入素材库</span><button className="btn-ghost btn-small" onClick={() => reuseGeneratedImage(item)}>复用参数</button></div></div>)}</div> : <div className="empty-result"><div className="empty-ico">▧</div><strong>还没有生成图片</strong><p className="muted">填写提示词并点击“开始生成”，成功后会自动保存到素材库。</p></div>}{hiddenImageResultCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllImageResults(prev => !prev)}>{showAllImageResults ? "收起" : `展开全部 ${hiddenImageResultCount}`}</button>}</div>
-        </section>
+        <ImageWorkbench
+          active={activeSection === "image-workbench"}
+          prompt={imageWorkbenchPrompt}
+          shotPrompt={shotPrompt}
+          models={activeImageModels}
+          model={imageModel}
+          quality={imageQuality}
+          width={imageWidth}
+          height={imageHeight}
+          ratio={imageRatio}
+          count={imageCount}
+          referenceMaterial={imageReferenceMaterial}
+          referencePreviewUrl={imageReferenceMaterial ? materialPreviewUrl(imageReferenceMaterial) : undefined}
+          generatedImages={generatedImages}
+          isGenerating={isImageGenerating}
+          onPromptChange={setImageWorkbenchPrompt}
+          onModelChange={setImageModel}
+          onQualityChange={setImageQuality}
+          onSizeChange={(width, height) => { setImageWidth(width); setImageHeight(height); }}
+          onRatioChange={updateImageRatio}
+          onCountChange={setImageCount}
+          onOpenReferencePicker={openImageReferencePicker}
+          onRemoveReference={() => setImageReferenceMaterialId(null)}
+          onGenerate={generateImages}
+          onPreview={setPreviewingMaterial}
+          onReuse={reuseGeneratedImage}
+        />
 
         <div style={sectionStyle("material-assets")}>
         <section className="card asset-dynamic-workspace">
@@ -2748,7 +2462,7 @@ export default function Home() {
               ["audio", "音频"],
               ["sd2", "提示词"]
             ] as const).map(([key, label]) => (
-              <button key={key} className={activeAssetTab === key ? "active" : ""} onClick={() => { setActiveAssetTab(key); if (key !== "sd2") { setMaterialKind(key); setMaterialRole(key === "image" ? "reference_image" : key === "video" ? "reference_video" : "reference_audio"); } }}>{label}</button>
+              <button key={key} className={activeAssetTab === key ? "active" : ""} onClick={() => { setActiveAssetTab(key); if (key !== "sd2") setMaterialRole(key === "image" ? "reference_image" : key === "video" ? "reference_video" : "reference_audio"); }}>{label}</button>
             ))}
           </div>}
           {activeAssetScope === "project" && <div className="asset-filterbar">

@@ -5,6 +5,7 @@ const baseUrl = (process.env.PRODUCTION_BASE_URL || "").replace(/\/$/, "");
 const account = process.env.PRODUCTION_SMOKE_ACCOUNT || "";
 const password = process.env.PRODUCTION_SMOKE_PASSWORD || "";
 const screenshotPath = process.env.BROWSER_SMOKE_SCREENSHOT || "";
+const imageScreenshotPath = process.env.BROWSER_SMOKE_IMAGE_SCREENSHOT || "";
 const executableCandidates = [
   process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE,
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -63,6 +64,15 @@ try {
   await projectCards.first().getByRole("button", { name: /进入概览/ }).click();
   await page.locator("#overview h1").filter({ hasText: firstProjectName }).waitFor({ state: "visible", timeout: 30000 });
 
+  await page.getByRole("button", { name: /生图工作台/ }).first().click();
+  await page.locator("#image-workbench .image-head h2", { hasText: "生图工作台" }).waitFor({ state: "visible", timeout: 30000 });
+  await page.locator("#image-workbench textarea.image-prompt").waitFor({ state: "visible" });
+  await page.locator("#image-workbench .image-settings-grid select").waitFor({ state: "visible" });
+  await page.locator("#image-workbench .size-row input").first().waitFor({ state: "visible" });
+  await page.locator("#image-workbench button.image-generate").waitFor({ state: "visible" });
+  if (imageScreenshotPath) await page.screenshot({ path: imageScreenshotPath, fullPage: true });
+  console.error("[browser-smoke] image workbench visible");
+
   await page.getByRole("button", { name: /素材库/ }).first().click();
   await page.locator(".asset-workspace-head h2", { hasText: "素材库" }).waitFor({ state: "visible", timeout: 30000 });
   const visibleMaterialCards = await page.locator(".material-card:visible").count();
@@ -76,7 +86,7 @@ try {
 
   if (screenshotPath) await page.screenshot({ path: screenshotPath, fullPage: true });
   assert(pageErrors.length === 0, `Browser page errors: ${pageErrors.join(" | ")}`);
-  console.log(JSON.stringify({ ok: true, projectCount, firstProjectName, visibleMaterialCards, taskRows, freshBrowserContext: true, screenshotPath: screenshotPath || undefined }));
+  console.log(JSON.stringify({ ok: true, projectCount, firstProjectName, imageWorkbenchReady: true, visibleMaterialCards, taskRows, freshBrowserContext: true, screenshotPath: screenshotPath || undefined, imageScreenshotPath: imageScreenshotPath || undefined }));
 } catch (error) {
   if (screenshotPath) await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
   throw error;

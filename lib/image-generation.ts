@@ -231,7 +231,7 @@ export async function generateAndPersistImages(actor: ImageGenerationActor, rawI
       }
     })));
     return { materials: materials.map(publicMaterial), model, prompt: input.prompt, size: input.size, referenceMaterialId: input.referenceMaterialId };
-  } catch (error) {
+  } catch {
     await Promise.all(readyImages.map(image => removeStoredMaterialFile(storedMaterialPathForUrl(image.previewUrl, input.projectId)).catch(() => false)));
     throw new ImageGenerationError(500, "图片已经生成，但保存到素材库失败，请稍后重试。", "persist_material");
   }
