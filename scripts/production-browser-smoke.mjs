@@ -80,13 +80,23 @@ try {
 
   await page.getByRole("button", { name: /生成记录/ }).first().click();
   await page.locator("h2#tasks", { hasText: "生成记录" }).waitFor({ state: "visible", timeout: 30000 });
-  const taskRows = await page.locator("h2#tasks").locator("xpath=following::table[1]/tbody/tr").count();
+  const taskTableRows = page.locator("h2#tasks").locator("xpath=following::table[1]/tbody/tr");
+  const completedTab = page.locator(".record-filter-tabs button").filter({ hasText: "已完成" });
+  const allTab = page.locator(".record-filter-tabs button").filter({ hasText: "全部" });
+  const completedCount = Number((await completedTab.locator("span").textContent()) || 0);
+  await completedTab.click();
+  assert((await completedTab.getAttribute("class"))?.includes("active"), "Completed task filter did not become active.");
+  const completedRows = await taskTableRows.count();
+  assert(completedCount === 0 || completedRows === Math.min(completedCount, 5), `Completed task rows did not match the filter count: ${completedRows}/${completedCount}.`);
+  await allTab.click();
+  assert((await allTab.getAttribute("class"))?.includes("active"), "All task filter did not become active.");
+  const taskRows = await taskTableRows.count();
   assert(taskRows > 0, "The generation record table had no result or empty-state row.");
   console.error(`[browser-smoke] task rows visible: ${taskRows}`);
 
   if (screenshotPath) await page.screenshot({ path: screenshotPath, fullPage: true });
   assert(pageErrors.length === 0, `Browser page errors: ${pageErrors.join(" | ")}`);
-  console.log(JSON.stringify({ ok: true, projectCount, firstProjectName, imageWorkbenchReady: true, visibleMaterialCards, taskRows, freshBrowserContext: true, screenshotPath: screenshotPath || undefined, imageScreenshotPath: imageScreenshotPath || undefined }));
+  console.log(JSON.stringify({ ok: true, projectCount, firstProjectName, imageWorkbenchReady: true, visibleMaterialCards, taskRows, taskFilterReady: true, freshBrowserContext: true, screenshotPath: screenshotPath || undefined, imageScreenshotPath: imageScreenshotPath || undefined }));
 } catch (error) {
   if (screenshotPath) await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
   throw error;

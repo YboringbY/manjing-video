@@ -4,6 +4,7 @@ import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "re
 import { ProjectListSection } from "./components/ProjectListSection";
 import { ProjectOverviewSection } from "./components/ProjectOverviewSection";
 import { ImageWorkbench } from "./components/ImageWorkbench";
+import { GenerationRecordsSection } from "./components/GenerationRecordsSection";
 import { Sidebar } from "./components/Sidebar";
 import { LoginPage } from "./components/LoginPage";
 import { MembersSection } from "./components/MembersSection";
@@ -45,7 +46,6 @@ type AuditLogEntry = {
   metadata?: Record<string, unknown> | null;
   createdAt: string;
 };
-type TaskRecordFilter = "all" | "running" | "done" | "failed";
 type WorkbenchDropTarget = "prompt" | "first" | "last";
 
 const STORAGE_KEY = "manjing-video-mvp";
@@ -102,16 +102,6 @@ function normalizeAppState(value: Partial<AppState> | undefined, fallback: AppSt
     materials: Array.isArray(value?.materials) ? value.materials : [],
     assetGroupId: value?.assetGroupId
   };
-}
-
-function proxiedVideoUrl(url?: string, download = false, taskId?: string, profile?: Pick<ApiProfile, "id">) {
-  if (!url && !taskId) return "";
-  const params = new URLSearchParams();
-  if (url) params.set("url", url);
-  if (taskId) params.set("task_id", taskId);
-  if (profile?.id) params.set("profile_id", profile.id);
-  if (download) params.set("download", "1");
-  return `/api/video-files?${params.toString()}`;
 }
 
 function isHttpVideoUrl(value?: string): value is string {
@@ -330,8 +320,6 @@ export default function Home() {
   const [scriptEpisodeSplit, setScriptEpisodeSplit] = useState("");
   const [scriptOptimizationNote, setScriptOptimizationNote] = useState("");
   const [showAllAssets, setShowAllAssets] = useState(false);
-  const [showAllTasks, setShowAllTasks] = useState(false);
-  const [taskRecordFilter, setTaskRecordFilter] = useState<TaskRecordFilter>("all");
   const [showAllTeamMaterials, setShowAllTeamMaterials] = useState(false);
   const [memberRoleDraft, setMemberRoleDraft] = useState<MemberRole>("user");
   const [memberAccountDraft, setMemberAccountDraft] = useState("");
@@ -1821,12 +1809,6 @@ export default function Home() {
     });
   }
 
-  function taskSnapshotText(task: VideoTask) {
-    const snapshot = task.snapshot;
-    if (!snapshot) return "历史任务未记录完整参数";
-    return `${snapshot.duration}s / ${snapshot.ratio.split(" ")[0]} / ${snapshot.resolution || "720p"}`;
-  }
-
   async function submitTaskFeedback(task: VideoTask, rating: "satisfied" | "unsatisfied") {
     const feedback = window.prompt(rating === "satisfied" ? "可选：记录这条视频表现好的地方" : "请简要记录需要改进的地方", task.feedback || "");
     if (feedback === null) return;
@@ -1867,24 +1849,6 @@ export default function Home() {
   const imageReferenceMaterial = state.materials.find(material => material.id === imageReferenceMaterialId && material.kind === "image");
   const sortedShots = [...state.shots].sort((a, b) => b.id - a.id);
   const recentWorkbenchShots = sortedShots.slice(0, 3);
-  const sortedTasks = [...state.tasks].sort((a, b) => {
-    const createdDiff = Date.parse(b.createdAt || "") - Date.parse(a.createdAt || "");
-    if (Number.isFinite(createdDiff) && createdDiff !== 0) return createdDiff;
-    return b.id.localeCompare(a.id);
-  });
-  const taskRecordTabs: Array<[TaskRecordFilter, string, number]> = [
-    ["all", "全部", sortedTasks.length],
-    ["running", "生成中", sortedTasks.filter(task => task.status === "running" || task.status === "pending").length],
-    ["done", "已完成", sortedTasks.filter(task => task.status === "done").length],
-    ["failed", "失败", sortedTasks.filter(task => task.status === "failed").length]
-  ];
-  const filteredTasks = sortedTasks.filter(task => {
-    if (taskRecordFilter === "all") return true;
-    if (taskRecordFilter === "running") return task.status === "running" || task.status === "pending";
-    return task.status === taskRecordFilter;
-  });
-  const hiddenTaskCount = Math.max(filteredTasks.length - 5, 0);
-  const visibleTasks = showAllTasks ? filteredTasks : filteredTasks.slice(0, 5);
   const selectedProjectReferences = state.materials.filter(item => selectedMaterialIds.includes(item.id));
   const usableProjectReferences = selectedProjectReferences.filter(item => materialApiUrl(item));
   const localOnlyReferences = selectedProjectReferences.filter(item => !materialApiUrl(item));
@@ -2533,55 +2497,17 @@ export default function Home() {
         </section>}
         </div>
 
-        <div style={sectionStyle("tasks")}>
-          <div className="card-title-row"><div><h2 id="tasks">生成记录</h2><p className="muted">统一管理所有视频生成任务；最新任务始终在最前面，成功结果可直接预览和下载。</p></div><button className="btn-primary btn-small" onClick={refreshAllTaskStatuses}>同步任务状态</button></div>
-          <section className="card">
-            <div className="task-head">
-              <div className="record-filter-tabs">
-                {taskRecordTabs.map(([key, label, count]) => <button key={key} className={taskRecordFilter === key ? "active" : ""} onClick={() => { setTaskRecordFilter(key); setShowAllTasks(false); }}>{label}<span>{count}</span></button>)}
-              </div>
-              <p className="muted">默认展示最近 5 个任务；完成后可直接预览、下载或用同一组参数重新生成。</p>
-            </div>
-            <div className="table-wrap">
-              <table className="table">
-                <thead><tr><th>提交时间</th><th>关联分镜</th><th>参数</th><th>进度</th><th>结果</th><th>操作</th></tr></thead>
-                <tbody>
-                  {visibleTasks.length ? visibleTasks.map(task => {
-                    const taskAsset = state.assets.find(asset => asset.shotId === task.shotId && isHttpVideoUrl(asset.videoUrl));
-                    const taskVideoUrl = task.videoUrl || taskAsset?.videoUrl;
-                    const taskVideoId = taskAsset?.providerTaskId || task.providerTaskId;
-                    const canRegenerate = task.status !== "running";
-                    return (
-                      <tr key={task.id}>
-                        <td><div>{task.createdAt ? new Date(task.createdAt).toLocaleString() : "历史记录"}</div><small className="muted">{task.id}</small></td>
-                        <td>
-                          <div>#{String(task.shotId).padStart(2, "0")} {task.shotTitle}</div>
-                          <small className="muted">{taskSnapshotText(task)}</small>
-                        </td>
-                        <td>{task.provider}</td>
-                        <td>{taskStatusTag(task.status)}</td>
-                        <td>
-                          {task.result}
-                          {taskVideoUrl && <div className="task-result-video"><video src={proxiedVideoUrl(taskVideoUrl, false, taskVideoId, task.apiProfile || activeApiProfile)} controls preload="metadata" /><div className="task-video-actions"><a href={proxiedVideoUrl(taskVideoUrl, false, taskVideoId, task.apiProfile || activeApiProfile)} target="_blank" rel="noreferrer">新窗口打开</a><a href={proxiedVideoUrl(taskVideoUrl, true, taskVideoId, task.apiProfile || activeApiProfile)}>下载视频</a></div></div>}
-                        </td>
-                        <td>
-                          <div className="task-row-actions">
-                            <button className="btn-ghost btn-small" onClick={() => rerunTask(task)} disabled={!canRegenerate}>直接重新生成</button>
-                            <button className="btn-ghost btn-small" onClick={() => editRegeneration(task)} disabled={!canRegenerate}>编辑后重新生成</button>
-                            {task.status === "done" && <button className={`btn-ghost btn-small ${task.rating === "satisfied" ? "active" : ""}`} onClick={() => submitTaskFeedback(task, "satisfied")}>满意</button>}
-                            {task.status === "done" && <button className={`btn-ghost btn-small ${task.rating === "unsatisfied" ? "active" : ""}`} onClick={() => submitTaskFeedback(task, "unsatisfied")}>需改进</button>}
-                            <button className="btn-danger btn-small" onClick={() => deleteTask(task.id)} disabled={task.status === "running" || task.status === "pending"}>删除</button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  }) : <tr><td colSpan={6}><div className="empty">{taskRecordFilter === "all" ? "暂无生成记录。请先到视频工作台提交任务。" : "当前筛选下暂无生成记录。"}</div></td></tr>}
-                </tbody>
-              </table>
-            </div>
-            {hiddenTaskCount > 0 && <button className="collapse-toggle" onClick={() => setShowAllTasks(prev => !prev)}>{showAllTasks ? "收起" : `展开全部 ${hiddenTaskCount}`}</button>}
-          </section>
-        </div>
+        <GenerationRecordsSection
+          active={activeSection === "tasks"}
+          tasks={state.tasks}
+          assets={state.assets}
+          activeApiProfile={activeApiProfile}
+          onRefresh={refreshAllTaskStatuses}
+          onRerun={rerunTask}
+          onEdit={editRegeneration}
+          onFeedback={submitTaskFeedback}
+          onDelete={deleteTask}
+        />
 
       </main>
 

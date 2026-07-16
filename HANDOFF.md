@@ -2,15 +2,22 @@
 
 更新时间：2026-07-16
 
-## 2026-07-16 P1 生图前端拆分（本地完成，未部署）
+## 稳定版本前的开发流程决策
+
+- 继续使用本地 `lint / unit / TypeScript / core API / build / browser smoke` 质量门禁，生产部署继续要求用户明确批准并由安全部署脚本执行。
+- 稳定版本确认前不引入 GitHub Actions，不启用 push-to-deploy；稳定后把现有命令迁入 GitHub CI，生产 CD 仍保留人工审批。
+- P1 按单模块小批次拆分，每批完成全量本地回归后再评估发布，不把高风险生产维护混入代码优化。
+
+## 2026-07-16 P1 前端模块拆分（本地完成，未部署）
 
 - 当前生产业务代码为 `a5b04db`，发布记录为 `b331423`；生产 PM2 online，20 条 migration 一致，最近一次登录态 HTTP smoke 和全新浏览器 smoke 均通过。
 - 生图任务的恢复、提交、轮询、退避重试、项目切换和登出清理已提取到 `app/hooks/useImageGenerationTask.ts`；失败任务不再清空既有成功图片列表。
 - 生图表单和结果展示已提取到 `app/components/ImageWorkbench.tsx`；比例尺寸、任务文案和素材去重移到可测试的 `lib/image-workbench.ts`。
-- `app/page.tsx` 从 2890 行降到 2607 行，并删除 11 个没有任何调用入口的旧函数；API 合约、Prisma schema 和生产数据均未改动。
+- 生成记录已提取到 `app/components/GenerationRecordsSection.tsx`；排序、筛选、计数、参数摘要和视频代理链接移到 `lib/generation-records.ts`。
+- `app/page.tsx` 从 2890 行降到 2530 行，并删除 11 个没有任何调用入口的旧函数；API 合约、Prisma schema 和生产数据均未改动。
 - `npm run lint` 已切换为 ESLint CLI 且达到 0 错误、0 警告；新增 `npm run test:unit` 和 `npm run test:quality`，开发依赖精确固定到兼容 Node 18.20.8 的版本。
-- 浏览器 smoke 新增生图工作台只读检查，确认提示词、模型、尺寸和生成按钮可见，不发起付费生成。
-- 本地 lint、5 项单元测试、TypeScript、核心 API 集成、生产构建、生产依赖审计和全新浏览器 smoke 均通过；5050 已用本轮代码重新启动。
+- 浏览器 smoke 新增生图工作台只读检查，以及生成记录“已完成/全部”筛选与行数核对；不发起付费生成。
+- 本地 lint、9 项单元测试、TypeScript、核心 API 集成、生产构建、生产依赖审计和全新浏览器 smoke 均通过；5050 已用本轮代码重新启动。
 - 本轮不修改 Prisma schema、不执行生产数据修复、不调整 Nginx，也不恢复历史 5 张孤立生图；生产部署需单独确认。
 
 ## 2026-07-16 P0 稳定性优化生产发布
