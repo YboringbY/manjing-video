@@ -71,6 +71,16 @@ try {
   await projectCards.first().getByRole("button", { name: /进入概览/ }).click();
   await page.locator("#overview h1").filter({ hasText: firstProjectName }).waitFor({ state: "visible", timeout: 30000 });
 
+  await page.getByRole("button", { name: /视频工作台/ }).first().click();
+  const videoWorkbench = page.locator("#shots:visible");
+  await videoWorkbench.getByRole("heading", { name: "视频工作台" }).waitFor({ state: "visible", timeout: 30000 });
+  await videoWorkbench.locator("textarea.video-prompt-editor").waitFor({ state: "visible" });
+  assert(await videoWorkbench.locator(".video-settings-grid select").count() >= 4, "Video workbench generation controls were incomplete.");
+  const videoGenerateButton = videoWorkbench.getByRole("button", { name: "开始生成" });
+  await videoGenerateButton.waitFor({ state: "visible" });
+  assert(!(await videoGenerateButton.isDisabled()), "Video generate button was unexpectedly disabled before submission.");
+  console.error("[browser-smoke] video workbench visible");
+
   await page.getByRole("button", { name: /生图工作台/ }).first().click();
   await page.locator("#image-workbench .image-head h2", { hasText: "生图工作台" }).waitFor({ state: "visible", timeout: 30000 });
   await page.locator("#image-workbench textarea.image-prompt").waitFor({ state: "visible" });
@@ -115,7 +125,7 @@ try {
 
   if (screenshotPath) await page.screenshot({ path: screenshotPath, fullPage: true });
   assert(pageErrors.length === 0, `Browser page errors: ${pageErrors.join(" | ")}`);
-  console.log(JSON.stringify({ ok: true, projectCount, firstProjectName, imageWorkbenchReady: true, projectMaterialCount, sharedMaterialCount, visibleMaterialCards, materialScopeTabsReady: true, taskRows, taskFilterReady: true, filingReady: true, freshBrowserContext: true, viewport: { width: viewportWidth, height: viewportHeight }, screenshotPath: screenshotPath || undefined, imageScreenshotPath: imageScreenshotPath || undefined, loginScreenshotPath: loginScreenshotPath || undefined }));
+  console.log(JSON.stringify({ ok: true, projectCount, firstProjectName, videoWorkbenchReady: true, imageWorkbenchReady: true, projectMaterialCount, sharedMaterialCount, visibleMaterialCards, materialScopeTabsReady: true, taskRows, taskFilterReady: true, filingReady: true, freshBrowserContext: true, viewport: { width: viewportWidth, height: viewportHeight }, screenshotPath: screenshotPath || undefined, imageScreenshotPath: imageScreenshotPath || undefined, loginScreenshotPath: loginScreenshotPath || undefined }));
 } catch (error) {
   if (screenshotPath) await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
   throw error;

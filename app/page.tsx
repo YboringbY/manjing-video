@@ -11,11 +11,13 @@ import { Sidebar } from "./components/Sidebar";
 import { LoginPage } from "./components/LoginPage";
 import { MembersSection } from "./components/MembersSection";
 import { AuditLogsSection } from "./components/AuditLogsSection";
-import { ApiProfile, AppState, AspectRatio, ImageQuality, MaterialAsset, MaterialKind, MaterialRole, MemberRole, ProfileSection, Project, ProjectStates, Shot, ShotStatus, TaskStatus, VideoAsset, VideoTask, VideoTaskSnapshot, WorkspaceSection } from "./components/types";
+import { ApiProfile, AppState, AspectRatio, ImageQuality, MaterialAsset, MaterialKind, MaterialRole, MemberRole, ProfileSection, Project, ProjectStates, Shot, ShotStatus, TaskStatus, VideoTask, VideoTaskSnapshot, WorkspaceSection } from "./components/types";
 import { useImageGenerationTask } from "./hooks/useImageGenerationTask";
+import { useVideoGenerationTask } from "./hooks/useVideoGenerationTask";
 import { imageSizeForRatio, mergeMaterials } from "@/lib/image-workbench";
 import { isSmallVideoReferenceImage, materialApiUrl, materialDimensionText, materialPreviewUrl, MIN_VIDEO_REFERENCE_IMAGE_SIDE } from "@/lib/material-library";
 import { isPublicMediaUrl } from "@/lib/media-url";
+import { isHttpVideoUrl } from "@/lib/video-task-client";
 
 type AuthUser = {
   id: string;
@@ -106,25 +108,10 @@ function normalizeAppState(value: Partial<AppState> | undefined, fallback: AppSt
   };
 }
 
-function isHttpVideoUrl(value?: string): value is string {
-  if (!value) return false;
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
   function taskStatusTag(status: TaskStatus) {
   const map = { pending: ["pending", "等待生成"], running: ["running", "生成中"], done: ["done", "完成"], failed: ["pending", "失败"] } as const;
   const [className, text] = map[status];
   return <span className={`tag ${className}`}>{text}</span>;
-}
-
-function randomGradient() {
-  const gradients = ["linear-gradient(135deg,#14213d,#0f9f7a)", "linear-gradient(135deg,#312e81,#0ea5e9)", "linear-gradient(135deg,#431407,#f97316)", "linear-gradient(135deg,#4c1d95,#ec4899)", "linear-gradient(135deg,#064e3b,#84cc16)"];
-  return gradients[Math.floor(Math.random() * gradients.length)];
 }
 
 function projectStatesFromWorkspaces(workspaces: WorkspaceRecord[]) {
@@ -247,8 +234,6 @@ export default function Home() {
   currentProjectIdRef.current = currentProjectId;
   workspaceStateRef.current = state;
   const workspaceUpdatedAtRef = useRef<Record<number, string>>({});
-  const generationPollTimersRef = useRef<Record<string, number>>({});
-  const videoSubmissionInFlightRef = useRef(false);
   const [storageReady, setStorageReady] = useState(false);
   const [activeSection, setActiveSection] = useState<WorkspaceSection>("overview");
   const [projectModalOpen, setProjectModalOpen] = useState(false);
@@ -268,7 +253,6 @@ export default function Home() {
   const [shotRatio, setShotRatio] = useState("9:16 竖屏短剧");
   const [shotDuration, setShotDuration] = useState(5);
   const [shotResolution, setShotResolution] = useState<Shot["resolution"]>("720p");
-  const [isVideoSubmitting, setIsVideoSubmitting] = useState(false);
   const [selectedMaterialIds, setSelectedMaterialIds] = useState<number[]>([]);
   const [firstFrameMaterialId, setFirstFrameMaterialId] = useState<number | null>(null);
   const [lastFrameMaterialId, setLastFrameMaterialId] = useState<number | null>(null);
@@ -372,7 +356,7 @@ export default function Home() {
   }
 
   const { isGenerating: isImageGenerating, submit: submitImageTask } = useImageGenerationTask({
-    enabled: authReady && Boolean(currentUser) && workspaceSyncReady,
+    enabled: authReady && Boolean(currentUser),
     projectId: currentProjectId,
     readApiJson,
     onCompleted(task) {
@@ -387,6 +371,21 @@ export default function Home() {
         : `已生成 ${savedImages.length} 张图片并保存，可本地预览；当前开发环境没有公网素材地址，暂不能作为视频参考。`);
     },
     onMessage: setMaterialMessage
+  });
+
+  const {
+    isSubmitting: isVideoSubmitting,
+    isSubmissionInFlight: isVideoSubmissionInFlight,
+    submit: submitVideoTask,
+    refreshAll: refreshAllTaskStatuses,
+    deleteTask
+  } = useVideoGenerationTask({
+    enabled: authReady && Boolean(currentUser) && workspaceSyncReady,
+    projectId: currentProjectId,
+    tasks: state.tasks,
+    setState,
+    readApiJson,
+    onMessage: setUserActionMessage
   });
 
   useEffect(() => {
@@ -429,13 +428,6 @@ export default function Home() {
       window.localStorage.removeItem(AUTH_STORAGE_KEY);
       setAuthReady(true);
     }
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      Object.values(generationPollTimersRef.current).forEach(timer => window.clearTimeout(timer));
-      generationPollTimersRef.current = {};
-    };
   }, []);
 
   async function fetchUsers() {
@@ -1066,7 +1058,7 @@ export default function Home() {
   }
 
   function addShot(preset?: Partial<Pick<Shot, "title" | "prompt" | "ratio" | "duration" | "resolution">>, context = currentGenerationContext()) {
-    if (videoSubmissionInFlightRef.current) return;
+    if (isVideoSubmissionInFlight()) return;
     if (materialUploadInFlightRef.current) {
       alert("参考素材仍在上传，请等待素材保存完成后再生成。");
       return;
@@ -1496,7 +1488,7 @@ export default function Home() {
   }
 
   async function startGeneration(shotId: number, injectedShot?: Shot, context = currentGenerationContext()) {
-    if (videoSubmissionInFlightRef.current) return;
+    if (isVideoSubmissionInFlight()) return;
     const shot = injectedShot || state.shots.find(item => item.id === shotId);
     if (!shot) return;
 
@@ -1552,174 +1544,24 @@ export default function Home() {
       omniReferenceEnabled: context.omniReferenceEnabled,
       inputType
     };
-    videoSubmissionInFlightRef.current = true;
-    setIsVideoSubmitting(true);
-    setState(prev => ({
-      ...prev,
-      shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "running" } : item)
-    }));
-
     const durationControlledShot = { ...shot, prompt: buildDurationControlledPrompt(shot.prompt, shot.duration) };
     const shotForGeneration = buildShotWithReferencePrompt(durationControlledShot, context);
-
-    try {
-      const response = await fetch("/api/video-tasks", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project_id: currentProjectId, snapshot, shot: context.omniReferenceEnabled ? { ...shotForGeneration, prompt: `${shotForGeneration.prompt}\n\n全能参考模式：已启用。请综合所有提交的图片、视频、音频参考素材，保持人物外貌、服装、场景、道具、动作节奏和画面风格一致。优先遵循 reference inputs，不要自行替换角色或背景。` } : shotForGeneration, provider: "seedance-2.0", model_id: modelForGeneration, resolution: shot.resolution || "720p", input_type: inputType, omni_reference: context.omniReferenceEnabled, ...buildMediaPayload(context) })
-      });
-      const result = await readApiJson(response, "创建视频任务失败");
-      const serverTask = result.data?.task as VideoTask | undefined;
-      if (serverTask) {
-        setState(prev => ({
-          ...prev,
-          tasks: [serverTask, ...prev.tasks.filter(item => item.id !== serverTask.id && !(item.shotId === shotId && item.status === "running"))]
-        }));
+    await submitVideoTask({
+      shotId,
+      body: {
+        project_id: currentProjectId,
+        snapshot,
+        shot: context.omniReferenceEnabled
+          ? { ...shotForGeneration, prompt: `${shotForGeneration.prompt}\n\n全能参考模式：已启用。请综合所有提交的图片、视频、音频参考素材，保持人物外貌、服装、场景、道具、动作节奏和画面风格一致。优先遵循 reference inputs，不要自行替换角色或背景。` }
+          : shotForGeneration,
+        provider: "seedance-2.0",
+        model_id: modelForGeneration,
+        resolution: shot.resolution || "720p",
+        input_type: inputType,
+        omni_reference: context.omniReferenceEnabled,
+        ...buildMediaPayload(context)
       }
-      if (!response.ok || result.code !== 0 || !result.data?.task_id || !serverTask) throw new Error(result.message || "创建视频任务失败");
-      const providerTaskId = result.data.task_id as string;
-      setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === serverTask.id ? { ...serverTask, result: `任务已提交：${providerTaskId}` } : item) }));
-      pollGenerationStatus(shotId, serverTask.id, providerTaskId);
-    } catch (error) {
-      setState(prev => ({ ...prev, shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "failed" } : item) }));
-      setUserActionMessage(error instanceof Error ? error.message : "创建视频任务失败");
-    } finally {
-      videoSubmissionInFlightRef.current = false;
-      setIsVideoSubmitting(false);
-    }
-  }
-
-  function clearGenerationPoll(localTaskId: string) {
-    const timer = generationPollTimersRef.current[localTaskId];
-    if (timer) window.clearTimeout(timer);
-    delete generationPollTimersRef.current[localTaskId];
-  }
-
-  function pollGenerationStatus(shotId: number, internalTaskId: string, providerTaskId: string, attempt = 0, failedAttempts = 0, startedAt = Date.now()) {
-    clearGenerationPoll(internalTaskId);
-    const delayMs = Math.min(30000, 5000 + failedAttempts * 2000);
-    const timer = window.setTimeout(async () => {
-      if (generationPollTimersRef.current[internalTaskId] !== timer) return;
-      delete generationPollTimersRef.current[internalTaskId];
-
-      const elapsedMs = Date.now() - startedAt;
-      if (elapsedMs > 30 * 60 * 1000 || attempt >= 360 || failedAttempts >= 12) {
-        markGenerationFailed(shotId, internalTaskId, "状态同步已超过安全重试上限，请稍后手动同步后台状态。");
-        return;
-      }
-
-      try {
-        const response = await fetch("/api/video-tasks/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project_id: currentProjectId, internal_task_id: internalTaskId }) });
-        const result = await readApiJson(response, "查询视频任务失败");
-        if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "查询视频任务失败");
-        const data = result.data as { status: string; video_url?: string; duration?: number; error?: string; task?: VideoTask };
-        if (data.task) setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === internalTaskId ? data.task! : item) }));
-        if (["pending", "submitted", "queued", "running", "processing"].includes(data.status)) {
-          setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === internalTaskId ? { ...item, status: "running", result: `生成中：${data.status}｜任务ID：${providerTaskId}` } : item), shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "running" } : item) }));
-          pollGenerationStatus(shotId, internalTaskId, providerTaskId, attempt + 1, 0, startedAt);
-          return;
-        }
-        if (data.status === "succeeded" && isHttpVideoUrl(data.video_url)) {
-          return completeGeneration(shotId, internalTaskId, data.video_url, data.duration, providerTaskId);
-        }
-        if (data.status === "succeeded" && !data.video_url) {
-          setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === internalTaskId ? { ...item, result: "生成已完成，正在等待视频地址同步" } : item) }));
-          pollGenerationStatus(shotId, internalTaskId, providerTaskId, attempt + 1, 0, startedAt);
-          return;
-        }
-        if (["failed", "error", "cancelled", "canceled"].includes(data.status)) {
-          markGenerationFailed(shotId, internalTaskId, data.error || "视频生成失败");
-          return;
-        }
-        setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === internalTaskId ? { ...item, result: `等待上游同步：${data.status || "unknown"}` } : item) }));
-        pollGenerationStatus(shotId, internalTaskId, providerTaskId, attempt + 1, 0, startedAt);
-      } catch (error) {
-        setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === internalTaskId ? { ...item, result: error instanceof Error ? `状态查询暂未成功，继续重试：${error.message}` : "状态查询暂未成功，继续重试" } : item) }));
-        pollGenerationStatus(shotId, internalTaskId, providerTaskId, attempt + 1, failedAttempts + 1, startedAt);
-      }
-    }, delayMs);
-    generationPollTimersRef.current[internalTaskId] = timer;
-  }
-
-  function completeGeneration(shotId: number, localTaskId: string, videoUrl: string, realDuration?: number, providerTaskId?: string) {
-    clearGenerationPoll(localTaskId);
-    setState(prev => {
-      const shot = prev.shots.find(item => item.id === shotId);
-      if (!shot) return prev;
-      const index = prev.shots.findIndex(item => item.id === shotId);
-      const existingTask = prev.tasks.find(item => item.id === localTaskId);
-      const asset: VideoAsset = { id: Date.now(), shotId, title: `镜头 #${String(index + 1).padStart(2, "0")} 可用片段`, meta: `${realDuration || shot.duration}秒 / ${shot.ratio.split(" ")[0]}`, gradient: randomGradient(), videoUrl, providerTaskId: providerTaskId || existingTask?.providerTaskId };
-      return { ...prev, shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "done" } : item), tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, status: "done", result: "已生成，可预览下载", videoUrl, error: undefined } : item), assets: [asset, ...prev.assets.filter(item => item.shotId !== shotId)] };
     });
-  }
-
-  function markGenerationFailed(shotId: number, localTaskId: string, message: string) {
-    clearGenerationPoll(localTaskId);
-    setState(prev => ({ ...prev, shots: prev.shots.map(item => item.id === shotId ? { ...item, status: "failed" } : item), tasks: prev.tasks.map(item => item.id === localTaskId ? { ...item, status: "failed", result: message, error: message } : item), assets: prev.assets.filter(asset => asset.shotId !== shotId) }));
-  }
-
-  async function refreshTaskStatus(task: VideoTask) {
-    try {
-      setUserActionMessage(`正在同步生成任务：${task.id}`);
-      const response = await fetch("/api/video-tasks/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project_id: currentProjectId, internal_task_id: task.id, task_id: task.providerTaskId, profile_id: task.apiProfile?.id }) });
-      const result = await readApiJson(response, "同步任务状态失败");
-      if (!response.ok || result.code !== 0 || !result.data) throw new Error(result.message || "同步任务状态失败");
-      const data = result.data as { status: string; video_url?: string; duration?: number; error?: string; task?: VideoTask };
-      if (data.task) setState(prev => ({ ...prev, tasks: prev.tasks.map(item => item.id === task.id ? data.task! : item) }));
-      if (data.status === "succeeded" && isHttpVideoUrl(data.video_url)) {
-        completeGeneration(task.shotId, task.id, data.video_url, data.duration, task.providerTaskId);
-        setUserActionMessage("已从后台同步成功视频，任务状态已更新为完成。");
-        return;
-      }
-      if (["pending", "submitted", "queued", "running", "processing"].includes(data.status)) {
-        setState(prev => ({ ...prev, shots: prev.shots.map(item => item.id === task.shotId ? { ...item, status: "running" } : item), tasks: prev.tasks.map(item => item.id === task.id ? { ...item, status: "running", result: `生成中：${data.status}` } : item) }));
-        setUserActionMessage(`后台任务仍在生成中：${data.status}`);
-        return;
-      }
-      if (["failed", "error", "cancelled", "canceled"].includes(data.status)) {
-        markGenerationFailed(task.shotId, task.id, data.error || "视频生成失败");
-        setUserActionMessage(data.error || "后台任务仍显示失败。");
-        return;
-      }
-      setUserActionMessage(`后台任务等待上游同步：${data.status || "unknown"}`);
-    } catch (error) {
-      setUserActionMessage(error instanceof Error ? error.message : "同步任务状态失败");
-    }
-  }
-
-  async function refreshAllTaskStatuses() {
-    const tasks = state.tasks.filter(task => !task.id.startsWith("imported-") && ["pending", "running"].includes(task.status));
-    try {
-      for (const task of tasks) await refreshTaskStatus(task);
-      setUserActionMessage(tasks.length ? `已同步 ${tasks.length} 条生成记录。` : "没有可同步的生成记录。");
-    } catch (error) {
-      setUserActionMessage(error instanceof Error ? error.message : "同步本页任务状态失败");
-    }
-  }
-
-  async function deleteTask(taskId: string) {
-    const target = state.tasks.find(task => task.id === taskId);
-    if (!target) return;
-    try {
-      const params = new URLSearchParams({ project_id: String(currentProjectId), task_id: taskId });
-      const response = await fetch(`/api/video-tasks?${params.toString()}`, { method: "DELETE" });
-      const result = await readApiJson(response, "删除生成记录失败");
-      if (!response.ok || result.code !== 0) throw new Error(result.message || "删除生成记录失败");
-    } catch (error) {
-      setUserActionMessage(error instanceof Error ? error.message : "删除生成记录失败");
-      return;
-    }
-    setState(prev => {
-      const remainingTasks = prev.tasks.filter(task => task.id !== taskId);
-      const hasOtherTaskForShot = remainingTasks.some(task => task.shotId === target.shotId);
-      return {
-        ...prev,
-        shots: prev.shots.map(shot => shot.id === target.shotId && !hasOtherTaskForShot ? { ...shot, status: "pending" } : shot),
-        tasks: remainingTasks,
-        assets: prev.assets.filter(asset => asset.providerTaskId !== target.providerTaskId)
-      };
-    });
-    setUserActionMessage("生成记录已删除，关联分镜已恢复为待生成。");
   }
 
   function applyTaskSnapshot(task: VideoTask) {
