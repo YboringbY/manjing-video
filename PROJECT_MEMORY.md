@@ -1,6 +1,50 @@
 # 漫镜视频项目记忆
 
-更新时间：2026-07-13
+更新时间：2026-07-21
+
+## 2026-07-21 当前权威快照
+
+本节是后续会话判断项目状态的第一依据。下方按日期保留的旧记录用于事故与演进追溯；其中关于旧生产提交、备案前禁用域名、素材数量、未配置 ESLint、JSON 快照权威和待实现拖拽上传等描述均为历史状态，不得覆盖本节。
+
+### 生产与版本
+
+- 正式入口：`https://console.manjingstudio.com`；HTTP `301` 跳转 HTTPS，HTTPS 首页 `200`，匿名 `/api/auth/me` 返回 `401`。
+- 备案号：`浙ICP备2026053932号-1`，登录页和登录后工作台均展示并链接到工信部备案查询。
+- 生产运行代码：`c36cf6f Extract P1 video task workflow`；PM2 `manjing-video` online，生产 worktree clean。
+- GitHub `main` 已包含发布记录 `0181f44 Record P1 frontend production release`；该提交只更新发布记录，生产业务代码与 `c36cf6f` 一致。
+- 最近发布备份：`/data/backups/manjing-video-db-pre-deploy-20260721-221734.dump`，已恢复到隔离数据库验证。
+- 生产共有 20 条 Prisma migration，最近发布待执行 migration 为 0；Nginx 未随本批 P1 修改。
+
+### 生产数据基线
+
+- 当前守恒基线：项目 1、工作区 1、素材 5、素材关联 5、分镜 27、视频任务 23、视频资产 10、生图任务 2。
+- 最近发布前后上述数量及主键指纹完全一致，没有执行恢复、清理、删除或回填。
+- 团队共享素材数和当前项目素材数是不同口径；`teamMaterials=0` 不代表项目素材丢失，当前项目素材为 5。
+- 不得根据项目名、ID、`Demo` 标识、数据年龄或数量变化判断生产数据可删除。任何生产修复、恢复、清理或回填必须重新只读核验并单独获得明确批准。
+
+### 已完成的 P0 / P1
+
+- 发布门禁已串联数据库备份、隔离恢复验证、migration 预检、停机前后业务数量与主键指纹守恒、PM2 重启、登录态 HTTP smoke 和全新浏览器 smoke。
+- `app/page.tsx` 已从早期约 2890 行降到 2260 行；已拆出登录、人员、审计、项目列表、项目概览、生图工作台、生成记录和素材库组件。
+- 生图任务已由 `useImageGenerationTask` 管理持久化任务恢复、提交、轮询、失败处理和项目切换清理。
+- 视频任务已由 `useVideoGenerationTask` 管理提交、轮询、手动同步、完成/失败、删除和清理；项目切换/登出会使旧提交令牌及轮询会话失效。
+- 素材库已支持项目/团队共享独立计数、上传、SHA-256 去重、重命名、预览、参考选择和桌面单文件拖入视频提示词/首帧/尾帧。
+- 质量门禁现为非交互式 ESLint、TypeScript、生产构建、核心 API 集成、17 项单元测试和正式浏览器 smoke。
+
+### 下一步优化顺序
+
+1. 继续纯前端 P1：拆分剧本工作台和分镜编辑/提示词拆分逻辑，保持 API、数据库与用户行为不变。
+2. 为 `lib/api-input.ts`、`lib/video-generation.ts`、`lib/video-status.ts` 补充独立单元测试。
+3. 对 `ProjectWorkspace.state` 做只读依赖清单和退役设计；稳定期内不直接删除字段、不做清理 migration。
+4. 完成一次经用户确认的真实生产人工回归：素材上传/共享、真实视频生成、状态同步、预览下载和满意/需改进反馈；付费生成不放入自动 smoke。
+5. 稳定版本确认后再把现有质量命令迁入 GitHub Actions；先做 CI，生产 CD 继续保留人工审批。
+
+### 强制安全规则
+
+- 任何生产部署前都要说明环境、操作/migration、影响表与预计行数、备份位置、停机和回滚，并取得明确批准。
+- 日常发布只使用 `scripts/deploy.sh`；禁止 `git reset --hard` 部署，禁止直接把业务删除放进 schema migration。
+- API/数据库数量不能替代最终页面验收；素材、任务或工作区状态变更必须使用全新浏览器上下文验证真实页面。
+- 正式域名是日常验收入口，IP 只作为运维回退；不得再执行历史记录中的“备案前禁用域名”指令。
 
 # 2026-07-13 生图结果服务端持久化生产发布
 
@@ -186,7 +230,9 @@
 - 调用 Seedance 2.0 生成视频。
 - 同步生成任务状态，预览或下载生成视频。
 
-## 2026-07-11 当前精简状态
+## 2026-07-11 历史快照（已过期）
+
+以下内容记录 2026-07-11 当时状态，已被文件顶部“2026-07-21 当前权威快照”取代。
 
 当前生产入口：
 
@@ -267,12 +313,12 @@ npm run dev -- -p 5050
 
 ## 技术栈
 
-- Next.js 14 App Router
+- Next.js 15.5 App Router
 - React 18
 - TypeScript
 - PostgreSQL 16
 - Prisma
-- localStorage 暂存项目工作区数据
+- localStorage 只保留兼容元数据；项目、分镜、任务、视频资产和素材关系以 PostgreSQL 规范化表为权威
 - Prisma `ApiProfile` 表存储模型渠道配置，API Key 使用 AES-256-GCM 加密；旧 `.data/api-profiles.json` 仅作为兼容导入来源
 - 第三方视频生成：当前重点适配 `zjljzn.ltd` Seedance 中转
 
@@ -760,7 +806,7 @@ npx prisma migrate deploy
   - “重置演示数据”逻辑改为清空本地项目缓存并重置为空白项目。
   - 验证：`npm run build` 通过；`npx tsc --noEmit` 通过。
 
-## 当前部署状态
+## 2026-07-09 历史部署状态（已过期）
 
 - 最新 GitHub/生产 commit：`3223df2 Validate reference image dimensions`。本地另有未部署的去除硬编码演示项目改动。
 - 生产服务器 `/opt/manjing-video` 已拉取该 commit。
@@ -776,7 +822,7 @@ npx prisma migrate deploy
 - 生产已修复 `task failed` 被误当成视频 URL 的问题；生产库已备份并清理 2 条无效视频资产，复扫结果为 `totalBadVideoAssets: 0`。
 - 用户已在生产环境做过一轮大致功能查看，当前反馈为核心功能整体正常。
 
-## 建议下一步
+## 2026-07-09 历史建议（已由顶部最新计划取代）
 
 优先级从高到低：
 

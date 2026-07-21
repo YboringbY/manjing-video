@@ -305,11 +305,11 @@ pm2 restart manjing-video --update-env
 
 ## 下一步建议
 
-1. 继续拆分 `app/page.tsx`：优先拆素材库、生图工作台、视频工作台和生成记录，并逐步提取业务 hooks。
-2. 明确并完成 `ProjectWorkspace.state` 兼容元数据的最终退役，不再扩大其职责。
-3. 为 `lib/api-input.ts`、`lib/video-generation.ts`、`lib/video-status.ts` 建立独立单元测试运行方式。
-4. 继续处理客户反馈：生成记录展示引用素材名称、拖拽上传、同 seed/随机 seed 控制。
-5. 配置非交互式 ESLint CLI，纳入日常构建验证。
+1. 继续拆分 `app/page.tsx`：下一批优先拆剧本工作台和分镜编辑/提示词拆分逻辑，保持 API、数据库与行为不变。
+2. 为 `lib/api-input.ts`、`lib/video-generation.ts`、`lib/video-status.ts` 补充独立单元测试。
+3. 对 `ProjectWorkspace.state` 做只读依赖清单和退役设计；稳定期内不直接删除字段、不做清理 migration。
+4. 经用户确认后完成真实生产人工回归：素材上传/共享、真实视频生成、状态同步、预览下载和任务反馈；付费生成不进入自动 smoke。
+5. 稳定版本确认后再迁移现有质量命令到 GitHub Actions；先做 CI，生产 CD 继续保留人工审批。
 
 ## 常用验证
 
