@@ -82,8 +82,19 @@ try {
 
   await page.getByRole("button", { name: /素材库/ }).first().click();
   await page.locator(".asset-workspace-head h2", { hasText: "素材库" }).waitFor({ state: "visible", timeout: 30000 });
+  const materialWorkspace = page.locator(".asset-dynamic-workspace:visible");
+  const materialCountText = (await materialWorkspace.locator(".asset-workspace-head .muted").textContent()) || "";
+  const materialCounts = materialCountText.match(/当前项目素材\s*(\d+)\s*个；团队共享素材\s*(\d+)\s*个/);
+  assert(materialCounts, `Material scope counts were missing or ambiguous: ${materialCountText.trim()}`);
+  const projectMaterialCount = Number(materialCounts[1]);
+  const sharedMaterialCount = Number(materialCounts[2]);
   const visibleMaterialCards = await page.locator(".material-card:visible").count();
-  console.error(`[browser-smoke] materials visible: ${visibleMaterialCards}`);
+  assert(visibleMaterialCards <= projectMaterialCount, `Visible project material cards exceeded the project count: ${visibleMaterialCards}/${projectMaterialCount}.`);
+  await materialWorkspace.locator(".asset-tabs").first().getByRole("button", { name: "共享素材" }).click();
+  await materialWorkspace.locator(".asset-workspace-head .source-pill", { hasText: "团队共享" }).waitFor({ state: "visible" });
+  await materialWorkspace.locator(".asset-tabs").first().getByRole("button", { name: "当前项目" }).click();
+  await materialWorkspace.locator(".asset-workspace-head .source-pill", { hasText: "当前项目" }).waitFor({ state: "visible" });
+  console.error(`[browser-smoke] materials visible: ${visibleMaterialCards}; project=${projectMaterialCount}; shared=${sharedMaterialCount}`);
 
   await page.getByRole("button", { name: /生成记录/ }).first().click();
   await page.locator("h2#tasks", { hasText: "生成记录" }).waitFor({ state: "visible", timeout: 30000 });
@@ -104,7 +115,7 @@ try {
 
   if (screenshotPath) await page.screenshot({ path: screenshotPath, fullPage: true });
   assert(pageErrors.length === 0, `Browser page errors: ${pageErrors.join(" | ")}`);
-  console.log(JSON.stringify({ ok: true, projectCount, firstProjectName, imageWorkbenchReady: true, visibleMaterialCards, taskRows, taskFilterReady: true, filingReady: true, freshBrowserContext: true, viewport: { width: viewportWidth, height: viewportHeight }, screenshotPath: screenshotPath || undefined, imageScreenshotPath: imageScreenshotPath || undefined, loginScreenshotPath: loginScreenshotPath || undefined }));
+  console.log(JSON.stringify({ ok: true, projectCount, firstProjectName, imageWorkbenchReady: true, projectMaterialCount, sharedMaterialCount, visibleMaterialCards, materialScopeTabsReady: true, taskRows, taskFilterReady: true, filingReady: true, freshBrowserContext: true, viewport: { width: viewportWidth, height: viewportHeight }, screenshotPath: screenshotPath || undefined, imageScreenshotPath: imageScreenshotPath || undefined, loginScreenshotPath: loginScreenshotPath || undefined }));
 } catch (error) {
   if (screenshotPath) await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
   throw error;
