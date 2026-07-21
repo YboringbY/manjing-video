@@ -13,22 +13,30 @@
 - 备案号组件已在登录页和登录后的工作台底部展示，链接到 `https://beian.miit.gov.cn/`；桌面与 390×844 移动端浏览器 smoke 均验证可见且不遮挡内容。
 - 可审查配置与回滚执行逻辑已记录在 `ops/nginx/manjing-video.conf` 和 `ops/scripts/enable-console-domain.sh`。
 
-## 2026-07-19 P1 素材库模块拆分（本地完成，待发布）
+## 2026-07-21 P1 素材库与视频任务生产发布
+
+- 生产已从 `c469390` 更新到 `c36cf6f Extract P1 video task workflow`，包含素材库模块拆分和视频任务流程拆分；本次未修改 API 合约、Prisma schema、migration 或 Nginx。
+- 发布备份：`/data/backups/manjing-video-db-pre-deploy-20260721-221734.dump`，已恢复到隔离数据库验证；`db:preflight` 报告待执行 migration 为 0。
+- 发布前后业务数量及主键指纹完全一致：项目 1、工作区 1、素材 5、素材关联 5、分镜 27、视频任务 23、视频资产 10、生图任务 2；未执行恢复、清理或回填。
+- PM2 `manjing-video` online，生产 worktree clean；HTTPS 首页 `200`、匿名鉴权 `401`、HTTP 到 HTTPS `301`。
+- 正式域名全新浏览器 smoke 通过：真实项目“短剧团队 Demo”、视频工作台、生图工作台、项目素材计数 5、项目/共享素材切换、生成记录及备案号均正常；未提交付费生成。
+
+## 2026-07-19 P1 素材库模块拆分（已发布）
 
 - 新增 `MaterialLibrarySection`，从 `app/page.tsx` 提取素材库展示、筛选、项目/共享范围切换、重命名编辑、预览和上传表单；服务端请求、项目状态和视频/生图参考状态仍由页面统一管理。
 - 新增 `lib/material-library.ts`，集中处理项目/共享素材筛选、素材数量口径、公共 URL 判断、尺寸提示和类型文案；项目素材与团队共享素材数量现在在界面和浏览器 smoke 中分别验证。
 - 新增 4 项素材库纯函数测试，单元测试总数增至 13 项；lint、TypeScript、生产构建和全新浏览器 smoke 均通过。
 - 浏览器 smoke 新增项目素材/团队共享素材计数及范围切换断言；本地 `5051` 验收输出为项目素材 1、团队共享素材 0，未执行上传、删除或生成。
-- 本批未修改 Prisma schema、migration、生产数据库或 Nginx；代码尚未部署生产，需单独确认后按生产发布流程执行。
+- 本批未修改 Prisma schema、migration、生产数据库或 Nginx；已随 `c36cf6f` 于 2026-07-21 发布生产。
 
-## 2026-07-21 P1 视频任务流程拆分（本地完成，待发布）
+## 2026-07-21 P1 视频任务流程拆分（已发布）
 
 - 新增 `useVideoGenerationTask`，集中管理视频任务提交、自动轮询、手动同步、完成/失败状态、生成记录删除和计时器清理；提交前的素材、首尾帧、并发和模型校验仍保留在页面。
 - 视频任务固定使用发起时的项目 ID；项目切换、登出和卸载会使旧提交令牌及轮询会话失效，避免旧项目异步回包写入当前项目界面。
 - 新增 `lib/video-task-client.ts`，统一运行中/失败状态分类、HTTP 视频 URL 判断、失败退避和 30 分钟/360 次/12 次连续失败安全上限。
 - `app/page.tsx` 从 2418 行降到 2260 行；新增 4 项视频任务纯函数测试，单元测试总数增至 17 项。
 - lint、TypeScript、生产构建、核心 API 集成和全新浏览器 smoke 均通过；浏览器只读验证视频工作台提示词、模型/比例/清晰度/时长控件和生成按钮，未提交付费生成。
-- 本批未修改 API 合约、Prisma schema、migration、生产数据库或 Nginx；代码尚未部署生产，需单独确认后按生产发布流程执行。
+- 本批未修改 API 合约、Prisma schema、migration、生产数据库或 Nginx；已随 `c36cf6f` 于 2026-07-21 发布生产。
 
 ## 2026-07-17 备案号页面生产发布
 
@@ -191,8 +199,8 @@
 - 本地开发：`http://localhost:5050`
 - 生产入口：`https://console.manjingstudio.com`
 - 运维回退入口：`http://118.196.44.191`
-- 最新生产业务提交：`c469390 Display ICP filing across the application`
-- 最新发布记录：本文件顶部“备案号页面生产发布”章节
+- 最新生产业务提交：`c36cf6f Extract P1 video task workflow`
+- 最新发布记录：本文件顶部“P1 素材库与视频任务生产发布”章节
 - 生产 PM2：`manjing-video` online。
 
 本地启动：
