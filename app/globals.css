@@ -519,6 +519,10 @@ textarea { min-height: 108px; resize: vertical; }
 .task-result-video video { width: 100%; max-height: 220px; border-radius: 12px; background: #020617; display: block; }
 .task-row-actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 138px; }
 .task-row-actions .btn-small { width: 100%; text-align: center; }
+.generation-records-card { min-width: 0; }
+.generation-records-table td { min-width: 0; }
+.generation-records-table .task-result-video { width: min(240px, 100%); max-width: 100%; }
+.generation-records-table .task-result-video video { width: 100%; max-width: 100%; }
 .generated-video-library { margin-bottom: 18px; }
 .video-preview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
 .video-preview-card { border: 1px solid var(--border); border-radius: 18px; padding: 12px; background: #fff; box-shadow: 0 14px 32px rgba(15,23,42,.06); }
@@ -612,4 +616,33 @@ textarea { min-height: 108px; resize: vertical; }
   .library-search button { grid-column: 1 / -1; height: 44px; border-left: 0; border-top: 1px solid var(--line); }
   .library-toolbar { align-items: flex-start; }
   .library-filter, .library-actions { width: 100%; flex-wrap: wrap; }
+}
+
+@media (max-width: 600px) {
+  .generation-records-card { padding: 16px; }
+  .generation-records-card .task-head { align-items: flex-start; }
+  .generation-records-card .task-head > .muted { margin: 0; }
+  .generation-records-table,
+  .generation-records-table tbody,
+  .generation-records-table tr,
+  .generation-records-table td { display: block; width: 100%; }
+  .generation-records-table thead { display: none; }
+  .generation-records-table tbody { display: grid; gap: 12px; }
+  .generation-records-table tr { padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
+  .generation-records-table td,
+  .generation-records-table td:last-child { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; align-items: start; min-width: 0; padding: 0 0 10px; border: 0; }
+  .generation-records-table td:not(:last-child) { margin-bottom: 10px; border-bottom: 1px solid #eef1f5; }
+  .generation-records-table td::before { color: var(--muted); content: ""; font-size: 12px; font-weight: 800; }
+  .generation-records-table td:nth-child(1)::before { content: "提交时间"; }
+  .generation-records-table td:nth-child(2)::before { content: "关联分镜"; }
+  .generation-records-table td:nth-child(3)::before { content: "渠道"; }
+  .generation-records-table td:nth-child(4)::before { content: "进度"; }
+  .generation-records-table td:nth-child(5)::before { content: "结果"; }
+  .generation-records-table td:nth-child(6)::before { content: "操作"; }
+  .generation-records-table td:nth-child(6) { padding-bottom: 0; }
+  .generation-records-table td[colspan] { display: block; padding: 0; border: 0; }
+  .generation-records-table td[colspan]::before { display: none; }
+  .generation-records-table .task-result-video { width: 100%; }
+  .generation-records-table .task-row-actions { grid-column: 2; width: 100%; min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .generation-records-table .task-row-actions .btn-small { min-width: 0; white-space: normal; }
 }

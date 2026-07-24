@@ -66,7 +66,7 @@ export function GenerationRecordsSection({
   return (
     <div style={{ display: active ? "block" : "none" }}>
       <div className="card-title-row"><div><h2 id="tasks">生成记录</h2><p className="muted">统一管理所有视频生成任务；最新任务始终在最前面，成功结果可直接预览和下载。</p></div><button type="button" className="btn-primary btn-small" onClick={onRefresh}>同步任务状态</button></div>
-      <section className="card">
+      <section className="card generation-records-card">
         <div className="task-head">
           <div className="record-filter-tabs">
             {FILTERS.map(([key, label]) => <button type="button" key={key} className={filter === key ? "active" : ""} onClick={() => selectFilter(key)}>{label}<span>{counts[key]}</span></button>)}
@@ -74,7 +74,7 @@ export function GenerationRecordsSection({
           <p className="muted">默认展示最近 5 个任务；完成后可直接预览、下载或用同一组参数重新生成。</p>
         </div>
         <div className="table-wrap">
-          <table className="table">
+          <table className="table generation-records-table">
             <thead><tr><th>提交时间</th><th>关联分镜</th><th>参数</th><th>进度</th><th>结果</th><th>操作</th></tr></thead>
             <tbody>
               {visibleTasks.length ? visibleTasks.map(task => {
