@@ -57,7 +57,7 @@ export function Sidebar({
 
   return (
     <aside>
-      <div className="brand"><div className="logo">漫</div>漫镜视频</div>
+      <div className="brand"><img className="brand-logo" src="/brand/guoran-manjing-logo.svg" alt="果然漫镜" width="190" height="41" /></div>
       <button className="workspace" onClick={onToggleProjectSwitcher}>
         <small>当前项目 · 点击切换</small>
         <strong>{currentProject.name}</strong>

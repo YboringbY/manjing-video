@@ -19,7 +19,7 @@ export function LoginPage(props: LoginPageProps) {
       <section className="login-marketing">
         <div className="login-glow" />
         <div className="login-copy">
-          <div className="login-brand"><div className="login-logo">漫</div>漫镜视频</div>
+          <div className="login-brand"><img className="login-brand-logo" src="/brand/guoran-manjing-logo-display.svg" alt="果然漫镜" width="316" height="100" /></div>
           <h1>一镜成片。<br />高效开拍。</h1>
           <p>让剧本、分镜、素材与 AI 生成汇入同一条创作管线，快速完成短剧视频生产。</p>
           <div className="login-tags"><span>团队协作</span><span>实时生成</span><span>智能分镜</span><span>专业管线</span></div>
@@ -27,7 +27,7 @@ export function LoginPage(props: LoginPageProps) {
       </section>
       <section className="login-panel-wrap">
         <div className="login-card">
-          <div className="login-card-logo">M</div>
+          <img className="login-card-mark" src="/brand/guoran-manjing-mark.svg" alt="" width="54" height="60" />
           <h2>账号登录</h2>
           <div className="login-form">
             <label>账号</label>
