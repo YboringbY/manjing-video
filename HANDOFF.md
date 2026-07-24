@@ -23,6 +23,12 @@
 - 桌面表格结构和数据行为保持不变；本地 ESLint、17 项单测、TypeScript、生产构建和全新 390×844 浏览器 smoke 均通过。
 - 本批仅修改 `GenerationRecordsSection` 标记和响应式 CSS，不涉及 API、Prisma schema、migration、生产数据或 Nginx；尚未发布生产。
 
+## 2026-07-24 P1 剧本工作台组件拆分（本地完成，待发布）
+
+- 新增 `ScriptWorkbench`，承接剧本生成输入、正文编辑/导入、保存、优化、大纲拆分、结果提示和已保存剧本预览；AI 请求、项目保存和数据状态仍由 `app/page.tsx` 统一管理。
+- 新增浏览器 smoke 断言，验证剧本工作台入口、故事想法、正文输入、生成初稿和保存操作可见；视频工作台、生图工作台、素材库和生成记录回归通过。
+- 本批不修改 API 合约、Prisma schema、migration、生产数据或 Nginx；本地 ESLint、17 项单测、TypeScript、生产构建和全新浏览器 smoke 均通过，尚未发布生产。
+
 ## 2026-07-16 正式域名启用
 
 - 备案号：`浙ICP备2026053932号-1`；正式入口已启用为 `https://console.manjingstudio.com`，DNS 指向 `118.196.44.191`。

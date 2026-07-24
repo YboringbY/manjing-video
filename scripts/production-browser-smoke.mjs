@@ -71,6 +71,15 @@ try {
   await projectCards.first().getByRole("button", { name: /进入概览/ }).click();
   await page.locator("#overview h1").filter({ hasText: firstProjectName }).waitFor({ state: "visible", timeout: 30000 });
 
+  await page.getByRole("button", { name: /剧本工作台/ }).first().click();
+  const scriptWorkbench = page.locator("#script:visible");
+  await scriptWorkbench.getByRole("heading", { name: "剧本工作台" }).waitFor({ state: "visible", timeout: 30000 });
+  await scriptWorkbench.getByPlaceholder(/被替嫁的女主/).waitFor({ state: "visible" });
+  await scriptWorkbench.getByPlaceholder(/当前项目的剧本正文/).waitFor({ state: "visible" });
+  await scriptWorkbench.getByRole("button", { name: "生成初稿" }).waitFor({ state: "visible" });
+  await scriptWorkbench.getByRole("button", { name: "保存到项目" }).waitFor({ state: "visible" });
+  console.error("[browser-smoke] script workbench visible");
+
   await page.getByRole("button", { name: /视频工作台/ }).first().click();
   const videoWorkbench = page.locator("#shots:visible");
   await videoWorkbench.getByRole("heading", { name: "视频工作台" }).waitFor({ state: "visible", timeout: 30000 });
@@ -125,7 +134,7 @@ try {
 
   if (screenshotPath) await page.screenshot({ path: screenshotPath, fullPage: true });
   assert(pageErrors.length === 0, `Browser page errors: ${pageErrors.join(" | ")}`);
-  console.log(JSON.stringify({ ok: true, projectCount, firstProjectName, videoWorkbenchReady: true, imageWorkbenchReady: true, projectMaterialCount, sharedMaterialCount, visibleMaterialCards, materialScopeTabsReady: true, taskRows, taskFilterReady: true, filingReady: true, freshBrowserContext: true, viewport: { width: viewportWidth, height: viewportHeight }, screenshotPath: screenshotPath || undefined, imageScreenshotPath: imageScreenshotPath || undefined, loginScreenshotPath: loginScreenshotPath || undefined }));
+  console.log(JSON.stringify({ ok: true, projectCount, firstProjectName, scriptWorkbenchReady: true, videoWorkbenchReady: true, imageWorkbenchReady: true, projectMaterialCount, sharedMaterialCount, visibleMaterialCards, materialScopeTabsReady: true, taskRows, taskFilterReady: true, filingReady: true, freshBrowserContext: true, viewport: { width: viewportWidth, height: viewportHeight }, screenshotPath: screenshotPath || undefined, imageScreenshotPath: imageScreenshotPath || undefined, loginScreenshotPath: loginScreenshotPath || undefined }));
 } catch (error) {
   if (screenshotPath) await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
   throw error;

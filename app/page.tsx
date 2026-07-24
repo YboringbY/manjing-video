@@ -11,6 +11,7 @@ import { Sidebar } from "./components/Sidebar";
 import { LoginPage } from "./components/LoginPage";
 import { MembersSection } from "./components/MembersSection";
 import { AuditLogsSection } from "./components/AuditLogsSection";
+import { ScriptWorkbench } from "./components/ScriptWorkbench";
 import { ApiProfile, AppState, AspectRatio, ImageQuality, MaterialAsset, MaterialKind, MaterialRole, MemberRole, ProfileSection, Project, ProjectStates, Shot, ShotStatus, TaskStatus, VideoTask, VideoTaskSnapshot, WorkspaceSection } from "./components/types";
 import { useImageGenerationTask } from "./hooks/useImageGenerationTask";
 import { useVideoGenerationTask } from "./hooks/useVideoGenerationTask";
@@ -285,7 +286,6 @@ export default function Home() {
   const [serverTeamMaterials, setServerTeamMaterials] = useState<MaterialAsset[]>([]);
   const [workspaceSyncReady, setWorkspaceSyncReady] = useState(false);
   const [workspaceSyncMessage, setWorkspaceSyncMessage] = useState("");
-  const [showFullScript, setShowFullScript] = useState(false);
   const [scriptTheme, setScriptTheme] = useState("");
   const [scriptCharacters, setScriptCharacters] = useState("");
   const [scriptEpisodeCount, setScriptEpisodeCount] = useState("12");
@@ -1694,9 +1694,6 @@ export default function Home() {
   }, [apiProfiles]);
   const currentDisplayName = currentUserRecord?.displayName || currentUser || "访客";
   const avatarLabel = currentDisplayName.slice(0, 2).toUpperCase();
-  const scriptTooLong = state.project.script.length > 220;
-  const scriptPreview = showFullScript || !scriptTooLong ? state.project.script : `${state.project.script.slice(0, 220)}...`;
-
   useEffect(() => {
     if (activeTextModels.length && !activeTextModels.includes(selectedTextModel)) setSelectedTextModel(activeTextModels[0]);
     if (activeVideoModels.length && !activeVideoModels.includes(selectedVideoModel)) setSelectedVideoModel(activeVideoModels[0]);
@@ -2007,18 +2004,28 @@ export default function Home() {
           <div className="profile-content">{profileSection === "basic" && <section className="card profile-panel"><h2 style={{ marginTop: 0 }}>基础信息</h2><p className="muted">您的个人资料信息</p><div className="profile-info-list"><div><span>账号</span><strong>{currentUserRecord?.account || "-"}</strong></div><div><span>邮箱</span><strong>{currentUserRecord?.email || "-"}</strong></div><div><span>创建时间</span><strong>{currentUserRecord?.createdAt ? new Date(currentUserRecord.createdAt).toLocaleDateString() : "-"}</strong></div><div><span>角色</span><strong>{roleLabel(currentUserRole)}</strong></div></div><div className="form" style={{ marginTop: 16 }}><div><label>显示名称</label><input value={memberNameDraft} onChange={event => setMemberNameDraft(event.target.value)} placeholder="输入新的显示名称" /></div><div className="actions"><button className="btn-primary" onClick={saveProfile}>修改个人信息</button></div></div></section>}{profileSection === "security" && <section className="card profile-panel"><h2 style={{ marginTop: 0 }}>账户安全</h2><p className="muted">管理您的安全设置</p><div className="security-list"><div><span>账户状态</span><strong className="ok">{currentUserRecord?.status === "active" ? "正常" : "停用"}</strong></div><div><span>重置密码</span><button className="btn-ghost" onClick={() => setPasswordModalOpen(true)}>修改密码</button></div></div></section>}</div>
         </section>
 
-        <section id="script" className="card script-workbench" style={sectionStyle("script")}>
-          <div className="asset-workspace-head"><div><h2>剧本工作台</h2><p className="muted">先输入故事想法生成初稿；当前剧本正文可以手动编辑、导入文件、保存到项目，并继续优化或拆分。</p></div><span className="source-pill internal">文字处理</span></div>
-          <div className="form">
-            <section className="api-profile-panel"><div className="card-title-row"><div><h2 style={{ marginTop: 0 }}>生成输入</h2><p className="muted">用于生成初稿；不会自动保存为项目剧本。</p></div></div><div className="script-core-grid"><div><label>故事想法</label><textarea value={scriptTheme} onChange={event => setScriptTheme(event.target.value)} placeholder="例如：被替嫁的女主重回豪门，发现男主一直在暗中保护她。" /></div><div><label>主要人物</label><textarea value={scriptCharacters} onChange={event => setScriptCharacters(event.target.value)} placeholder="可选。写清主要人物、关系和反差；不填时系统会根据故事想法补全。" /></div><div><label>目标集数</label><input inputMode="numeric" value={scriptEpisodeCount} onChange={event => setScriptEpisodeCount(event.target.value.replace(/[^\d]/g, ""))} placeholder="可选" /></div>{activeTextModels.length > 0 && <div><label>文字处理模型</label><select value={selectedTextModel} onChange={event => setSelectedTextModel(event.target.value)}>{activeTextModels.map(model => <option key={model} value={model}>{model}</option>)}</select></div>}</div><div className="actions"><button className="btn-primary" onClick={generateScriptDraft}>生成初稿</button></div></section>
-            <section className="api-profile-panel"><div className="card-title-row"><div><h2 style={{ marginTop: 0 }}>当前剧本正文</h2><p className="muted">生成初稿、导入文件或手动编辑都会更新这里；点击保存后写入当前项目。</p></div><input type="file" accept=".txt,.md,.doc,.docx" onChange={event => { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = loadEvent => setScriptInput(String(loadEvent.target?.result || "")); reader.readAsText(file); event.currentTarget.value = ""; }} /></div><div><textarea className="batch-prompt" value={scriptInput} onChange={event => setScriptInput(event.target.value)} placeholder="这里是当前项目的剧本正文。可以直接粘贴完整剧本，也可以先在上方生成初稿。" /></div><div className="actions"><button className="btn-primary" onClick={saveScript}>保存到项目</button><button className="btn-ghost" onClick={optimizeScriptFlow}>优化当前正文</button><button className="btn-ghost" onClick={splitScriptToOutlineAndEpisodes}>生成大纲 / 单集拆分</button><button className="btn-ghost" onClick={() => setScriptInput("")}>清空正文</button></div></section>
-            {!!scriptOptimizationNote && <div className="batch-preview"><strong>处理结果</strong><p>{scriptOptimizationNote}</p></div>}
-            {!!scriptOutline && <div className="script-box">{scriptOutline}</div>}
-            {!!scriptEpisodeSplit && <div className="script-box">{scriptEpisodeSplit}</div>}
-            <div className="script-box">{scriptPreview || "当前项目还没有保存剧本。"}</div>
-            {scriptTooLong && <button className="collapse-toggle" onClick={() => setShowFullScript(prev => !prev)}>{showFullScript ? "收起" : "展开全部剧本"}</button>}
-          </div>
-        </section>
+        <ScriptWorkbench
+          active={activeSection === "script"}
+          theme={scriptTheme}
+          characters={scriptCharacters}
+          episodeCount={scriptEpisodeCount}
+          script={scriptInput}
+          savedScript={state.project.script}
+          textModels={activeTextModels}
+          selectedTextModel={selectedTextModel}
+          optimizationNote={scriptOptimizationNote}
+          outline={scriptOutline}
+          episodeSplit={scriptEpisodeSplit}
+          onThemeChange={setScriptTheme}
+          onCharactersChange={setScriptCharacters}
+          onEpisodeCountChange={setScriptEpisodeCount}
+          onScriptChange={setScriptInput}
+          onTextModelChange={setSelectedTextModel}
+          onGenerateDraft={generateScriptDraft}
+          onSave={saveScript}
+          onOptimize={optimizeScriptFlow}
+          onSplit={splitScriptToOutlineAndEpisodes}
+        />
 
         <section id="shots" className="video-studio" style={sectionStyle("shots")}>
           <div className="video-composer">
