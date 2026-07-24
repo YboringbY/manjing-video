@@ -20,14 +20,20 @@
 ## 2026-07-24 P1 生成记录移动端布局（本地完成，待发布）
 
 - 生成记录在 `390px` 窄屏不再使用被内容撑宽的横向表格；每条任务改为纵向信息卡，保留提交时间、关联分镜、渠道、进度、结果、视频预览、下载和全部操作。
-- 桌面表格结构和数据行为保持不变；本地 ESLint、17 项单测、TypeScript、生产构建和全新 390×844 浏览器 smoke 均通过。
+- 桌面表格结构和数据行为保持不变；本地 ESLint、32 项单测、TypeScript、生产构建和全新 390×844 浏览器 smoke 均通过。
 - 本批仅修改 `GenerationRecordsSection` 标记和响应式 CSS，不涉及 API、Prisma schema、migration、生产数据或 Nginx；尚未发布生产。
 
 ## 2026-07-24 P1 剧本工作台组件拆分（本地完成，待发布）
 
 - 新增 `ScriptWorkbench`，承接剧本生成输入、正文编辑/导入、保存、优化、大纲拆分、结果提示和已保存剧本预览；AI 请求、项目保存和数据状态仍由 `app/page.tsx` 统一管理。
 - 新增浏览器 smoke 断言，验证剧本工作台入口、故事想法、正文输入、生成初稿和保存操作可见；视频工作台、生图工作台、素材库和生成记录回归通过。
-- 本批不修改 API 合约、Prisma schema、migration、生产数据或 Nginx；本地 ESLint、17 项单测、TypeScript、生产构建和全新浏览器 smoke 均通过，尚未发布生产。
+- 本批不修改 API 合约、Prisma schema、migration、生产数据或 Nginx；本地 ESLint、32 项单测、TypeScript、生产构建和全新浏览器 smoke 均通过，尚未发布生产。
+
+## 2026-07-24 P1 核心输入与视频模块单元测试（本地完成，待发布）
+
+- 新增 `api-input.test.ts`、`video-generation.test.ts` 和 `video-status.test.ts`，单元测试总数从 17 项增加到 32 项。
+- 覆盖 PostgreSQL Int/BigInt/版本号边界、文本与范围整数规范化、视频比例/时长、严格时长提示词、首尾帧和多媒体 payload、任务 ID/错误解析、视频 URL 多种响应结构及额度不足中文提示。
+- 本批只新增测试，不修改业务实现、API、数据库、migration、生产数据或 Nginx；ESLint、32 项单测、TypeScript 和生产构建均通过，尚未发布生产。
 
 ## 2026-07-16 正式域名启用
 
@@ -332,11 +338,10 @@ pm2 restart manjing-video --update-env
 
 ## 下一步建议
 
-1. 继续拆分 `app/page.tsx`：下一批优先拆剧本工作台和分镜编辑/提示词拆分逻辑，保持 API、数据库与行为不变。
-2. 为 `lib/api-input.ts`、`lib/video-generation.ts`、`lib/video-status.ts` 补充独立单元测试。
-3. 对 `ProjectWorkspace.state` 做只读依赖清单和退役设计；稳定期内不直接删除字段、不做清理 migration。
-4. 经用户确认后完成真实生产人工回归：素材上传/共享、真实视频生成、状态同步、预览下载和任务反馈；付费生成不进入自动 smoke。
-5. 稳定版本确认后再迁移现有质量命令到 GitHub Actions；先做 CI，生产 CD 继续保留人工审批。
+1. 继续拆分 `app/page.tsx`：下一批优先处理分镜编辑/提示词拆分逻辑，保持 API、数据库与行为不变。
+2. 对 `ProjectWorkspace.state` 做只读依赖清单和退役设计；稳定期内不直接删除字段、不做清理 migration。
+3. 经用户确认后完成真实生产人工回归：素材上传/共享、真实视频生成、状态同步、预览下载和任务反馈；付费生成不进入自动 smoke。
+4. 稳定版本确认后再迁移现有质量命令到 GitHub Actions；先做 CI，生产 CD 继续保留人工审批。
 
 ## 常用验证
 
