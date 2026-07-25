@@ -88,6 +88,12 @@ try {
   const videoGenerateButton = videoWorkbench.getByRole("button", { name: "开始生成" });
   await videoGenerateButton.waitFor({ state: "visible" });
   assert(!(await videoGenerateButton.isDisabled()), "Video generate button was unexpectedly disabled before submission.");
+  const batchTrigger = videoWorkbench.getByRole("button", { name: "提示词拆分分镜" });
+  assert(await batchTrigger.count() === 1, "Batch split trigger was ambiguous.");
+  await batchTrigger.click();
+  const batchModal = page.locator(".shot-batch-modal.open");
+  await batchModal.locator("textarea.batch-prompt").waitFor({ state: "visible" });
+  await batchModal.getByRole("button", { name: "关闭" }).click();
   console.error("[browser-smoke] video workbench visible");
 
   await page.getByRole("button", { name: /生图工作台/ }).first().click();
@@ -113,6 +119,11 @@ try {
   await materialWorkspace.locator(".asset-workspace-head .source-pill", { hasText: "团队共享" }).waitFor({ state: "visible" });
   await materialWorkspace.locator(".asset-tabs").first().getByRole("button", { name: "当前项目" }).click();
   await materialWorkspace.locator(".asset-workspace-head .source-pill", { hasText: "当前项目" }).waitFor({ state: "visible" });
+  await materialWorkspace.locator(".asset-tabs").nth(1).getByRole("button", { name: "提示词" }).click();
+  await materialWorkspace.getByRole("button", { name: "生成提示词" }).click();
+  const promptModal = page.locator(".generated-prompt-modal.open");
+  await promptModal.getByRole("textbox").waitFor({ state: "visible" });
+  await promptModal.getByRole("button", { name: "关闭" }).click();
   console.error(`[browser-smoke] materials visible: ${visibleMaterialCards}; project=${projectMaterialCount}; shared=${sharedMaterialCount}`);
 
   await page.getByRole("button", { name: /生成记录/ }).first().click();
@@ -134,7 +145,7 @@ try {
 
   if (screenshotPath) await page.screenshot({ path: screenshotPath, fullPage: true });
   assert(pageErrors.length === 0, `Browser page errors: ${pageErrors.join(" | ")}`);
-  console.log(JSON.stringify({ ok: true, projectCount, firstProjectName, scriptWorkbenchReady: true, videoWorkbenchReady: true, imageWorkbenchReady: true, projectMaterialCount, sharedMaterialCount, visibleMaterialCards, materialScopeTabsReady: true, taskRows, taskFilterReady: true, filingReady: true, freshBrowserContext: true, viewport: { width: viewportWidth, height: viewportHeight }, screenshotPath: screenshotPath || undefined, imageScreenshotPath: imageScreenshotPath || undefined, loginScreenshotPath: loginScreenshotPath || undefined }));
+  console.log(JSON.stringify({ ok: true, projectCount, firstProjectName, scriptWorkbenchReady: true, videoWorkbenchReady: true, batchSplitReady: true, imageWorkbenchReady: true, projectMaterialCount, sharedMaterialCount, visibleMaterialCards, materialScopeTabsReady: true, promptDialogReady: true, taskRows, taskFilterReady: true, filingReady: true, freshBrowserContext: true, viewport: { width: viewportWidth, height: viewportHeight }, screenshotPath: screenshotPath || undefined, imageScreenshotPath: imageScreenshotPath || undefined, loginScreenshotPath: loginScreenshotPath || undefined }));
 } catch (error) {
   if (screenshotPath) await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
   throw error;

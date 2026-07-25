@@ -1,6 +1,20 @@
 # 果然漫镜 Handoff
 
-更新时间：2026-07-24
+更新时间：2026-07-25
+
+## 2026-07-25 P1 分镜与提示词拆分（本地完成，待发布）
+
+- 新增 `lib/shot-splitting.ts`，集中处理时长识别、时间轴拆分、普通段落拆分、最多 7 个镜头、单镜头兜底和严格时长提示词；行为保持与页面内旧逻辑一致。
+- 新增 `ShotBatchModal` 和 `GeneratedPromptModal`，分别承接“提示词拆分分镜”和“生成提示词”界面；项目分镜保存、提示词素材入库和视频生成仍由 `app/page.tsx` 管理。
+- `app/page.tsx` 从 2267 行降到 2190 行；新增 5 项拆分纯函数测试，单元测试总数增至 37 项。
+- 浏览器 smoke 只读验证两个弹窗均可打开/关闭，并继续覆盖剧本、视频、生图、素材库和生成记录；未保存素材、未提交任务、未调用付费生成。
+- 本批不修改 API 合约、Prisma schema、migration、生产数据或 Nginx；ESLint、37 项单测、TypeScript、生产构建和全新浏览器 smoke 均通过，尚未发布生产。
+
+## 2026-07-25 ProjectWorkspace.state 只读依赖清单
+
+- 新增 `docs/PROJECT_WORKSPACE_STATE_RETIREMENT.md`，逐项记录 API、前端 localStorage/同步、smoke、集成测试和备份守恒脚本对兼容状态的依赖。
+- 当前业务权威仍是 `Project / Shot / VideoTask / VideoAsset / Material / ProjectMaterial / ImageTask`；`state` 只承担兼容元数据、乐观并发版本和旧响应形状，POST 继续强制清空业务数组，GET 继续从规范化表水合。
+- 退役设计分为冻结观察、最小元数据契约、迁移准备和受控退役四阶段；本批不删除字段、不新增 migration、不清理任何数据库行，也不构成未来数据库变更批准。
 
 ## 2026-07-24 品牌 Logo 与主题色替换生产发布
 
@@ -20,20 +34,20 @@
 ## 2026-07-24 P1 生成记录移动端布局（本地完成，待发布）
 
 - 生成记录在 `390px` 窄屏不再使用被内容撑宽的横向表格；每条任务改为纵向信息卡，保留提交时间、关联分镜、渠道、进度、结果、视频预览、下载和全部操作。
-- 桌面表格结构和数据行为保持不变；本地 ESLint、32 项单测、TypeScript、生产构建和全新 390×844 浏览器 smoke 均通过。
+- 桌面表格结构和数据行为保持不变；本地 ESLint、37 项单测、TypeScript、生产构建和全新 390×844 浏览器 smoke 均通过。
 - 本批仅修改 `GenerationRecordsSection` 标记和响应式 CSS，不涉及 API、Prisma schema、migration、生产数据或 Nginx；尚未发布生产。
 
 ## 2026-07-24 P1 剧本工作台组件拆分（本地完成，待发布）
 
 - 新增 `ScriptWorkbench`，承接剧本生成输入、正文编辑/导入、保存、优化、大纲拆分、结果提示和已保存剧本预览；AI 请求、项目保存和数据状态仍由 `app/page.tsx` 统一管理。
 - 新增浏览器 smoke 断言，验证剧本工作台入口、故事想法、正文输入、生成初稿和保存操作可见；视频工作台、生图工作台、素材库和生成记录回归通过。
-- 本批不修改 API 合约、Prisma schema、migration、生产数据或 Nginx；本地 ESLint、32 项单测、TypeScript、生产构建和全新浏览器 smoke 均通过，尚未发布生产。
+- 本批不修改 API 合约、Prisma schema、migration、生产数据或 Nginx；本地 ESLint、37 项单测、TypeScript、生产构建和全新浏览器 smoke 均通过，尚未发布生产。
 
 ## 2026-07-24 P1 核心输入与视频模块单元测试（本地完成，待发布）
 
 - 新增 `api-input.test.ts`、`video-generation.test.ts` 和 `video-status.test.ts`，单元测试总数从 17 项增加到 32 项。
 - 覆盖 PostgreSQL Int/BigInt/版本号边界、文本与范围整数规范化、视频比例/时长、严格时长提示词、首尾帧和多媒体 payload、任务 ID/错误解析、视频 URL 多种响应结构及额度不足中文提示。
-- 本批只新增测试，不修改业务实现、API、数据库、migration、生产数据或 Nginx；ESLint、32 项单测、TypeScript 和生产构建均通过，尚未发布生产。
+- 本批只新增测试，不修改业务实现、API、数据库、migration、生产数据或 Nginx；ESLint、37 项单测、TypeScript 和生产构建均通过，尚未发布生产。
 
 ## 2026-07-16 正式域名启用
 
@@ -338,8 +352,8 @@ pm2 restart manjing-video --update-env
 
 ## 下一步建议
 
-1. 继续拆分 `app/page.tsx`：下一批优先处理分镜编辑/提示词拆分逻辑，保持 API、数据库与行为不变。
-2. 对 `ProjectWorkspace.state` 做只读依赖清单和退役设计；稳定期内不直接删除字段、不做清理 migration。
+1. 经用户确认后统一发布本地已完成的移动端生成记录、剧本组件、测试补强和分镜/提示词拆分，并完成生产浏览器核验。
+2. `ProjectWorkspace.state` 只读清单已完成；后续如推进最小元数据契约，必须作为独立代码设计任务，稳定期内不删除字段、不做清理 migration。
 3. 经用户确认后完成真实生产人工回归：素材上传/共享、真实视频生成、状态同步、预览下载和任务反馈；付费生成不进入自动 smoke。
 4. 稳定版本确认后再迁移现有质量命令到 GitHub Actions；先做 CI，生产 CD 继续保留人工审批。
 

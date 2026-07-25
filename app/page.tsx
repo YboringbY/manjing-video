@@ -12,13 +12,16 @@ import { LoginPage } from "./components/LoginPage";
 import { MembersSection } from "./components/MembersSection";
 import { AuditLogsSection } from "./components/AuditLogsSection";
 import { ScriptWorkbench } from "./components/ScriptWorkbench";
-import { ApiProfile, AppState, AspectRatio, ImageQuality, MaterialAsset, MaterialKind, MaterialRole, MemberRole, ProfileSection, Project, ProjectStates, Shot, ShotStatus, TaskStatus, VideoTask, VideoTaskSnapshot, WorkspaceSection } from "./components/types";
+import { ShotBatchModal } from "./components/ShotBatchModal";
+import { GeneratedPromptModal } from "./components/GeneratedPromptModal";
+import { ApiProfile, AppState, AspectRatio, ImageQuality, MaterialAsset, MaterialKind, MaterialRole, MemberRole, ProfileSection, Project, ProjectStates, Shot, TaskStatus, VideoTask, VideoTaskSnapshot, WorkspaceSection } from "./components/types";
 import { useImageGenerationTask } from "./hooks/useImageGenerationTask";
 import { useVideoGenerationTask } from "./hooks/useVideoGenerationTask";
 import { imageSizeForRatio, mergeMaterials } from "@/lib/image-workbench";
 import { isSmallVideoReferenceImage, materialApiUrl, materialDimensionText, materialPreviewUrl, MIN_VIDEO_REFERENCE_IMAGE_SIDE } from "@/lib/material-library";
 import { isPublicMediaUrl } from "@/lib/media-url";
 import { isHttpVideoUrl } from "@/lib/video-task-client";
+import { buildShotDurationControlledPrompt, prepareBatchShots } from "@/lib/shot-splitting";
 
 type AuthUser = {
   id: string;
@@ -975,78 +978,6 @@ export default function Home() {
     }
   }
 
-  function estimateTotalDuration(text: string, fallback = shotDuration) {
-    const durationMatch = text.match(/(?:总时长|时长|完整镜头)\D{0,6}(\d+)\s*(?:秒|s)/i) || text.match(/(\d+)\s*(?:秒|s)\s*(?:视频|镜头)/i);
-    return durationMatch ? Number(durationMatch[1]) : fallback;
-  }
-
-  function splitSentences(text: string) {
-    return text
-      .replace(/\n+/g, "。")
-      .replace(/；/g, "。")
-      .replace(/，然后/g, "。然后")
-      .replace(/，接着/g, "。接着")
-      .replace(/，随后/g, "。随后")
-      .replace(/，同时/g, "。同时")
-      .split(/[。.!?？]/)
-      .map(item => item.trim())
-      .filter(item => item.length > 6 && !/^(总时长|时长|风格|比例|格式)/.test(item));
-  }
-
-  function createEditedShot(index: number, total: number, action: string, totalDuration: number, segmentDuration: number, ratio = "9:16 竖屏短剧") {
-    const title = `镜头 ${String(index + 1).padStart(2, "0")}｜${action.slice(0, 14) || "分镜片段"}`;
-    const prompt = [
-      `专业短剧分镜 ${index + 1}/${total}，这是完整 ${totalDuration} 秒视频中的第 ${index + 1} 个镜头。`,
-      `只生成本镜头内容，目标时长 ${segmentDuration} 秒，不要压缩完整剧情，不要生成其他镜头内容。`,
-      `本镜头画面与动作：${action}。`,
-      "台词要求：如果本镜头包含台词，只说本镜头台词，语速自然，保留停顿；如果没有台词则不要新增台词。",
-      "剪辑要求：动作和台词必须完整表达本镜头，不要自由发挥新增人物、地点、情节或反转。",
-      "画面风格：真人写实短剧质感，电影级布光，24帧，禁止字幕。"
-    ].join("\n");
-    return { id: Date.now() + index, title, prompt, ratio, duration: segmentDuration, status: "pending" as ShotStatus };
-  }
-
-  function splitPromptLikeEditor(text: string, ratio = "9:16 竖屏短剧", preferredDuration = shotDuration) {
-    const content = text.trim();
-    if (!content) return [];
-    const totalDuration = estimateTotalDuration(content) || preferredDuration;
-    const timelineMatches = Array.from(content.matchAll(/(\d+)\s*[-~—至到]\s*(\d+)\s*秒[：:]\s*([^\n]+)/g));
-    if (timelineMatches.length) {
-      return timelineMatches.slice(0, 7).map((match, index, list) => {
-        const start = Number(match[1]);
-        const end = Number(match[2]);
-        const action = match[3].trim().replace(/。$/, "");
-        const duration = Math.max(3, end - start);
-        return createEditedShot(index, list.length, action, Math.max(totalDuration, end), duration, ratio);
-      });
-    }
-
-    const parts = splitSentences(content);
-    if (parts.length < 2) return [];
-    const segmentCount = Math.min(7, Math.max(2, Math.round(totalDuration / 3) || Math.min(parts.length, 4)));
-    const segmentDuration = Math.max(3, Math.round(totalDuration / segmentCount));
-    const chunks = Array.from({ length: segmentCount }, (_, index) => {
-      const start = Math.floor(index * parts.length / segmentCount);
-      const end = Math.floor((index + 1) * parts.length / segmentCount);
-      return parts.slice(start, Math.max(end, start + 1)).join("。") || parts[index % parts.length];
-    });
-    return chunks.map((action, index) => createEditedShot(index, chunks.length, action, totalDuration, segmentDuration, ratio));
-  }
-
-  function buildDurationControlledPrompt(prompt: string, duration: number) {
-    const cleanPrompt = prompt.trim();
-    const durationText = `${duration}秒`;
-    const alreadyControlled = cleanPrompt.includes("严格时长控制") || cleanPrompt.includes(`完整${durationText}`);
-    if (alreadyControlled) return cleanPrompt;
-    return [
-      `严格时长控制：生成一个完整连续的 ${durationText} 视频。`,
-      `完整画面和动作：${cleanPrompt}`,
-      `多场景要求：如果提示词包含“场景1/2、场景2/2”或多个段落，请把它们理解为同一个 ${durationText} 视频内部的连续场景变化，不要拆成多个独立视频。`,
-      `节奏要求：所有场景、动作、表情、镜头运动和停顿必须共同铺满 ${durationText}，不要提前结束，不要把每个场景单独压缩成 3 秒。`,
-      "结构要求：只生成一个完整视频，禁止自动分割、禁止输出多个片段、禁止新增无关剧情或字幕。"
-    ].join("\n");
-  }
-
   function currentGenerationContext(): GenerationContext {
     return {
       materialIds: [...selectedMaterialIds],
@@ -1083,16 +1014,8 @@ export default function Home() {
     startGeneration(shot.id);
   }
 
-  function createSinglePromptShot(text: string, duration: number) {
-    const content = text.trim();
-    const prompt = buildDurationControlledPrompt(content, duration);
-    return { id: Date.now(), title: `镜头 01｜完整${duration}秒镜头`, prompt, ratio: "9:16 竖屏短剧", duration, status: "pending" as ShotStatus };
-  }
-
   async function importBatchShots() {
-    const targetDuration = estimateTotalDuration(batchPromptInput) || batchTargetDuration;
-    const shots = splitPromptLikeEditor(batchPromptInput, "9:16 竖屏短剧", targetDuration);
-    const nextShots = shots.length ? shots : [createSinglePromptShot(batchPromptInput, batchTargetDuration)];
+    const nextShots = prepareBatchShots(batchPromptInput, { ratio: "9:16 竖屏短剧", selectedDuration: batchTargetDuration });
     const response = await fetch("/api/shots", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1544,7 +1467,7 @@ export default function Home() {
       omniReferenceEnabled: context.omniReferenceEnabled,
       inputType
     };
-    const durationControlledShot = { ...shot, prompt: buildDurationControlledPrompt(shot.prompt, shot.duration) };
+    const durationControlledShot = { ...shot, prompt: buildShotDurationControlledPrompt(shot.prompt, shot.duration) };
     const shotForGeneration = buildShotWithReferencePrompt(durationControlledShot, context);
     await submitVideoTask({
       shotId,
@@ -2260,8 +2183,8 @@ export default function Home() {
       <div className={`modal ${passwordModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setPasswordModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>修改密码</h2><button className="btn-ghost btn-small" onClick={() => setPasswordModalOpen(false)}>关闭</button></div><div className="form"><div><label>手机号</label><input value={securityPhone} onChange={event => setSecurityPhone(event.target.value)} placeholder="请输入绑定手机号" /></div><div><label>验证码</label><div className="code-row"><input value={securityCode} onChange={event => setSecurityCode(event.target.value)} placeholder="请输入 6 位验证码" /><button className="btn-primary" onClick={() => alert(`验证码已发送至 ${securityPhone}`)}>发送验证码</button></div></div><div><label>新密码</label><input type="password" value={newPassword} onChange={event => setNewPassword(event.target.value)} placeholder="请输入新密码（至少 6 个字符）" /></div><div><label>确认新密码</label><input type="password" value={confirmNewPassword} onChange={event => setConfirmNewPassword(event.target.value)} placeholder="请再次输入新密码" /></div><div className="actions"><button className="btn-ghost" onClick={() => setPasswordModalOpen(false)}>取消</button><button className="btn-primary" onClick={() => { if (!securityCode || !newPassword || newPassword !== confirmNewPassword) return alert("请确认验证码和两次密码输入一致。"); setPasswordModalOpen(false); alert("演示环境已完成密码修改流程。") }}>确认修改</button></div></div></div></div>
       <div className={`modal ${projectModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setProjectModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>新建项目</h2><button className="btn-ghost btn-small" onClick={() => setProjectModalOpen(false)}>关闭</button></div><div className="form"><div><label>项目名称</label><input value={projectName} onChange={event => setProjectName(event.target.value)} /></div><div><label>项目类型</label><select value={projectType} onChange={event => setProjectType(event.target.value)}>{PROJECT_TYPES.map(type => <option key={type}>{type}</option>)}</select></div><button className="btn-primary" onClick={saveProject}>创建项目</button></div></div></div>
       <div className={`modal ${deleteProjectTarget ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setDeleteProjectTarget(null)}><div className="modal-card"><div className="modal-head"><h2>删除项目</h2><button className="btn-ghost btn-small" onClick={() => setDeleteProjectTarget(null)}>关闭</button></div><div className="form"><div className="danger-note"><strong>此操作会删除当前浏览器中该项目的剧本、分镜、素材和生成记录。</strong><span>请输入项目名称确认删除：{deleteProjectTarget?.name}</span></div><div><label>确认项目名称</label><input value={deleteProjectName} onChange={event => setDeleteProjectName(event.target.value)} placeholder={deleteProjectTarget?.name || ""} /></div><div className="actions"><button className="btn-ghost" onClick={() => setDeleteProjectTarget(null)}>取消</button><button className="btn-danger" onClick={deleteProject} disabled={!deleteProjectTarget || deleteProjectName.trim() !== deleteProjectTarget.name}>确认删除</button></div></div></div></div>
-      <div className={`modal ${batchModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setBatchModalOpen(false)}><div className="modal-card modal-card-wide"><div className="modal-head"><h2>提示词拆分分镜</h2><button className="btn-ghost btn-small" onClick={() => setBatchModalOpen(false)}>关闭</button></div><div className="form"><div><label>目标总时长</label><select value={batchTargetDuration} onChange={event => setBatchTargetDuration(Number(event.target.value))}><option value="6">6s</option><option value="9">9s</option><option value="12">12s</option></select></div><div><label>完整视频提示词</label><textarea className="batch-prompt" value={batchPromptInput} onChange={event => setBatchPromptInput(event.target.value)} placeholder="粘贴一整段视频提示词。系统会自动拆成 2-7 个镜头，并保存为分镜列表；不可拆分时会按上方目标总时长生成一条完整分镜。" /></div><div className="batch-preview"><strong>拆分结果会进入分镜列表</strong><p>镜头01就是拆分后的第一段，不会把整段提示词原样保留。支持 0-3秒 时间轴，也支持无时间轴长文本自动拆分。不可拆分时按 6s/9s/12s 完整生成一条分镜。</p></div><button className="btn-primary" onClick={importBatchShots}>生成分镜</button></div></div></div>
-      <div className={`modal ${promptModalOpen ? "open" : ""}`} onClick={event => event.target === event.currentTarget && setPromptModalOpen(false)}><div className="modal-card"><div className="modal-head"><h2>生成提示词</h2><button className="btn-ghost btn-small" onClick={() => setPromptModalOpen(false)}>关闭</button></div><div className="form"><div><label>提示词内容</label><textarea style={{ minHeight: 180 }} value={promptDraft} onChange={event => setPromptDraft(event.target.value)} /></div><button className="btn-primary" onClick={saveGeneratedPrompt}>保存到分镜与素材库</button><p className="muted">保存后会写入当前分镜提示词，并出现在素材库的提示词分类。</p></div></div></div>
+      <ShotBatchModal open={batchModalOpen} targetDuration={batchTargetDuration} prompt={batchPromptInput} onClose={() => setBatchModalOpen(false)} onTargetDurationChange={setBatchTargetDuration} onPromptChange={setBatchPromptInput} onSubmit={importBatchShots} />
+      <GeneratedPromptModal open={promptModalOpen} prompt={promptDraft} onClose={() => setPromptModalOpen(false)} onPromptChange={setPromptDraft} onSave={saveGeneratedPrompt} />
     </div>
   );
 }
