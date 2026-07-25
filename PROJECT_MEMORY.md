@@ -10,9 +10,9 @@
 
 - 正式入口：`https://console.manjingstudio.com`；HTTP `301` 跳转 HTTPS，HTTPS 首页 `200`，匿名 `/api/auth/me` 返回 `401`。
 - 备案号：`浙ICP备2026053932号-1`，登录页和登录后工作台均展示并链接到工信部备案查询。
-- 生产运行代码：`8178020 Refine branding with a clean neutral interface`；PM2 `manjing-video` online，生产 worktree clean。
-- 品牌业务提交 `8178020` 已进入 GitHub `main` 并发布；后续发布记录提交只更新文档，不改变生产业务代码。
-- 最近发布备份：`/data/backups/manjing-video-db-pre-deploy-20260724-162623.dump`，88,907 字节、权限 `600`，已恢复到隔离数据库验证。
+- 生产运行代码：`f680205 Extract shot splitting workflow and document workspace state`；PM2 `manjing-video` online，生产 worktree clean。
+- `f680205` 已进入 GitHub `main` 并发布；后续发布记录提交只更新文档，不改变生产业务代码。
+- 最近发布备份：`/data/backups/manjing-video-db-pre-deploy-20260725-144358.dump`，已恢复到隔离数据库验证。
 - 生产共有 20 条 Prisma migration，最近发布待执行 migration 为 0；Nginx 未随本批 P1 修改。
 
 ### 生产数据基线
@@ -31,6 +31,15 @@
 - 素材库已支持项目/团队共享独立计数、上传、SHA-256 去重、重命名、预览、参考选择和桌面单文件拖入视频提示词/首帧/尾帧。
 - 质量门禁现为非交互式 ESLint、TypeScript、生产构建、核心 API 集成、37 项单元测试和正式浏览器 smoke。
 
+### 2026-07-25 P1 生产发布
+
+- 用户确认按当前数据基线发布，并明确批准本次单次跳过登录态 smoke；生产从 `8178020` 快进到 `f680205`。
+- 发布包含生成记录移动端任务信息卡、`ScriptWorkbench`、`ShotBatchModal`、`GeneratedPromptModal`、`lib/shot-splitting.ts` 和 `ProjectWorkspace.state` 只读依赖清单；未修改 API、Prisma schema、migration、生产数据或 Nginx。
+- 发布备份 `/data/backups/manjing-video-db-pre-deploy-20260725-144358.dump` 已隔离恢复验证；待执行 migration 为 0。
+- 发布前后业务数量和主键指纹完全一致：项目 3、工作区 3、素材 16、素材关联 16、分镜 30、视频任务 26、视频资产 12、生图任务 2；未执行恢复、清理、删除或回填。
+- 独立核验：HTTPS 首页 `200`、HTTP 到 HTTPS `301`、匿名 `/api/auth/me` `401`、PM2 online、生产 worktree clean；品牌资源 `/brand/guoran-manjing-logo.svg` 和 `/brand/guoran-manjing-logo-display.svg` 为 `200`。
+- 部署脚本的本机 `127.0.0.1:3000` 探针曾出现连接失败，但正式域名核验通过；登录态 smoke 的跳过批准仅限本次，不得自动延续。
+
 ### 品牌版本（已发布生产）
 
 - 工作区素材 `../源文件.pdf` / `../源文件.ai` 已满足正式替换需求：Illustrator 可编辑矢量、文字转曲、8 页彩色/单色组合，可机械提取路径且无字体依赖。
@@ -43,30 +52,30 @@
 - `npm ci` 当前报告 3 个 high severity 依赖告警；不得直接运行 `npm audit fix --force`，应先做依赖归因、兼容性评估和独立回归。
 - 稳定版本决策：告警对应 `next@15.5.20`、`postcss@8.5.10` 和间接依赖 `sharp@0.34.5`，属于第三方依赖安全提示，不是已确认的致命线上事故；当前保持生产稳定，不执行强制升级，后续作为独立依赖评估和发布项处理。
 
-### 本地待发布 P1：生成记录移动端布局
+### P1：生成记录移动端布局（已发布生产）
 
 - `390px` 窄屏生成记录已从横向撑宽表格改为纵向任务信息卡；提交时间、分镜、渠道、进度、结果、视频预览、下载和操作均在卡片内完整可见。
 - 桌面仍使用原表格结构，数据、筛选、预览和操作行为不变；本地 ESLint、37 项单测、TypeScript、生产构建和全新 390×844 浏览器 smoke 已通过。
-- 本批只改 `GenerationRecordsSection` 标记和响应式 CSS，不涉及 API、数据库、migration、业务数据或 Nginx；尚未发布生产。
+- 本批只改 `GenerationRecordsSection` 标记和响应式 CSS，不涉及 API、数据库、migration、业务数据或 Nginx；已随 `f680205` 发布生产。
 
-### 本地待发布 P1：剧本工作台组件拆分
+### P1：剧本工作台组件拆分（已发布生产）
 
 - 新增 `ScriptWorkbench`，承接剧本生成输入、正文编辑/导入、保存、优化、大纲拆分、结果提示和已保存剧本预览；AI 请求、项目保存和数据状态仍由 `app/page.tsx` 统一管理。
 - 浏览器 smoke 已增加剧本工作台只读断言，验证入口、故事想法、当前正文、生成初稿和保存操作；视频、生图、素材库和生成记录回归通过。
-- 本批只改前端组件边界和 smoke 检查，不涉及 API、数据库、migration、业务数据或 Nginx；本地 ESLint、37 项单测、TypeScript、生产构建和全新浏览器 smoke 均通过，尚未发布生产。
+- 本批只改前端组件边界和 smoke 检查，不涉及 API、数据库、migration、业务数据或 Nginx；本地 ESLint、37 项单测、TypeScript、生产构建和全新浏览器 smoke 均通过，已随 `f680205` 发布生产。
 
-### 本地待发布 P1：核心输入与视频模块单元测试
+### P1：核心输入与视频模块单元测试（已发布生产）
 
 - 新增 `api-input.test.ts`、`video-generation.test.ts` 和 `video-status.test.ts`，单元测试总数从 17 项增加到 32 项。
 - 覆盖数据库 Int/BigInt/版本号边界、文本与整数规范化、视频比例/时长、严格时长提示词、首尾帧和多媒体 payload、创建任务响应、视频 URL/错误多种上游结构及额度不足提示。
-- 本批只新增测试，不修改业务实现、API、数据库、migration、业务数据或 Nginx；ESLint、37 项单测、TypeScript 和生产构建均通过，尚未发布生产。
+- 本批只新增测试，不修改业务实现、API、数据库、migration、业务数据或 Nginx；ESLint、37 项单测、TypeScript 和生产构建均通过，已随 `f680205` 发布生产。
 
-### 本地待发布 P1：分镜与提示词拆分
+### P1：分镜与提示词拆分（已发布生产）
 
 - 新增 `lib/shot-splitting.ts`，集中处理时长识别、时间轴/段落拆分、最多 7 个镜头、单镜头兜底和严格时长提示词；旧行为保持不变。
 - 新增 `ShotBatchModal` 和 `GeneratedPromptModal`；项目分镜保存、提示词素材入库和视频生成仍由主页面管理，`app/page.tsx` 从 2267 行降到 2190 行。
 - 新增 5 项拆分纯函数测试，单元测试总数增至 37；浏览器 smoke 只打开/关闭两个弹窗，不保存素材、不提交任务、不调用付费生成。
-- 本批不修改 API、数据库、migration、业务数据或 Nginx；ESLint、37 项单测、TypeScript、生产构建和全新浏览器 smoke 均通过，尚未发布生产。
+- 本批不修改 API、数据库、migration、业务数据或 Nginx；ESLint、37 项单测、TypeScript、生产构建和全新浏览器 smoke 均通过，已随 `f680205` 发布生产。
 
 ### ProjectWorkspace.state 只读依赖清单（设计完成）
 
@@ -76,12 +85,11 @@
 
 ### 下一步优化顺序
 
-1. 经用户确认后统一发布本地已完成的生成记录移动端布局、剧本组件拆分、测试补强和分镜/提示词拆分，并完成生产浏览器核验。
-2. 补做一次登录后的生产人工回归：侧栏 Logo、项目、素材、生成记录和任务反馈；上次品牌发布的自动登录态 smoke 已按用户批准跳过。
-3. 后续单独评估 `npm ci` 报告的 3 个 high severity 依赖告警；先确认依赖链、可用修复版本和回归范围，不直接执行 `npm audit fix --force`，不阻断当前稳定版本。
-4. `ProjectWorkspace.state` 只读清单已完成；后续如推进最小元数据契约，必须作为独立代码设计任务，稳定期内不删除字段、不做清理 migration。
-5. 完成一次经用户确认的真实生产人工回归：素材上传/共享、真实视频生成、状态同步、预览下载和满意/需改进反馈；付费生成不放入自动 smoke。
-6. 稳定版本确认后再把现有质量命令迁入 GitHub Actions；先做 CI，生产 CD 继续保留人工审批。
+1. 补做一次登录后的生产人工回归：侧栏 Logo、项目、素材、生成记录和任务反馈；本次自动登录态 smoke 已按用户批准跳过。
+2. 后续单独评估 `npm ci` 报告的 3 个 high severity 依赖告警；先确认依赖链、可用修复版本和回归范围，不直接执行 `npm audit fix --force`，不阻断当前稳定版本。
+3. `ProjectWorkspace.state` 只读清单已完成；后续如推进最小元数据契约，必须作为独立代码设计任务，稳定期内不删除字段、不做清理 migration。
+4. 完成一次经用户确认的真实生产人工回归：素材上传/共享、真实视频生成、状态同步、预览下载和满意/需改进反馈；付费生成不放入自动 smoke。
+5. 稳定版本确认后再把现有质量命令迁入 GitHub Actions；先做 CI，生产 CD 继续保留人工审批。
 
 ### 强制安全规则
 
